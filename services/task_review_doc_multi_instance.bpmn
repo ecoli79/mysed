@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions
+    xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
+    xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+    xsi:schemaLocation="http://www.omg.org/spec/BPMN/20100524/MODEL
+                        http://www.omg.org/spec/BPMN/2.0/20100501/BPMN20.xsd
+                        http://camunda.org/schema/1.0/bpmn
+                        http://camunda.org/schema/1.0/bpmn/camunda-bpmn.xsd"
+    id="Definitions_1"
+    targetNamespace="http://bpmn.io/schema/bpmn"
+    exporter="bpmn-io" exporterVersion="17.0.0">
+
+  <!-- Процесс ознакомления с документом для нескольких пользователей (Multi-Instance) -->
+  <process 
+      id="DocumentReviewProcessMultiInstance" 
+      name="Ознакомиться с документом (Multi-Instance)" 
+      isExecutable="true"
+      camunda:historyTimeToLive="30">
+
+    <documentation>
+      <![CDATA[
+      Процесс ознакомления с документом для нескольких пользователей с использованием Multi-Instance.
+      Создается один экземпляр процесса с несколькими параллельными задачами для каждого пользователя.
+      Процесс автоматически завершается после завершения всех задач ознакомления.
+      ]]>
+    </documentation>
+
+    <!-- Стартовое событие -->
+    <startEvent id="StartEvent_1" name="Начало ознакомления" />
+    
+    <!-- Multi-Instance пользовательская задача ознакомления -->
+    <userTask 
+        id="reviewTask" 
+        name="Ознакомиться с документом (многопользовательский процесс)">
+      
+      <documentation>
+        Multi-Instance задача: каждый пользователь должен ознакомиться с документом
+      </documentation>
+      
+      <!-- Multi-Instance конфигурация -->
+      <multiInstanceLoopCharacteristics 
+          isSequential="false"
+          camunda:collection="assigneeList"
+          camunda:elementVariable="assignee">
+        
+        <!-- Условие завершения: все экземпляры должны быть завершены -->
+        <completionCondition xsi:type="tFormalExpression">
+          ${nrOfCompletedInstances == nrOfInstances}
+        </completionCondition>
+        
+      </multiInstanceLoopCharacteristics>
+      
+      <extensionElements>
+        <camunda:formData>
+          <camunda:formField id="reviewed" label="Ознакомлен" type="boolean" defaultValue="false">
+            <camunda:validation>
+              <camunda:constraint name="required" />
+            </camunda:validation>
+          </camunda:formField>
+          <camunda:formField id="reviewDate" label="Дата ознакомления" type="date" />
+          <camunda:formField id="reviewComment" label="Комментарий" type="string" />
+        </camunda:formData>
+        
+        <!-- Task Listener для обработки завершения задачи -->
+        <camunda:taskListener event="complete" 
+          class="org.camunda.bpm.engine.delegate.TaskListener">
+          <camunda:script scriptFormat="javascript">
+            // Получаем данные из переменных процесса
+            var currentUser = execution.getVariable("assignee");
+            var reviewDate = execution.getVariable("reviewDate");
+            var reviewComment = execution.getVariable("reviewComment");
+            var reviewed = execution.getVariable("reviewed");
+            
+            // Логируем для отладки
+            print("=== Multi-Instance Task Listener Debug ===");
+            print("currentUser: " + currentUser);
+            print("reviewDate: " + reviewDate);
+            print("reviewComment: " + reviewComment);
+            print("reviewed: " + reviewed);
+            print("reviewed type: " + typeof reviewed);
+            
+            // Инициализируем словари для хранения данных
+            var reviewDates = execution.getVariable("reviewDates") || {};
+            var reviewComments = execution.getVariable("reviewComments") || {};
+            var reviewStatus = execution.getVariable("reviewStatus") || {};
+            var userCompleted = execution.getVariable("userCompleted") || {};
+            
+            // Получаем текущий счетчик
+            var completedReviews = execution.getVariable("completedReviews") || 0;
+            print("Текущий счетчик completedReviews: " + completedReviews);
+            
+            // Сохраняем данные для текущего пользователя
+            if (reviewed) {
+              print("Условие reviewed == true выполнено");
+              
+              reviewDates[currentUser] = reviewDate;
+              reviewComments[currentUser] = reviewComment;
+              reviewStatus[currentUser] = true;
+              userCompleted[currentUser] = true;
+              
+              // Увеличиваем счетчик завершенных ознакомлений
+              completedReviews = completedReviews + 1;
+              
+              // Обновляем переменные процесса
+              execution.setVariable("reviewDates", reviewDates);
+              execution.setVariable("reviewComments", reviewComments);
+              execution.setVariable("reviewStatus", reviewStatus);
+              execution.setVariable("userCompleted", userCompleted);
+              execution.setVariable("completedReviews", completedReviews);
+              
+              // Логируем информацию
+              print("Пользователь " + currentUser + " ознакомился с документом " + reviewDate);
+              print("Новый счетчик completedReviews: " + completedReviews);
+              
+              // Получаем информацию о Multi-Instance
+              var nrOfInstances = execution.getVariable("nrOfInstances");
+              var nrOfCompletedInstances = execution.getVariable("nrOfCompletedInstances");
+              print("Multi-Instance: " + nrOfCompletedInstances + "/" + nrOfInstances + " завершено");
+            } else {
+              print("Пользователь " + currentUser + " НЕ ознакомился с документом (reviewed = " + reviewed + ")");
+            }
+            print("=== End Multi-Instance Task Listener Debug ===");
+          </camunda:script>
+        </camunda:taskListener>
+      </extensionElements>
+      
+    </userTask>
+
+    <!-- Конечное событие -->
+    <endEvent id="EndEvent_1" name="Ознакомление завершено" />
+
+    <!-- Потоки выполнения -->
+    <sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="reviewTask" />
+    <sequenceFlow id="Flow_2" sourceRef="reviewTask" targetRef="EndEvent_1" />
+
+  </process>
+
+  <!-- Диаграмма -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="DocumentReviewProcessMultiInstance">
+      
+      <bpmndi:BPMNShape id="StartEvent_1_di" bpmnElement="StartEvent_1">
+        <omgdc:Bounds x="179" y="109" width="36" height="36" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="UserTask_1_di" bpmnElement="reviewTask">
+        <omgdc:Bounds x="250" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="EndEvent_1_di" bpmnElement="EndEvent_1">
+        <omgdc:Bounds x="400" y="109" width="36" height="36" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNEdge id="Flow_1_di" bpmnElement="Flow_1">
+        <omgdi:waypoint x="215" y="127" />
+        <omgdi:waypoint x="250" y="130" />
+      </bpmndi:BPMNEdge>
+      
+      <bpmndi:BPMNEdge id="Flow_2_di" bpmnElement="Flow_2">
+        <omgdi:waypoint x="350" y="130" />
+        <omgdi:waypoint x="400" y="127" />
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</definitions>

@@ -1,0 +1,88 @@
+СТРУКТУРА OPENLDAP ДЛЯ ДЕПАРТАМЕНТОВ
+=====================================
+
+dc=permgp7,dc=ru
+│
+├── ou=People (Все пользователи)
+│   ├── ou=HR (Отдел кадров)
+│   │   ├── uid=hr_manager
+│   │   ├── uid=hr_specialist1
+│   │   └── uid=hr_specialist2
+│   │
+│   ├── ou=IT (IT отдел)
+│   │   ├── uid=it_admin
+│   │   ├── uid=developer1
+│   │   └── uid=sysadmin
+│   │
+│   ├── ou=Finance (Финансовый отдел)
+│   │   ├── uid=finance_manager
+│   │   └── uid=accountant1
+│   │
+│   └── ou=Management (Руководство)
+│       ├── uid=ceo
+│       └── uid=cto
+│
+├── ou=Groups (Функциональные группы)
+│   ├── cn=users (Существующая)
+│   ├── cn=admins (Существующая)
+│   ├── cn=HR_Staff (Сотрудники отдела кадров)
+│   ├── cn=IT_Staff (Сотрудники IT отдела)
+│   ├── cn=Finance_Staff (Сотрудники финансового отдела)
+│   ├── cn=All_HR_Users (Динамическая группа)
+│   └── cn=All_IT_Users (Динамическая группа)
+│
+└── ou=Roles (Ролевые группы)
+    ├── cn=DepartmentHeads (Начальники отделов)
+    ├── cn=Managers (Менеджеры)
+    ├── cn=Employees (Сотрудники)
+    └── cn=Contractors (Подрядчики)
+
+ТИПЫ ГРУПП:
+===========
+
+1. СТАТИЧЕСКИЕ ГРУППЫ (groupOfNames):
+   - Содержат явный список участников
+   - Участники добавляются/удаляются вручную
+   - Пример: cn=DepartmentHeads
+
+2. ДИНАМИЧЕСКИЕ ГРУППЫ (groupOfURLs):
+   - Участники определяются поисковым запросом
+   - Автоматически обновляются при изменении данных
+   - Пример: cn=All_HR_Users
+
+ПРИМЕРЫ ЗАПРОСОВ:
+================
+
+1. Получить всех пользователей отдела кадров:
+   ldapsearch -b "ou=HR,ou=People,dc=permgp7,dc=ru" "(objectClass=inetOrgPerson)"
+
+2. Получить всех начальников отделов:
+   ldapsearch -b "cn=DepartmentHeads,ou=Roles,dc=permgp7,dc=ru" "(objectClass=groupOfNames)"
+
+3. Получить всех пользователей через динамическую группу:
+   ldapsearch -b "ou=HR,ou=People,dc=permgp7,dc=ru" "(objectClass=inetOrgPerson)"
+
+PYTHON API:
+===========
+
+# Получить все департаменты
+departments = get_departments()
+
+# Получить пользователей отдела кадров
+hr_users = get_users_by_department('HR')
+
+# Получить всех начальников отделов
+heads = get_department_heads()
+
+# Получить пользователей из группы
+managers = get_users_by_group('Managers', 'Roles')
+
+ПРЕИМУЩЕСТВА:
+=============
+
+✓ Простая иерархия (2-3 уровня)
+✓ Быстрые запросы
+✓ Легкое добавление новых департаментов
+✓ Совместимость с любыми LDAP клиентами
+✓ Гибкость в управлении ролями
+✓ Автоматическое обновление динамических групп

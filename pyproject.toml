@@ -1,0 +1,16 @@
+[project]
+name = "nicegui-example"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "ldap3>=2.9.1",
+    "nicegui>=2.23.3",
+    "psycopg2-binary>=2.9.10",
+    "pycamunda>=0.6.1",
+    "pydantic>=2.11.7",
+    "pydantic-settings>=2.0.0",
+    "pytz>=2025.2",
+    "requests>=2.32.5",
+]

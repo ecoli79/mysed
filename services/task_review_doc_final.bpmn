@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions
+    xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
+    xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+    id="Definitions_1"
+    targetNamespace="http://bpmn.io/schema/bpmn"
+    exporter="bpmn-io" exporterVersion="17.0.0">
+
+  <!-- Процесс ознакомления с документом -->
+  <process 
+      id="DocumentReviewProcess" 
+      name="Ознакомление с документом" 
+      isExecutable="true"
+      camunda:historyTimeToLive="30">
+
+    <documentation>
+      <![CDATA[
+      Процесс ознакомления с документом для одного или нескольких пользователей.
+      Каждый пользователь должен ознакомиться с документом, указать дату ознакомления
+      и при необходимости оставить комментарии. Процесс завершается после ознакомления
+      всех назначенных пользователей.
+      ]]>
+    </documentation>
+
+    <!-- Стартовое событие -->
+    <startEvent id="StartEvent_1" name="Начало ознакомления" />
+
+    <!-- Пользовательская задача ознакомления с Multi-Instance -->
+    <userTask 
+        id="reviewTask" 
+        name="Ознакомиться с документом" 
+        camunda:assignee="${assignee}">
+      
+      <documentation>
+        Пользователь должен ознакомиться с документом и указать дату ознакомления
+      </documentation>
+      
+      <!-- Multi-Instance Loop Characteristics -->
+      <multiInstanceLoopCharacteristics 
+          isSequential="false"
+          camunda:collection="${assigneeList}"
+          camunda:elementVariable="assignee">
+        <completionCondition>${nrOfCompletedInstances == nrOfInstances}</completionCondition>
+      </multiInstanceLoopCharacteristics>
+      
+    </userTask>
+
+    <!-- Конечное событие -->
+    <endEvent id="EndEvent_1" name="Ознакомление завершено" />
+
+    <!-- Потоки выполнения -->
+    <sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="reviewTask" />
+    <sequenceFlow id="Flow_2" sourceRef="reviewTask" targetRef="EndEvent_1" />
+
+  </process>
+
+  <!-- Диаграмма -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="DocumentReviewProcess">
+      
+      <bpmndi:BPMNShape id="StartEvent_1_di" bpmnElement="StartEvent_1">
+        <omgdc:Bounds x="179" y="109" width="36" height="36" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="UserTask_1_di" bpmnElement="reviewTask">
+        <omgdc:Bounds x="250" y="90" width="100" height="80" />
+        <bpmndi:BPMNLabel>
+          <omgdc:Bounds x="250" y="170" width="100" height="20" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="EndEvent_1_di" bpmnElement="EndEvent_1">
+        <omgdc:Bounds x="400" y="109" width="36" height="36" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNEdge id="Flow_1_di" bpmnElement="Flow_1">
+        <omgdi:waypoint x="215" y="127" />
+        <omgdi:waypoint x="250" y="130" />
+      </bpmndi:BPMNEdge>
+      
+      <bpmndi:BPMNEdge id="Flow_2_di" bpmnElement="Flow_2">
+        <omgdi:waypoint x="350" y="130" />
+        <omgdi:waypoint x="400" y="127" />
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</definitions>

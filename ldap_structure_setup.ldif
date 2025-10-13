@@ -1,0 +1,123 @@
+# LDIF файл для создания структуры департаментов в OpenLDAP
+# Базовый DN: dc=permgp7,dc=ru
+
+# 1. Создание организационных единиц для департаментов
+dn: ou=People,dc=permgp7,dc=ru
+objectClass: organizationalUnit
+ou: People
+description: Контейнер для всех пользователей
+
+dn: ou=HR,ou=People,dc=permgp7,dc=ru
+objectClass: organizationalUnit
+ou: HR
+description: Отдел кадров
+
+dn: ou=IT,ou=People,dc=permgp7,dc=ru
+objectClass: organizationalUnit
+ou: IT
+description: IT отдел
+
+dn: ou=Finance,ou=People,dc=permgp7,dc=ru
+objectClass: organizationalUnit
+ou: Finance
+description: Финансовый отдел
+
+dn: ou=Management,ou=People,dc=permgp7,dc=ru
+objectClass: organizationalUnit
+ou: Management
+description: Руководство
+
+# 2. Создание контейнера для групп
+dn: ou=Groups,dc=permgp7,dc=ru
+objectClass: organizationalUnit
+ou: Groups
+description: Контейнер для всех групп
+
+# 3. Создание контейнера для ролей
+dn: ou=Roles,dc=permgp7,dc=ru
+objectClass: organizationalUnit
+ou: Roles
+description: Контейнер для ролевых групп
+
+# 4. Департаментные группы (groupOfNames)
+dn: cn=HR_Staff,ou=Groups,dc=permgp7,dc=ru
+objectClass: groupOfNames
+cn: HR_Staff
+description: Сотрудники отдела кадров
+member: cn=admin,dc=permgp7,dc=ru
+
+dn: cn=IT_Staff,ou=Groups,dc=permgp7,dc=ru
+objectClass: groupOfNames
+cn: IT_Staff
+description: Сотрудники IT отдела
+member: cn=admin,dc=permgp7,dc=ru
+
+dn: cn=Finance_Staff,ou=Groups,dc=permgp7,dc=ru
+objectClass: groupOfNames
+cn: Finance_Staff
+description: Сотрудники финансового отдела
+member: cn=admin,dc=permgp7,dc=ru
+
+# 5. Ролевые группы
+dn: cn=DepartmentHeads,ou=Roles,dc=permgp7,dc=ru
+objectClass: groupOfNames
+cn: DepartmentHeads
+description: Начальники отделов
+member: cn=admin,dc=permgp7,dc=ru
+
+dn: cn=Managers,ou=Roles,dc=permgp7,dc=ru
+objectClass: groupOfNames
+cn: Managers
+description: Менеджеры
+member: cn=admin,dc=permgp7,dc=ru
+
+dn: cn=Employees,ou=Roles,dc=permgp7,dc=ru
+objectClass: groupOfNames
+cn: Employees
+description: Сотрудники
+member: cn=admin,dc=permgp7,dc=ru
+
+# 6. Динамические группы (groupOfURLs) - для автоматического включения
+dn: cn=All_HR_Users,ou=Groups,dc=permgp7,dc=ru
+objectClass: groupOfURLs
+cn: All_HR_Users
+description: Все пользователи отдела кадров (динамическая группа)
+memberURL: ldap:///ou=HR,ou=People,dc=permgp7,dc=ru??sub?(objectClass=inetOrgPerson)
+
+dn: cn=All_IT_Users,ou=Groups,dc=permgp7,dc=ru
+objectClass: groupOfURLs
+cn: All_IT_Users
+description: Все пользователи IT отдела (динамическая группа)
+memberURL: ldap:///ou=IT,ou=People,dc=permgp7,dc=ru??sub?(objectClass=inetOrgPerson)
+
+# 7. Пример пользователя в департаменте HR
+dn: uid=hr_manager,ou=HR,ou=People,dc=permgp7,dc=ru
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: hr_manager
+cn: HR Manager
+sn: Manager
+givenName: HR
+mail: hr.manager@permgp7.ru
+userPassword: {SSHA}password_hash_here
+uidNumber: 1001
+gidNumber: 100
+homeDirectory: /home/hr_manager
+loginShell: /bin/bash
+
+# 8. Пример пользователя в департаменте IT
+dn: uid=it_admin,ou=IT,ou=People,dc=permgp7,dc=ru
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: it_admin
+cn: IT Administrator
+sn: Administrator
+givenName: IT
+mail: it.admin@permgp7.ru
+userPassword: {SSHA}password_hash_here
+uidNumber: 1002
+gidNumber: 100
+homeDirectory: /home/it_admin
+loginShell: /bin/bash
