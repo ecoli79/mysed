@@ -1,5 +1,7 @@
 from nicegui import ui
 from services.mayan_connector import MayanClient, MayanDocument
+from services.document_access_manager import document_access_manager
+from auth.middleware import get_current_user
 from config.settings import config
 from datetime import datetime
 import logging
@@ -338,7 +340,7 @@ def format_datetime(dt_str: str) -> str:
         return dt_str
 
 def create_document_card(document: MayanDocument) -> ui.card:
-    """Создает карточку документа"""
+    """Создает карточку документа с возможностью предоставления доступа"""
     with ui.card().classes('w-full mb-4') as card:
         with ui.row().classes('w-full items-start'):
             # Основная информация
@@ -363,12 +365,12 @@ def create_document_card(document: MayanDocument) -> ui.card:
             # Кнопки действий
             with ui.column().classes('items-end gap-2'):
                 if document.file_latest_id:
-                    # Кнопка скачивания - используем прокси через наш API
+                    # Кнопка скачивания
                     ui.button('Скачать', icon='download').classes('text-xs').on_click(
                         lambda doc=document: download_document_file(doc)
                     )
                     
-                    # Кнопка предварительного просмотра - используем прокси через наш API
+                    # Кнопка предварительного просмотра
                     ui.button('Просмотр', icon='visibility').classes('text-xs').on_click(
                         lambda doc=document: preview_document_file(doc)
                     )
@@ -377,8 +379,77 @@ def create_document_card(document: MayanDocument) -> ui.card:
                 ui.button('Содержимое', icon='text_fields').classes('text-xs').on_click(
                     lambda doc=document: show_document_content(doc)
                 )
-    
+                
+                # Кнопка предоставления доступа (только для администраторов)
+            current_user = get_current_user()
+            if current_user:
+                logger.info(f"Текущий пользователь: {current_user.username}")
+                logger.info(f"Группы пользователя: {current_user.groups}")
+                
+                # Показываем кнопку всем пользователям для тестирования
+                ui.button('Предоставить доступ', icon='share', color='blue').classes('text-xs').on_click(
+                    lambda doc=document: show_grant_access_dialog(doc)
+                )
+            else:
+                logger.warning("Текущий пользователь не найден")
     return card
+
+def show_grant_access_dialog(document: MayanDocument):
+    """Показывает диалог для предоставления доступа к документу"""
+    with ui.dialog() as dialog, ui.card().classes('w-full max-w-md'):
+        ui.label(f'Предоставить доступ к документу: {document.label}').classes('text-lg font-semibold mb-4')
+        
+        # Форма предоставления доступа
+        with ui.column().classes('w-full gap-4'):
+            
+            # Пользователь
+            username_input = ui.input(
+                label='Имя пользователя',
+                placeholder='Введите имя пользователя'
+            ).classes('w-full')
+            
+            # Разрешение
+            permission_select = ui.select(
+                options=['read', 'write', 'download'],
+                label='Разрешение',
+                value='read'
+            ).classes('w-full')
+            
+            # Кнопки
+            with ui.row().classes('w-full gap-2'):
+                ui.button('Предоставить доступ', icon='add', color='primary').classes('flex-1').on_click(
+                    lambda: grant_access_to_document(document, username_input.value, 
+                                                    permission_select.value, dialog)
+                )
+                ui.button('Отмена', on_click=dialog.close).classes('flex-1')
+    
+    dialog.open()
+
+def grant_access_to_document(document: MayanDocument, username: str, 
+                           permission: str, dialog):
+    """Предоставляет доступ к документу"""
+    try:
+        if not username.strip():
+            ui.notify('Введите имя пользователя', type='error')
+            return
+        
+        # Предоставляем доступ через DocumentAccessManager
+        success = document_access_manager.grant_document_access_to_user(
+            document_id=document.document_id,
+            document_label=document.label,
+            username=username,
+            permission=permission
+        )
+        
+        if success:
+            ui.notify(f'Доступ к документу "{document.label}" предоставлен пользователю {username}', type='positive')
+            dialog.close()
+        else:
+            ui.notify('Ошибка при предоставлении доступа', type='error')
+            
+    except Exception as e:
+        logger.error(f"Ошибка при предоставлении доступа: {e}")
+        ui.notify(f'Ошибка: {str(e)}', type='error')
 
 def show_document_content(document: MayanDocument):
     """Показывает содержимое документа в диалоге"""

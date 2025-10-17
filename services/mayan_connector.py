@@ -1130,6 +1130,262 @@ class MayanClient:
             logger.warning(f"Не удалось добавить документ в кабинет: {e}")
             return False
 
+    def get_acls_for_object(self, content_type: str, object_id: str) -> List[Dict[str, Any]]:
+        """
+        Получает список ACL для объекта
+        Endpoint: GET /api/v4/acls/?content_type={content_type}&object_id={object_id}
+        """
+        endpoint = 'acls/'
+        params = {
+            'content_type': content_type,
+            'object_id': object_id
+        }
+        
+        try:
+            response = self._make_request('GET', endpoint, params=params)
+            response.raise_for_status()
+            data = response.json()
+            return data.get('results', [])
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении ACL для объекта {object_id}: {e}")
+            return []
+
+    def create_acl(self, content_type: str, object_id: str, role_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Создает ACL для объекта
+        Endpoint: POST /api/v4/acls/
+        
+        Args:
+            content_type: Тип объекта (например: 'documents.document')
+            object_id: ID объекта
+            role_id: ID роли
+        """
+        endpoint = 'acls/'
+        payload = {
+            'content_type': content_type,
+            'object_id': object_id,
+            'role': role_id
+        }
+        
+        try:
+            response = self._make_request('POST', endpoint, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"ACL создан для объекта {object_id} с ролью {role_id}")
+            return data
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при создании ACL: {e}")
+            return None
+
+    def add_permissions_to_acl(self, acl_id: int, permission_ids: List[int]) -> bool:
+        """
+        Добавляет разрешения к ACL
+        Endpoint: POST /api/v4/acls/{acl_id}/permissions/add/
+        """
+        endpoint = f'acls/{acl_id}/permissions/add/'
+        payload = {
+            'permissions': permission_ids
+        }
+        
+        try:
+            response = self._make_request('POST', endpoint, json=payload)
+            response.raise_for_status()
+            logger.info(f"Разрешения {permission_ids} добавлены к ACL {acl_id}")
+            return True
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при добавлении разрешений к ACL: {e}")
+            return False
+
+    def remove_permissions_from_acl(self, acl_id: int, permission_ids: List[int]) -> bool:
+        """
+        Удаляет разрешения из ACL
+        Endpoint: POST /api/v4/acls/{acl_id}/permissions/remove/
+        """
+        endpoint = f'acls/{acl_id}/permissions/remove/'
+        payload = {
+            'permissions': permission_ids
+        }
+        
+        try:
+            response = self._make_request('POST', endpoint, json=payload)
+            response.raise_for_status()
+            logger.info(f"Разрешения {permission_ids} удалены из ACL {acl_id}")
+            return True
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при удалении разрешений из ACL: {e}")
+            return False
+
+    def delete_acl(self, acl_id: int) -> bool:
+        """
+        Удаляет ACL
+        Endpoint: DELETE /api/v4/acls/{acl_id}/
+        """
+        endpoint = f'acls/{acl_id}/'
+        
+        try:
+            response = self._make_request('DELETE', endpoint)
+            response.raise_for_status()
+            logger.info(f"ACL {acl_id} удален")
+            return True
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при удалении ACL: {e}")
+            return False
+
+
+    def get_roles(self, page: int = 1, page_size: int = 20) -> List[Dict[str, Any]]:
+        """
+        Получает список ролей
+        Endpoint: GET /api/v4/roles/
+        """
+        endpoint = 'roles/'
+        params = {'page': page, 'page_size': page_size}
+        
+        try:
+            response = self._make_request('GET', endpoint, params=params)
+            response.raise_for_status()
+            data = response.json()
+            return data.get('results', [])
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении ролей: {e}")
+            return []
+
+    def get_permissions(self, page: int = 1, page_size: int = 100) -> List[Dict[str, Any]]:
+        """
+        Получает список всех разрешений
+        Endpoint: GET /api/v4/permissions/
+        """
+        endpoint = 'permissions/'
+        params = {'page': page, 'page_size': page_size}
+        
+        try:
+            response = self._make_request('GET', endpoint, params=params)
+            response.raise_for_status()
+            data = response.json()
+            return data.get('results', [])
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении разрешений: {e}")
+            return []
+
+    def get_role_users(self, role_id: int) -> List[Dict[str, Any]]:
+        """
+        Получает список пользователей в роли
+        Endpoint: GET /api/v4/roles/{role_id}/users/
+        """
+        endpoint = f'roles/{role_id}/users/'
+        
+        try:
+            response = self._make_request('GET', endpoint)
+            response.raise_for_status()
+            data = response.json()
+            return data.get('results', [])
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении пользователей роли {role_id}: {e}")
+            return []
+
+    def get_role_groups(self, role_id: int) -> List[Dict[str, Any]]:
+        """
+        Получает список групп в роли
+        Endpoint: GET /api/v4/roles/{role_id}/groups/
+        """
+        endpoint = f'roles/{role_id}/groups/'
+        
+        try:
+            response = self._make_request('GET', endpoint)
+            response.raise_for_status()
+            data = response.json()
+            return data.get('results', [])
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении групп роли {role_id}: {e}")
+            return []
+
+    def create_acl_with_user(self, content_type: str, object_id: str, user_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Создает ACL для объекта с пользователем
+        Endpoint: POST /api/v4/acls/
+        """
+        endpoint = 'acls/'
+        payload = {
+            'content_type': content_type,
+            'object_id': object_id,
+            'user': user_id
+        }
+        
+        try:
+            response = self._make_request('POST', endpoint, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"ACL создан для объекта {object_id} с пользователем {user_id}")
+            return data
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при создании ACL с пользователем: {e}")
+            return None
+
+    def get_users(self, page: int = 1, page_size: int = 20) -> List[Dict[str, Any]]:
+        """
+        Получает список пользователей
+        Endpoint: GET /api/v4/users/
+        """
+        endpoint = 'users/'
+        params = {'page': page, 'page_size': page_size}
+        
+        try:
+            logger.info(f"Запрашиваем пользователей через endpoint: {endpoint}")
+            logger.info(f"Параметры: {params}")
+            
+            response = self._make_request('GET', endpoint, params=params)
+            logger.info(f"Статус ответа: {response.status_code}")
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            logger.info(f"Получен ответ с count: {data.get('count', 0)}")
+            logger.info(f"Количество результатов: {len(data.get('results', []))}")
+            
+            # Отладочная информация о пользователях
+            for i, user in enumerate(data.get('results', [])):
+                logger.info(f"Пользователь {i+1}: {user.get('username')} (ID: {user.get('id')})")
+            
+            return data.get('results', [])
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении пользователей: {e}")
+            logger.error(f"Ответ сервера: {response.text if 'response' in locals() else 'Нет ответа'}")
+            return []
+
+    def get_permissions(self, page: int = 1, page_size: int = 100) -> List[Dict[str, Any]]:
+        """
+        Получает список всех разрешений
+        Endpoint: GET /api/v4/permissions/
+        """
+        endpoint = 'permissions/'
+        params = {'page': page, 'page_size': page_size}
+        
+        try:
+            response = self._make_request('GET', endpoint, params=params)
+            response.raise_for_status()
+            data = response.json()
+            return data.get('results', [])
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении разрешений: {e}")
+            return []
+
+    def add_permissions_to_acl(self, acl_id: int, permission_ids: List[int]) -> bool:
+        """
+        Добавляет разрешения к ACL
+        Endpoint: POST /api/v4/acls/{acl_id}/permissions/add/
+        """
+        endpoint = f'acls/{acl_id}/permissions/add/'
+        payload = {
+            'permissions': permission_ids
+        }
+        
+        try:
+            response = self._make_request('POST', endpoint, json=payload)
+            response.raise_for_status()
+            logger.info(f"Разрешения {permission_ids} добавлены к ACL {acl_id}")
+            return True
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при добавлении разрешений к ACL: {e}")
+            return False
 
     @staticmethod
     def create_with_session_user() -> 'MayanClient':
