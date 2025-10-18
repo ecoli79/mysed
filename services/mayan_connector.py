@@ -1387,6 +1387,246 @@ class MayanClient:
             logger.error(f"Ошибка при добавлении разрешений к ACL: {e}")
             return False
 
+    def get_groups(self) -> List[Dict[str, Any]]:
+        """
+        Получает список групп пользователей
+        
+        Returns:
+            Список групп
+        """
+        endpoint = 'groups/'
+        
+        logger.info("Получаем список групп пользователей")
+        
+        try:
+            response = self._make_request('GET', endpoint)
+            response.raise_for_status()
+            
+            data = response.json()
+            groups = data.get('results', [])
+            
+            logger.info(f"Получено {len(groups)} групп")
+            
+            # Отладочная информация
+            if groups:
+                logger.info(f"Пример группы: {json.dumps(groups[0], indent=2, ensure_ascii=False)}")
+            
+            return groups
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении групп: {e}")
+            return []
+
+    def get_group_users(self, group_id: str) -> List[Dict[str, Any]]:
+        """
+        Получает список пользователей в группе
+        
+        Args:
+            group_id: ID группы (строка)
+            
+        Returns:
+            Список пользователей в группе
+        """
+        endpoint = f'groups/{group_id}/users/'
+        
+        logger.info(f"Получаем пользователей группы {group_id}")
+        logger.info(f"URL: {urljoin(self.api_url, endpoint)}")
+        
+        try:
+            response = self._make_request('GET', endpoint)
+            
+            logger.info(f"Статус ответа: {response.status_code}")
+            logger.info(f"Ответ: {response.text[:500]}...")
+            
+            if response.status_code == 200:
+                data = response.json()
+                users = data.get('results', [])
+                
+                logger.info(f"В группе {group_id} найдено {len(users)} пользователей")
+                
+                return users
+            else:
+                logger.error(f"Ошибка получения пользователей группы {group_id}: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return []
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении пользователей группы {group_id}: {e}")
+            return []
+
+    def add_user_to_group(self, group_id: str, username: str) -> bool:
+        """
+        Добавляет пользователя в группу
+        
+        Args:
+            group_id: ID группы (строка)
+            username: Имя пользователя
+            
+        Returns:
+            True если пользователь добавлен успешно, False иначе
+        """
+        try:
+            # Получаем ID пользователя по имени
+            user_id = self._get_user_id_by_username(username)
+            
+            if not user_id:
+                logger.error(f"Пользователь {username} не найден в Mayan EDMS")
+                return False
+            
+            logger.info(f"Найден пользователь {username} с ID {user_id}")
+            
+            endpoint = f'groups/{group_id}/users/add/'
+            
+            payload = {
+                'user': user_id  # Используем ID пользователя, а не имя
+            }
+            
+            logger.info(f"Добавляем пользователя {username} (ID: {user_id}) в группу {group_id}")
+            logger.info(f"URL: {urljoin(self.api_url, endpoint)}")
+            logger.info(f"Payload: {payload}")
+            
+            response = self._make_request('POST', endpoint, json=payload)
+            
+            logger.info(f"Статус ответа: {response.status_code}")
+            logger.info(f"Ответ: {response.text[:500]}...")
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Пользователь {username} успешно добавлен в группу {group_id}")
+                return True
+            else:
+                logger.error(f"Ошибка добавления пользователя {username} в группу {group_id}: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return False
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при добавлении пользователя {username} в группу {group_id}: {e}")
+            return False
+
+    def remove_user_from_group(self, group_id: str, username: str) -> bool:
+        """
+        Удаляет пользователя из группы
+        
+        Args:
+            group_id: ID группы (строка)
+            username: Имя пользователя
+            
+        Returns:
+            True если пользователь удален успешно, False иначе
+        """
+        try:
+            # Получаем ID пользователя по имени
+            user_id = self._get_user_id_by_username(username)
+            
+            if not user_id:
+                logger.error(f"Пользователь {username} не найден в Mayan EDMS")
+                return False
+            
+            logger.info(f"Найден пользователь {username} с ID {user_id}")
+            
+            endpoint = f'groups/{group_id}/users/remove/'
+            
+            payload = {
+                'user': user_id  # Используем ID пользователя, а не имя
+            }
+            
+            logger.info(f"Удаляем пользователя {username} (ID: {user_id}) из группы {group_id}")
+            logger.info(f"URL: {urljoin(self.api_url, endpoint)}")
+            logger.info(f"Payload: {payload}")
+            
+            response = self._make_request('POST', endpoint, json=payload)
+            
+            logger.info(f"Статус ответа: {response.status_code}")
+            logger.info(f"Ответ: {response.text[:500]}...")
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Пользователь {username} успешно удален из группы {group_id}")
+                return True
+            else:
+                logger.error(f"Ошибка удаления пользователя {username} из группы {group_id}: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return False
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при удалении пользователя {username} из группы {group_id}: {e}")
+            return False
+
+    def _get_user_id_by_username(self, username: str) -> Optional[int]:
+        """
+        Получает ID пользователя по имени пользователя
+        
+        Args:
+            username: Имя пользователя
+            
+        Returns:
+            ID пользователя или None если не найден
+        """
+        try:
+            users = self.get_users()
+            for user in users:
+                if user.get('username') == username:
+                    return user.get('id')
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка при поиске пользователя {username}: {e}")
+            return None
+
+    def create_user(self, user_data: Dict[str, Any]) -> bool:
+        """
+        Создает нового пользователя
+        
+        Args:
+            user_data: Данные пользователя
+            
+        Returns:
+            True если пользователь создан успешно, False иначе
+        """
+        endpoint = 'users/'
+        
+        logger.info(f"Создаем пользователя {user_data.get('username')}")
+        
+        try:
+            response = self._make_request('POST', endpoint, json=user_data)
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Пользователь {user_data.get('username')} успешно создан")
+                return True
+            else:
+                logger.error(f"Ошибка создания пользователя {user_data.get('username')}: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return False
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при создании пользователя {user_data.get('username')}: {e}")
+            return False
+
+    def create_group(self, group_data: Dict[str, Any]) -> bool:
+        """
+        Создает новую группу
+        
+        Args:
+            group_data: Данные группы
+            
+        Returns:
+            True если группа создана успешно, False иначе
+        """
+        endpoint = 'groups/'
+        
+        logger.info(f"Создаем группу {group_data.get('name')}")
+        
+        try:
+            response = self._make_request('POST', endpoint, json=group_data)
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Группа {group_data.get('name')} успешно создана")
+                return True
+            else:
+                logger.error(f"Ошибка создания группы {group_data.get('name')}: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return False
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при создании группы {group_data.get('name')}: {e}")
+            return False
+
     @staticmethod
     def create_with_session_user() -> 'MayanClient':
         """

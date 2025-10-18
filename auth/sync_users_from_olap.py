@@ -136,66 +136,23 @@ class LDAPGroupSyncManager:
     def get_mayan_groups(self) -> List[Dict[str, Any]]:
         """Получает все группы из Mayan EDMS"""
         try:
-            # Используем endpoint для получения групп
-            endpoint = 'groups/'
-            response = self.mayan_client._make_request('GET', endpoint, params={'page': 1, 'page_size': 1000})
-            
-            if response.status_code == 200:
-                data = response.json()
-                groups = data.get('results', [])
-                logger.info(f"Получено {len(groups)} групп из Mayan EDMS")
-                return groups
-            else:
-                logger.error(f"Ошибка получения групп из Mayan EDMS: {response.status_code} - {response.text}")
-                return []
+            # Используем новый метод MayanClient
+            groups = self.mayan_client.get_groups()
+            logger.info(f"Получено {len(groups)} групп из Mayan EDMS")
+            return groups
                 
         except Exception as e:
             logger.error(f"Ошибка получения групп из Mayan EDMS: {e}")
             return []
     
-    def _get_group_members(self, group_id: int) -> List[str]:
+    def _get_group_members(self, group_id: str) -> List[str]:
         """Получает список участников группы"""
         try:
-            # Пробуем разные endpoints для получения участников группы
-            endpoints_to_try = [
-                f'groups/{group_id}/users/',
-                f'groups/{group_id}/',
-            ]
-            
-            for endpoint in endpoints_to_try:
-                try:
-                    response = self.mayan_client._make_request('GET', endpoint)
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        members = []
-                        
-                        # Если это endpoint groups/{id}/users/
-                        if 'users' in endpoint:
-                            for member in data.get('results', []):
-                                if 'username' in member:
-                                    members.append(member['username'])
-                        # Если это endpoint groups/{id}/
-                        else:
-                            # Проверяем, есть ли поле users в ответе
-                            if 'users' in data:
-                                for user_data in data['users']:
-                                    if isinstance(user_data, dict) and 'username' in user_data:
-                                        members.append(user_data['username'])
-                                    elif isinstance(user_data, str):
-                                        # Если это просто список имен пользователей
-                                        members.append(user_data)
-                        
-                        if members:
-                            logger.debug(f"Получено {len(members)} участников группы {group_id} через {endpoint}")
-                            return members
-                            
-                except Exception as e:
-                    logger.debug(f"Ошибка получения участников через {endpoint}: {e}")
-                    continue
-            
-            logger.warning(f"Не удалось получить участников группы {group_id}")
-            return []
+            # Используем новый метод MayanClient
+            users = self.mayan_client.get_group_users(group_id)
+            members = [user.get('username') for user in users if user.get('username')]
+            logger.debug(f"Получено {len(members)} участников группы {group_id}")
+            return members
             
         except Exception as e:
             logger.error(f"Ошибка получения участников группы {group_id}: {e}")
@@ -218,41 +175,20 @@ class LDAPGroupSyncManager:
                 logger.error(f"Не удалось найти ID группы {group_name}")
                 return 0
             
-            # Получаем список пользователей Mayan EDMS
-            users = self.mayan_client.get_users(page=1, page_size=1000)
-            user_id_map = {user['username']: user['id'] for user in users}
-            
             members_added = 0
             
-            # Добавляем участников в группу
+            # Добавляем участников в группу используя новый метод
             for username in member_usernames:
-                if username in user_id_map:
-                    try:
-                        # Используем правильный endpoint: users/{user_id}/groups/
-                        endpoint = f'users/{user_id_map[username]}/groups/'
-                        group_data = {'group': group_id}
-                        response = self.mayan_client._make_request('POST', endpoint, json=group_data)
+                try:
+                    success = self.mayan_client.add_user_to_group(group_id, username)
+                    if success:
+                        logger.info(f"Пользователь {username} добавлен в группу {group_name}")
+                        members_added += 1
+                    else:
+                        logger.warning(f"Не удалось добавить пользователя {username} в группу {group_name}")
                         
-                        if response.status_code in [200, 201]:
-                            logger.info(f"Пользователь {username} добавлен в группу {group_name}")
-                            members_added += 1
-                        elif response.status_code == 400:
-                            # Проверяем, не является ли это дублированием
-                            try:
-                                error_data = response.json()
-                                if 'already' in str(error_data).lower() or 'exists' in str(error_data).lower():
-                                    logger.debug(f"Пользователь {username} уже в группе {group_name}")
-                                else:
-                                    logger.warning(f"Ошибка добавления пользователя {username} в группу {group_name}: {error_data}")
-                            except:
-                                logger.warning(f"Ошибка добавления пользователя {username} в группу {group_name}: {response.status_code}")
-                        else:
-                            logger.warning(f"Не удалось добавить пользователя {username} в группу {group_name}: {response.status_code} - {response.text}")
-                            
-                    except Exception as e:
-                        logger.warning(f"Ошибка добавления пользователя {username} в группу {group_name}: {e}")
-                else:
-                    logger.warning(f"Пользователь {username} не найден в Mayan EDMS, пропускаем")
+                except Exception as e:
+                    logger.warning(f"Ошибка добавления пользователя {username} в группу {group_name}: {e}")
             
             logger.info(f"В группу {group_name} добавлено {members_added} участников из {len(member_usernames)}")
             return members_added
@@ -282,40 +218,21 @@ class LDAPGroupSyncManager:
             current_members = self._get_group_members(group_id)
             logger.info(f"Текущие участники группы {group_name}: {current_members}")
             
-            # Получаем список пользователей Mayan EDMS
-            users = self.mayan_client.get_users(page=1, page_size=1000)
-            user_id_map = {user['username']: user['id'] for user in users}
-            
             members_added = 0
             
-            # Добавляем новых участников
+            # Добавляем новых участников используя новый метод
             for username in member_usernames:
-                if username in user_id_map and username not in current_members:
+                if username not in current_members:
                     try:
-                        # Используем правильный endpoint: users/{user_id}/groups/
-                        endpoint = f'users/{user_id_map[username]}/groups/'
-                        group_data = {'group': group_id}
-                        response = self.mayan_client._make_request('POST', endpoint, json=group_data)
-                        
-                        if response.status_code in [200, 201]:
+                        success = self.mayan_client.add_user_to_group(group_id, username)
+                        if success:
                             logger.info(f"Пользователь {username} добавлен в группу {group_name}")
                             members_added += 1
-                        elif response.status_code == 400:
-                            try:
-                                error_data = response.json()
-                                if 'already' in str(error_data).lower() or 'exists' in str(error_data).lower():
-                                    logger.debug(f"Пользователь {username} уже в группе {group_name}")
-                                else:
-                                    logger.warning(f"Ошибка добавления пользователя {username} в группу {group_name}: {error_data}")
-                            except:
-                                logger.warning(f"Ошибка добавления пользователя {username} в группу {group_name}: {response.status_code}")
                         else:
-                            logger.warning(f"Не удалось добавить пользователя {username} в группу {group_name}: {response.status_code}")
+                            logger.warning(f"Не удалось добавить пользователя {username} в группу {group_name}")
                             
                     except Exception as e:
                         logger.warning(f"Ошибка добавления пользователя {username} в группу {group_name}: {e}")
-                elif username not in user_id_map:
-                    logger.warning(f"Пользователь {username} не найден в Mayan EDMS, пропускаем")
                 else:
                     logger.debug(f"Пользователь {username} уже в группе {group_name}")
             
@@ -331,7 +248,7 @@ class LDAPGroupSyncManager:
             logger.error(f"Ошибка обновления членства в группе {group_name}: {e}")
             return 0
 
-    def _remove_old_members(self, group_id: int, current_members: List[str], ldap_members: List[str]) -> int:
+    def _remove_old_members(self, group_id: str, current_members: List[str], ldap_members: List[str]) -> int:
         """Удаляет участников, которых нет в LDAP группе"""
         try:
             members_to_remove = set(current_members) - set(ldap_members)
@@ -339,27 +256,14 @@ class LDAPGroupSyncManager:
             
             for username in members_to_remove:
                 try:
-                    # Получаем ID пользователя
-                    users = self.mayan_client.get_users(page=1, page_size=1000)
-                    user_id = None
-                    for user in users:
-                        if user['username'] == username:
-                            user_id = user['id']
-                            break
-                    
-                    if user_id:
-                        # Используем правильный endpoint для удаления: users/{user_id}/groups/{group_id}/
-                        endpoint = f'users/{user_id}/groups/{group_id}/'
-                        response = self.mayan_client._make_request('DELETE', endpoint)
+                    # Используем новый метод MayanClient
+                    success = self.mayan_client.remove_user_from_group(group_id, username)
+                    if success:
+                        logger.info(f"Пользователь {username} удален из группы")
+                        removed_count += 1
+                    else:
+                        logger.warning(f"Не удалось удалить пользователя {username} из группы")
                         
-                        if response.status_code in [200, 204]:
-                            logger.info(f"Пользователь {username} удален из группы")
-                            removed_count += 1
-                        elif response.status_code == 404:
-                            logger.debug(f"Пользователь {username} не найден в группе")
-                        else:
-                            logger.warning(f"Не удалось удалить пользователя {username} из группы: {response.status_code}")
-                            
                 except Exception as e:
                     logger.warning(f"Ошибка удаления пользователя {username} из группы: {e}")
             
@@ -380,11 +284,10 @@ class LDAPGroupSyncManager:
                 'description': ldap_group.description or f"Группа {ldap_group.cn} из LDAP"
             }
             
-            # Создаем группу через API
-            endpoint = 'groups/'
-            response = self.mayan_client._make_request('POST', endpoint, json=group_data)
+            # Создаем группу используя новый метод MayanClient
+            success = self.mayan_client.create_group(group_data)
             
-            if response.status_code in [200, 201]:
+            if success:
                 logger.info(f"Группа {ldap_group.cn} успешно создана в Mayan EDMS")
                 
                 # Добавляем группу в отслеживаемые
@@ -397,27 +300,8 @@ class LDAPGroupSyncManager:
                     logger.info(f"Добавлено {members_added} участников в группу {ldap_group.cn}")
                 
                 return True
-            elif response.status_code == 400:
-                # Проверяем, является ли ошибка дублированием группы
-                try:
-                    error_data = response.json()
-                    if 'name' in error_data and 'already exists' in str(error_data['name']):
-                        logger.info(f"Группа {ldap_group.cn} уже существует в Mayan EDMS")
-                        # Добавляем группу в отслеживаемые, так как она уже существует
-                        self.synced_groups.add(ldap_group.cn)
-                        # Обновляем участников группы
-                        if ldap_group.memberUid:
-                            logger.info(f"Обновляем участников группы {ldap_group.cn}")
-                            members_added = self._update_group_membership(ldap_group.cn, ldap_group.memberUid)
-                            logger.info(f"Обновлено {members_added} участников в группе {ldap_group.cn}")
-                        return True
-                except:
-                    pass
-                
-                logger.error(f"Ошибка создания группы {ldap_group.cn}: {response.status_code} - {response.text}")
-                return False
             else:
-                logger.error(f"Ошибка создания группы {ldap_group.cn}: {response.status_code} - {response.text}")
+                logger.error(f"Не удалось создать группу {ldap_group.cn} в Mayan EDMS")
                 return False
                 
         except Exception as e:
@@ -649,7 +533,8 @@ class UserSyncManager:
     def get_mayan_users(self) -> List[Dict[str, Any]]:
         """Получает всех пользователей из Mayan EDMS"""
         try:
-            users = self.mayan_client.get_users(page=1, page_size=1000)
+            # Используем новый метод MayanClient
+            users = self.mayan_client.get_users()
             logger.info(f"Получено {len(users)} пользователей из Mayan EDMS")
             return users
         except Exception as e:
@@ -673,11 +558,10 @@ class UserSyncManager:
                 'is_superuser': False
             }
             
-            # Создаем пользователя через API
-            endpoint = 'users/'
-            response = self.mayan_client._make_request('POST', endpoint, json=user_data)
+            # Создаем пользователя используя новый метод MayanClient
+            success = self.mayan_client.create_user(user_data)
             
-            if response.status_code in [200, 201]:
+            if success:
                 logger.info(f"Пользователь {ldap_user.uid} успешно создан в Mayan EDMS")
                 
                 # Добавляем пользователя в отслеживаемые
@@ -694,22 +578,8 @@ class UserSyncManager:
                     logger.warning(f"Ошибка создания API токена для {ldap_user.uid}: {e}")
                 
                 return True
-            elif response.status_code == 400:
-                # Проверяем, является ли ошибка дублированием пользователя
-                try:
-                    error_data = response.json()
-                    if 'username' in error_data and 'already exists' in str(error_data['username']):
-                        logger.info(f"Пользователь {ldap_user.uid} уже существует в Mayan EDMS")
-                        # Добавляем пользователя в отслеживаемые, так как он уже существует
-                        self.synced_users.add(ldap_user.uid)
-                        return True
-                except:
-                    pass
-                
-                logger.error(f"Ошибка создания пользователя {ldap_user.uid}: {response.status_code} - {response.text}")
-                return False
             else:
-                logger.error(f"Ошибка создания пользователя {ldap_user.uid}: {response.status_code} - {response.text}")
+                logger.error(f"Не удалось создать пользователя {ldap_user.uid} в Mayan EDMS")
                 return False
                 
         except Exception as e:
