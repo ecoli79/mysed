@@ -1190,84 +1190,84 @@ class MayanClient:
         logger.info("Возможно, для этого документа не настроены ACL")
         return []
     
-    def create_acl_with_user(self, content_type: str, object_id: str, user_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Создает ACL для объекта с пользователем
-        Пытается использовать разные endpoints
-        """
-        # Пробуем разные варианты endpoints
-        endpoints_to_try = [
-            'acls/',
-            'access_control_lists/',
-            'permissions/'
-        ]
+    # def create_acl_with_user(self, content_type: str, object_id: str, user_id: int) -> Optional[Dict[str, Any]]:
+    #     """
+    #     Создает ACL для объекта с пользователем
+    #     Пытается использовать разные endpoints
+    #     """
+    #     # Пробуем разные варианты endpoints
+    #     endpoints_to_try = [
+    #         'acls/',
+    #         'access_control_lists/',
+    #         'permissions/'
+    #     ]
         
-        payload = {
-            'content_type': content_type,
-            'object_id': object_id,
-            'user': user_id
-        }
+    #     payload = {
+    #         'content_type': content_type,
+    #         'object_id': object_id,
+    #         'user': user_id
+    #     }
         
-        for endpoint in endpoints_to_try:
-            try:
-                logger.info(f"Пробуем создать ACL через endpoint: {endpoint}")
-                response = self._make_request('POST', endpoint, json=payload)
+    #     for endpoint in endpoints_to_try:
+    #         try:
+    #             logger.info(f"Пробуем создать ACL через endpoint: {endpoint}")
+    #             response = self._make_request('POST', endpoint, json=payload)
                 
-                if response.status_code in [200, 201]:
-                    data = response.json()
-                    logger.info(f"ACL создан через endpoint {endpoint}")
-                    return data
-                elif response.status_code == 404:
-                    logger.warning(f"Endpoint {endpoint} не найден (404)")
-                    continue
-                else:
-                    logger.warning(f"Endpoint {endpoint} вернул статус {response.status_code}: {response.text}")
-                    continue
+    #             if response.status_code in [200, 201]:
+    #                 data = response.json()
+    #                 logger.info(f"ACL создан через endpoint {endpoint}")
+    #                 return data
+    #             elif response.status_code == 404:
+    #                 logger.warning(f"Endpoint {endpoint} не найден (404)")
+    #                 continue
+    #             else:
+    #                 logger.warning(f"Endpoint {endpoint} вернул статус {response.status_code}: {response.text}")
+    #                 continue
                     
-            except requests.RequestException as e:
-                logger.warning(f"Ошибка при создании ACL через endpoint {endpoint}: {e}")
-                continue
+    #         except requests.RequestException as e:
+    #             logger.warning(f"Ошибка при создании ACL через endpoint {endpoint}: {e}")
+    #             continue
         
-        logger.error(f"Не удалось создать ACL для объекта {object_id} ни через один endpoint")
-        return None
+    #     logger.error(f"Не удалось создать ACL для объекта {object_id} ни через один endpoint")
+    #     return None
     
-    def add_permissions_to_acl(self, acl_id: int, permission_ids: List[int]) -> bool:
-        """
-        Добавляет разрешения к ACL
-        Пытается использовать разные endpoints
-        """
-        # Пробуем разные варианты endpoints
-        endpoints_to_try = [
-            f'acls/{acl_id}/permissions/add/',
-            f'access_control_lists/{acl_id}/permissions/add/',
-            f'permissions/{acl_id}/add/'
-        ]
+    # def add_permissions_to_acl(self, acl_id: int, permission_ids: List[int]) -> bool:
+    #     """
+    #     Добавляет разрешения к ACL
+    #     Пытается использовать разные endpoints
+    #     """
+    #     # Пробуем разные варианты endpoints
+    #     endpoints_to_try = [
+    #         f'acls/{acl_id}/permissions/add/',
+    #         f'access_control_lists/{acl_id}/permissions/add/',
+    #         f'permissions/{acl_id}/add/'
+    #     ]
         
-        payload = {
-            'permissions': permission_ids
-        }
+    #     payload = {
+    #         'permissions': permission_ids
+    #     }
         
-        for endpoint in endpoints_to_try:
-            try:
-                logger.info(f"Пробуем добавить разрешения через endpoint: {endpoint}")
-                response = self._make_request('POST', endpoint, json=payload)
+    #     for endpoint in endpoints_to_try:
+    #         try:
+    #             logger.info(f"Пробуем добавить разрешения через endpoint: {endpoint}")
+    #             response = self._make_request('POST', endpoint, json=payload)
                 
-                if response.status_code in [200, 201]:
-                    logger.info(f"Разрешения добавлены через endpoint {endpoint}")
-                    return True
-                elif response.status_code == 404:
-                    logger.warning(f"Endpoint {endpoint} не найден (404)")
-                    continue
-                else:
-                    logger.warning(f"Endpoint {endpoint} вернул статус {response.status_code}: {response.text}")
-                    continue
+    #             if response.status_code in [200, 201]:
+    #                 logger.info(f"Разрешения добавлены через endpoint {endpoint}")
+    #                 return True
+    #             elif response.status_code == 404:
+    #                 logger.warning(f"Endpoint {endpoint} не найден (404)")
+    #                 continue
+    #             else:
+    #                 logger.warning(f"Endpoint {endpoint} вернул статус {response.status_code}: {response.text}")
+    #                 continue
                     
-            except requests.RequestException as e:
-                logger.warning(f"Ошибка при добавлении разрешений через endpoint {endpoint}: {e}")
-                continue
+    #         except requests.RequestException as e:
+    #             logger.warning(f"Ошибка при добавлении разрешений через endpoint {endpoint}: {e}")
+    #             continue
         
-        logger.error(f"Не удалось добавить разрешения к ACL {acl_id} ни через один endpoint")
-        return False
+    #     logger.error(f"Не удалось добавить разрешения к ACL {acl_id} ни через один endpoint")
+    #     return False
 
     def remove_permissions_from_acl(self, acl_id: int, permission_ids: List[int]) -> bool:
         """
@@ -2158,6 +2158,111 @@ class MayanClient:
         except Exception as e:
             logger.error(f"Ошибка при получении ID разрешения {permission_pk}: {e}")
             return permission_pk  # Возвращаем pk как fallback
+
+    def _get_page_count_from_pages_api(self, document_id: str) -> Optional[int]:
+        """
+        Получает количество страниц через API страниц документа
+        
+        Args:
+            document_id: ID документа
+            
+        Returns:
+            Количество страниц или None
+        """
+        try:
+            # Сначала получаем информацию о файлах документа
+            files_data = self.get_document_files(document_id, page=1, page_size=1)
+            if not files_data or not files_data.get('results'):
+                logger.warning(f"Документ {document_id} не найден или не имеет файлов")
+                return None
+            
+            file_info = files_data['results'][0]
+            file_id = file_info.get('id')
+            
+            if not file_id:
+                logger.warning(f"Не найден ID файла для документа {document_id}")
+                return None
+            
+            # Используем правильный endpoint для получения страниц файла
+            endpoint = f'documents/{document_id}/files/{file_id}/pages/'
+            params = {'page': 1, 'page_size': 1}  # Нам нужен только count
+            
+            logger.info(f"Запрашиваем страницы файла через endpoint: {endpoint}")
+            
+            response = self._make_request('GET', endpoint, params=params)
+            
+            # Если получили 404, значит API страниц недоступен
+            if response.status_code == 404:
+                logger.debug(f"API страниц недоступен для файла {file_id} документа {document_id} (404)")
+                return None
+                
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            # ОТЛАДКА: Выводим ответ API
+            logger.info(f"=== ОТЛАДКА: Ответ API страниц для документа {document_id} ===")
+            logger.info(f"  count: {data.get('count')}")
+            logger.info(f"  next: {data.get('next')}")
+            logger.info(f"  previous: {data.get('previous')}")
+            logger.info(f"  results count: {len(data.get('results', []))}")
+            logger.info("=== КОНЕЦ ОТЛАДКИ ===")
+            
+            # Получаем общее количество страниц из поля count
+            if 'count' in data:
+                page_count = data['count']
+                logger.info(f"Получено количество страниц через API страниц: {page_count}")
+                return page_count
+            
+            logger.warning(f"Поле 'count' не найдено в ответе API страниц для документа {document_id}")
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Не удалось получить количество страниц через API страниц: {e}")
+            return None
+
+    def get_document_page_count(self, document_id: str) -> Optional[int]:
+        """
+        Получает количество страниц документа
+        
+        Args:
+            document_id: ID документа
+            
+        Returns:
+            Количество страниц или None
+        """
+        logger.info(f"Получаем количество страниц документа {document_id}")
+        
+        try:
+            # Получаем информацию о файлах документа
+            files_data = self.get_document_files(document_id, page=1, page_size=1)
+            if not files_data or not files_data.get('results'):
+                logger.warning(f"Документ {document_id} не найден или не имеет файлов")
+                return None
+            
+            file_info = files_data['results'][0]
+            
+            # ОТЛАДКА: Выводим все поля файла
+            logger.info(f"=== ОТЛАДКА: Поля файла документа {document_id} ===")
+            for key, value in file_info.items():
+                logger.info(f"  {key}: {value}")
+            logger.info("=== КОНЕЦ ОТЛАДКИ ===")
+            
+            # ВСЕГДА обращаемся к API страниц для получения правильного количества
+            # Поле count в ответе API страниц содержит точное количество страниц
+            logger.info("Получаем количество страниц через API страниц...")
+            page_count = self._get_page_count_from_pages_api(document_id)
+            
+            if page_count is not None:
+                logger.info(f"Получено количество страниц через API страниц: {page_count}")
+                return page_count
+            else:
+                logger.warning(f"Не удалось получить количество страниц через API страниц для документа {document_id}")
+                return None
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении количества страниц документа {document_id}: {e}")
+            return None
 
     @staticmethod
     def create_with_session_user() -> 'MayanClient':

@@ -317,7 +317,7 @@ def check_connection() -> bool:
 def format_file_size(size_bytes: Optional[int]) -> str:
     """Форматирует размер файла в читаемый вид"""
     if size_bytes is None or size_bytes == 0:
-        return "0 B"
+        return "размер неизвестен"
     
     size_names = ["B", "KB", "MB", "GB"]
     i = 0
@@ -339,8 +339,38 @@ def format_datetime(dt_str: str) -> str:
     except:
         return dt_str
 
+def update_file_size(document: MayanDocument, size_label: ui.label):
+    """Асинхронно обновляет количество страниц в карточке документа"""
+    try:
+        client = get_mayan_client()
+        
+        # Получаем количество страниц документа
+        page_count = client.get_document_page_count(document.document_id)
+        
+        if page_count and page_count > 0:
+            if page_count == 1:
+                size_label.text = "(1 страница)"
+            elif page_count in [2, 3, 4]:
+                size_label.text = f"({page_count} страницы)"
+            else:
+                size_label.text = f"({page_count} страниц)"
+        else:
+            size_label.text = "(количество страниц неизвестно)"
+            
+    except Exception as e:
+        logger.error(f"Ошибка при получении количества страниц для документа {document.document_id}: {e}")
+        size_label.text = "(ошибка получения страниц)"
+
 def create_document_card(document: MayanDocument) -> ui.card:
     """Создает карточку документа с возможностью предоставления доступа"""
+    
+    # Временное логирование для отладки
+    logger.info(f"Создаем карточку для документа {document.document_id}:")
+    logger.info(f"  - Название: {document.label}")
+    logger.info(f"  - Файл: {document.file_latest_filename}")
+    logger.info(f"  - Размер файла: {document.file_latest_size}")
+    logger.info(f"  - MIME-тип: {document.file_latest_mimetype}")
+    
     with ui.card().classes('w-full mb-4') as card:
         with ui.row().classes('w-full items-start'):
             # Основная информация
@@ -355,45 +385,51 @@ def create_document_card(document: MayanDocument) -> ui.card:
                     with ui.row().classes('items-center gap-2'):
                         ui.icon('description').classes('text-blue-500')
                         ui.label(document.file_latest_filename).classes('text-sm')
-                        ui.label(f"({format_file_size(document.file_latest_size)})").classes('text-xs text-gray-500')
+                        
+                        # Создаем элемент для отображения количества страниц
+                        pages_label = ui.label("").classes('text-xs text-gray-500')
+                        
+                        # Асинхронно получаем количество страниц
+                        if document.file_latest_id:
+                            ui.timer(0.1, lambda: update_file_size(document, pages_label), once=True)
                 
                 # Даты
                 with ui.row().classes('text-xs text-gray-500 gap-4'):
                     ui.label(f"Создан: {format_datetime(document.datetime_created)}")
                     ui.label(f"Изменен: {format_datetime(document.datetime_modified)}")
             
-            # Кнопки действий
-    # Кнопки действий
-        with ui.column().classes('items-end gap-2'):
-            if document.file_latest_id:
-                # Кнопка скачивания
-                ui.button('Скачать', icon='download').classes('text-xs').on_click(
-                    lambda doc=document: download_document_file(doc)
+            # Кнопки действий - исправляем структуру и выравнивание
+            with ui.column().classes('items-end gap-2 min-w-fit flex-shrink-0'):
+                if document.file_latest_id:
+                    # Кнопка скачивания
+                    ui.button('Скачать', icon='download').classes('text-xs').on_click(
+                        lambda doc=document: download_document_file(doc)
+                    )
+                    
+                    # Кнопка предварительного просмотра
+                    ui.button('Просмотр', icon='visibility').classes('text-xs').on_click(
+                        lambda doc=document: preview_document_file(doc)
+                    )
+                
+                # Кнопка просмотра содержимого
+                ui.button('Содержимое', icon='text_fields').classes('text-xs').on_click(
+                    lambda doc=document: show_document_content(doc)
                 )
                 
-                # Кнопка предварительного просмотра
-                ui.button('Просмотр', icon='visibility').classes('text-xs').on_click(
-                    lambda doc=document: preview_document_file(doc)
+                # Кнопка просмотра доступа
+                ui.button('Доступ', icon='security').classes('text-xs').on_click(
+                    lambda doc=document: show_document_access_info(doc)
                 )
-            
-            # Кнопка просмотра содержимого
-            ui.button('Содержимое', icon='text_fields').classes('text-xs').on_click(
-                lambda doc=document: show_document_content(doc)
-            )
-            
-            # Кнопка просмотра доступа
-            ui.button('Доступ', icon='security').classes('text-xs').on_click(
-                lambda doc=document: show_document_access_info(doc)
-            )
-            
-            # Кнопка предоставления доступа
-            current_user = get_current_user()
-            if current_user:
-                ui.button('Предоставить доступ', icon='share', color='blue').classes('text-xs').on_click(
-                    lambda doc=document: show_grant_access_dialog(doc)
-                )
-        
+                
+                # Кнопка предоставления доступа
+                current_user = get_current_user()
+                if current_user:
+                    ui.button('Предоставить доступ', icon='share', color='blue').classes('text-xs').on_click(
+                        lambda doc=document: show_grant_access_dialog(doc)
+                    )
+    
     return card
+
 
 def show_grant_access_dialog(document: MayanDocument):
     """
@@ -1091,21 +1127,21 @@ def content() -> None:
     
     logger.info("Открыта страница работы с документами Mayan EDMS")
     
-    # Заголовок страницы
-    ui.label('Документы Mayan EDMS').classes('text-2xl font-bold mb-6')
+    # # Заголовок страницы
+    # ui.label('Документы Mayan EDMS').classes('text-2xl font-bold mb-6')
     
-    # Статус подключения
-    connection_status_label = ui.label('Проверка подключения...').classes('text-sm mb-4')
+    # # Статус подключения
+    # connection_status_label = ui.label('Проверка подключения...').classes('text-sm mb-4')
     
-    # Проверяем подключение при загрузке страницы
-    if check_connection():
-        connection_status_label.text = 'Подключение к серверу установлено'
-        connection_status_label.classes('text-green-600')
-    else:
-        connection_status_label.text = f'Нет подключения к серверу {config.mayan_url}'
-        connection_status_label.classes('text-red-600')
-        if _auth_error:
-            ui.label(f'Ошибка авторизации: {_auth_error}').classes('text-sm text-red-500 mb-2')
+    # # Проверяем подключение при загрузке страницы
+    # if check_connection():
+    #     connection_status_label.text = 'Подключение к серверу установлено'
+    #     connection_status_label.classes('text-green-600')
+    # else:
+    #     connection_status_label.text = f'Нет подключения к серверу {config.mayan_url}'
+    #     connection_status_label.classes('text-red-600')
+    #     if _auth_error:
+    #         ui.label(f'Ошибка авторизации: {_auth_error}').classes('text-sm text-red-500 mb-2')
     
     # Создаем табы
     with ui.tabs().classes('w-full') as tabs:
