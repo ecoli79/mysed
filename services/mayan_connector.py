@@ -1133,68 +1133,141 @@ class MayanClient:
     def get_acls_for_object(self, content_type: str, object_id: str) -> List[Dict[str, Any]]:
         """
         Получает список ACL для объекта
-        Endpoint: GET /api/v4/acls/?content_type={content_type}&object_id={object_id}
+        Пытается использовать разные endpoints в зависимости от версии Mayan EDMS
         """
-        endpoint = 'acls/'
-        params = {
-            'content_type': content_type,
-            'object_id': object_id
-        }
+        # Пробуем разные варианты endpoints для получения ACL конкретного объекта
+        endpoints_to_try = [
+            # Стандартные endpoints для ACL
+            f'acls/?content_type={content_type}&object_id={object_id}',
+            f'access_control_lists/?content_type={content_type}&object_id={object_id}',
+            
+            # Возможные endpoints для конкретного документа
+            f'documents/{object_id}/acls/',
+            f'documents/{object_id}/access_control_lists/',
+            f'documents/{object_id}/permissions/',
+            
+            # Альтернативные варианты
+            f'object_permissions/?content_type={content_type}&object_id={object_id}',
+            f'document_permissions/{object_id}/',
+        ]
         
-        try:
-            response = self._make_request('GET', endpoint, params=params)
-            response.raise_for_status()
-            data = response.json()
-            return data.get('results', [])
-        except requests.RequestException as e:
-            logger.error(f"Ошибка при получении ACL для объекта {object_id}: {e}")
-            return []
-
-    def create_acl(self, content_type: str, object_id: str, role_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Создает ACL для объекта
-        Endpoint: POST /api/v4/acls/
+        for endpoint in endpoints_to_try:
+            try:
+                logger.info(f"Пробуем endpoint: {endpoint}")
+                response = self._make_request('GET', endpoint)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    logger.info(f"ACL получены через endpoint {endpoint}")
+                    
+                    # Проверяем, что это действительно ACL, а не список разрешений
+                    results = data.get('results', [])
+                    if results:
+                        first_item = results[0]
+                        logger.info(f"Пример данных от endpoint {endpoint}: {first_item}")
+                        logger.info(f"Ключи в данных: {list(first_item.keys())}")
+                        
+                        # Если это список разрешений (содержит 'pk' и 'label'), пропускаем
+                        if 'pk' in first_item and 'label' in first_item and 'namespace' in first_item:
+                            logger.warning(f"Endpoint {endpoint} возвращает список разрешений, а не ACL")
+                            continue
+                    
+                    return results
+                        
+                elif response.status_code == 404:
+                    logger.warning(f"Endpoint {endpoint} не найден (404)")
+                    continue
+                else:
+                    logger.warning(f"Endpoint {endpoint} вернул статус {response.status_code}")
+                    continue
+                    
+            except requests.RequestException as e:
+                logger.warning(f"Ошибка при обращении к endpoint {endpoint}: {e}")
+                continue
         
-        Args:
-            content_type: Тип объекта (например: 'documents.document')
-            object_id: ID объекта
-            role_id: ID роли
+        # Если все endpoints не сработали, возвращаем пустой список
+        logger.warning(f"Не удалось получить ACL для объекта {object_id} ни через один endpoint")
+        logger.info("Возможно, для этого документа не настроены ACL")
+        return []
+    
+    def create_acl_with_user(self, content_type: str, object_id: str, user_id: int) -> Optional[Dict[str, Any]]:
         """
-        endpoint = 'acls/'
+        Создает ACL для объекта с пользователем
+        Пытается использовать разные endpoints
+        """
+        # Пробуем разные варианты endpoints
+        endpoints_to_try = [
+            'acls/',
+            'access_control_lists/',
+            'permissions/'
+        ]
+        
         payload = {
             'content_type': content_type,
             'object_id': object_id,
-            'role': role_id
+            'user': user_id
         }
         
-        try:
-            response = self._make_request('POST', endpoint, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            logger.info(f"ACL создан для объекта {object_id} с ролью {role_id}")
-            return data
-        except requests.RequestException as e:
-            logger.error(f"Ошибка при создании ACL: {e}")
-            return None
-
+        for endpoint in endpoints_to_try:
+            try:
+                logger.info(f"Пробуем создать ACL через endpoint: {endpoint}")
+                response = self._make_request('POST', endpoint, json=payload)
+                
+                if response.status_code in [200, 201]:
+                    data = response.json()
+                    logger.info(f"ACL создан через endpoint {endpoint}")
+                    return data
+                elif response.status_code == 404:
+                    logger.warning(f"Endpoint {endpoint} не найден (404)")
+                    continue
+                else:
+                    logger.warning(f"Endpoint {endpoint} вернул статус {response.status_code}: {response.text}")
+                    continue
+                    
+            except requests.RequestException as e:
+                logger.warning(f"Ошибка при создании ACL через endpoint {endpoint}: {e}")
+                continue
+        
+        logger.error(f"Не удалось создать ACL для объекта {object_id} ни через один endpoint")
+        return None
+    
     def add_permissions_to_acl(self, acl_id: int, permission_ids: List[int]) -> bool:
         """
         Добавляет разрешения к ACL
-        Endpoint: POST /api/v4/acls/{acl_id}/permissions/add/
+        Пытается использовать разные endpoints
         """
-        endpoint = f'acls/{acl_id}/permissions/add/'
+        # Пробуем разные варианты endpoints
+        endpoints_to_try = [
+            f'acls/{acl_id}/permissions/add/',
+            f'access_control_lists/{acl_id}/permissions/add/',
+            f'permissions/{acl_id}/add/'
+        ]
+        
         payload = {
             'permissions': permission_ids
         }
         
-        try:
-            response = self._make_request('POST', endpoint, json=payload)
-            response.raise_for_status()
-            logger.info(f"Разрешения {permission_ids} добавлены к ACL {acl_id}")
-            return True
-        except requests.RequestException as e:
-            logger.error(f"Ошибка при добавлении разрешений к ACL: {e}")
-            return False
+        for endpoint in endpoints_to_try:
+            try:
+                logger.info(f"Пробуем добавить разрешения через endpoint: {endpoint}")
+                response = self._make_request('POST', endpoint, json=payload)
+                
+                if response.status_code in [200, 201]:
+                    logger.info(f"Разрешения добавлены через endpoint {endpoint}")
+                    return True
+                elif response.status_code == 404:
+                    logger.warning(f"Endpoint {endpoint} не найден (404)")
+                    continue
+                else:
+                    logger.warning(f"Endpoint {endpoint} вернул статус {response.status_code}: {response.text}")
+                    continue
+                    
+            except requests.RequestException as e:
+                logger.warning(f"Ошибка при добавлении разрешений через endpoint {endpoint}: {e}")
+                continue
+        
+        logger.error(f"Не удалось добавить разрешения к ACL {acl_id} ни через один endpoint")
+        return False
 
     def remove_permissions_from_acl(self, acl_id: int, permission_ids: List[int]) -> bool:
         """
@@ -1231,40 +1304,41 @@ class MayanClient:
             logger.error(f"Ошибка при удалении ACL: {e}")
             return False
 
-
     def get_roles(self, page: int = 1, page_size: int = 20) -> List[Dict[str, Any]]:
         """
         Получает список ролей
         Endpoint: GET /api/v4/roles/
         """
         endpoint = 'roles/'
-        params = {'page': page, 'page_size': page_size}
+        #params = {'page': page, 'page_size': page_size}
+        params = {}
         
         try:
+            logger.info(f"Запрашиваем роли через endpoint: {endpoint}")
+            logger.info(f"Параметры: {params}")
+            
             response = self._make_request('GET', endpoint, params=params)
-            response.raise_for_status()
-            data = response.json()
-            return data.get('results', [])
+            logger.info(f"Статус ответа: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"Получен ответ с count: {data.get('count', 'unknown')}")
+                results = data.get('results', [])
+                logger.info(f"Количество результатов: {len(results)}")
+                
+                # Выводим первые несколько ролей для отладки
+                for i, role in enumerate(results[:5]):
+                    logger.info(f"Роль {i+1}: {role}")
+                
+                return results
+            else:
+                logger.error(f"Ошибка HTTP {response.status_code}: {response.text}")
+                return []
+                
         except requests.RequestException as e:
             logger.error(f"Ошибка при получении ролей: {e}")
             return []
 
-    def get_permissions(self, page: int = 1, page_size: int = 100) -> List[Dict[str, Any]]:
-        """
-        Получает список всех разрешений
-        Endpoint: GET /api/v4/permissions/
-        """
-        endpoint = 'permissions/'
-        params = {'page': page, 'page_size': page_size}
-        
-        try:
-            response = self._make_request('GET', endpoint, params=params)
-            response.raise_for_status()
-            data = response.json()
-            return data.get('results', [])
-        except requests.RequestException as e:
-            logger.error(f"Ошибка при получении разрешений: {e}")
-            return []
 
     def get_role_users(self, role_id: int) -> List[Dict[str, Any]]:
         """
@@ -1627,6 +1701,464 @@ class MayanClient:
             logger.error(f"Ошибка при создании группы {group_data.get('name')}: {e}")
             return False
 
+    def create_role(self, role_data: Dict[str, Any]) -> bool:
+        """
+        Создает новую роль
+        Endpoint: POST /api/v4/roles/
+        """
+        endpoint = 'roles/'
+        
+        try:
+            response = self._make_request('POST', endpoint, json=role_data)
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Роль {role_data.get('label')} создана успешно")
+                return True
+            else:
+                logger.error(f"Ошибка создания роли: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return False
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при создании роли: {e}")
+            return False
+    
+    def add_user_to_role(self, role_id: int, user_id: int) -> bool:
+        """
+        Добавляет пользователя к роли
+        Endpoint: POST /api/v4/roles/{role_id}/users/add/
+        """
+        endpoint = f'roles/{role_id}/users/add/'
+        payload = {'user': user_id}
+        
+        try:
+            response = self._make_request('POST', endpoint, json=payload)
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Пользователь {user_id} добавлен к роли {role_id}")
+                return True
+            else:
+                logger.error(f"Ошибка добавления пользователя к роли: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return False
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при добавлении пользователя к роли: {e}")
+            return False
+    
+    def remove_user_from_role(self, role_id: int, user_id: int) -> bool:
+        """
+        Удаляет пользователя из роли
+        Endpoint: POST /api/v4/roles/{role_id}/users/remove/
+        """
+        endpoint = f'roles/{role_id}/users/remove/'
+        payload = {'user': user_id}
+        
+        try:
+            response = self._make_request('POST', endpoint, json=payload)
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Пользователь {user_id} удален из роли {role_id}")
+                return True
+            else:
+                logger.error(f"Ошибка удаления пользователя из роли: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return False
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при удалении пользователя из роли: {e}")
+            return False
+
+    def get_object_acls_list(self, app_label: str, model_name: str, object_id: str) -> List[Dict[str, Any]]:
+        """
+        Получает список ACL для объекта
+        Endpoint: GET /api/v4/objects/{app_label}/{model_name}/{object_id}/acls/
+        
+        Args:
+            app_label: Метка приложения (например: 'documents')
+            model_name: Имя модели (например: 'document')
+            object_id: ID объекта
+        """
+        endpoint = f'objects/{app_label}/{model_name}/{object_id}/acls/'
+        
+        try:
+            logger.info(f"Получаем список ACL для объекта {app_label}.{model_name}.{object_id}")
+            logger.info(f"Endpoint: {endpoint}")
+            
+            response = self._make_request('GET', endpoint)
+            
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get('results', [])
+                logger.info(f"Получено {len(results)} ACL для объекта")
+                
+                if results:
+                    logger.info(f"Пример ACL: {results[0]}")
+                    logger.info(f"Ключи в ACL: {list(results[0].keys())}")
+                
+                return results
+            elif response.status_code == 404:
+                logger.warning(f"ACL для объекта {app_label}.{model_name}.{object_id} не найдены")
+                return []
+            else:
+                logger.error(f"Ошибка получения списка ACL: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return []
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении списка ACL: {e}")
+            return []
+
+    def get_object_acl_details(self, app_label: str, model_name: str, object_id: str, acl_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Получает детали конкретного ACL объекта
+        Endpoint: GET /api/v4/objects/{app_label}/{model_name}/{object_id}/acls/{acl_id}/
+        
+        Args:
+            app_label: Метка приложения (например: 'documents')
+            model_name: Имя модели (например: 'document')
+            object_id: ID объекта
+            acl_id: ID ACL
+        """
+        endpoint = f'objects/{app_label}/{model_name}/{object_id}/acls/{acl_id}/'
+        
+        try:
+            logger.info(f"Получаем детали ACL {acl_id} для объекта {app_label}.{model_name}.{object_id}")
+            logger.info(f"Endpoint: {endpoint}")
+            
+            response = self._make_request('GET', endpoint)
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"Получены детали ACL: {data}")
+                logger.info(f"Ключи в ACL: {list(data.keys())}")
+                return data
+            elif response.status_code == 404:
+                logger.warning(f"ACL {acl_id} для объекта {app_label}.{model_name}.{object_id} не найден")
+                return None
+            else:
+                logger.error(f"Ошибка получения деталей ACL: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return None
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении деталей ACL: {e}")
+            return None
+
+    def create_acl_for_object(self, app_label: str, model_name: str, object_id: str, 
+                        role_id: int = None, user_id: int = None) -> Optional[Dict[str, Any]]:
+        """
+        Создает ACL для конкретного объекта
+        Endpoint: POST /api/v4/objects/{app_label}/{model_name}/{object_id}/acls/
+        """
+        endpoint = f'objects/{app_label}/{model_name}/{object_id}/acls/'
+        
+        # Подготавливаем payload
+        payload = {}
+        if role_id:
+            payload['role_id'] = role_id
+        if user_id:
+            payload['user_id'] = user_id
+        
+        try:
+            logger.info(f"Создаем ACL для объекта {app_label}.{model_name}.{object_id}")
+            logger.info(f"Endpoint: {endpoint}")
+            logger.info(f"Payload: {payload}")
+            
+            response = self._make_request('POST', endpoint, json=payload)
+            
+            if response.status_code in [200, 201]:
+                acl_data = response.json()
+                logger.info(f"ACL создан успешно: {acl_data}")
+                return acl_data
+            else:
+                logger.error(f"Ошибка создания ACL: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                
+                # Если ошибка 500, попробуем альтернативный подход
+                if response.status_code == 500:
+                    logger.info("Пробуем альтернативный метод создания ACL...")
+                    return self._create_acl_alternative(app_label, model_name, object_id, role_id, user_id)
+                
+                return None
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при создании ACL: {e}")
+            return None
+    
+    def _create_acl_alternative(self, app_label: str, model_name: str, object_id: str, 
+                          role_id: int = None, user_id: int = None) -> Optional[Dict[str, Any]]:
+        """
+        Альтернативный метод создания ACL через другой endpoint
+        """
+        try:
+            # Пробуем создать ACL через общий endpoint ACL
+            endpoint = 'acls/'
+            payload = {
+                'content_type': f'{app_label}.{model_name}',
+                'object_id': object_id
+            }
+            
+            if role_id:
+                payload['role_id'] = role_id
+            if user_id:
+                payload['user_id'] = user_id
+            
+            logger.info(f"Альтернативный метод: {endpoint}")
+            logger.info(f"Payload: {payload}")
+            
+            response = self._make_request('POST', endpoint, json=payload)
+            
+            if response.status_code in [200, 201]:
+                acl_data = response.json()
+                logger.info(f"ACL создан через альтернативный метод: {acl_data}")
+                return acl_data
+            else:
+                logger.error(f"Альтернативный метод тоже не сработал: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Ошибка в альтернативном методе: {e}")
+            return None
+
+    def add_permissions_to_object_acl(self, app_label: str, model_name: str, object_id: str, 
+                                    acl_id: int, permission_ids: List) -> bool:
+        """
+        Добавляет разрешения к ACL объекта
+        Endpoint: POST /api/v4/objects/{app_label}/{model_name}/{object_id}/acls/{acl_id}/permissions/add/
+        """
+        endpoint = f'objects/{app_label}/{model_name}/{object_id}/acls/{acl_id}/permissions/add/'
+        
+        # Добавляем разрешения по одному
+        success_count = 0
+        total_count = len(permission_ids)
+        
+        for permission_id in permission_ids:
+            # Пробуем разные форматы payload для одного разрешения
+            payloads_to_try = [
+                {'permission': permission_id},  # Основной формат
+                {'permission_id': permission_id},  # permission_id
+                {'permission_pk': permission_id},   # permission_pk
+                {'permission_codename': permission_id},  # permission_codename
+            ]
+            
+            permission_added = False
+            for payload in payloads_to_try:
+                try:
+                    logger.info(f"Добавляем разрешение {permission_id} к ACL {acl_id}")
+                    logger.info(f"Endpoint: {endpoint}")
+                    logger.info(f"Payload: {payload}")
+                    
+                    response = self._make_request('POST', endpoint, json=payload)
+                    
+                    if response.status_code in [200, 201]:
+                        logger.info(f"Разрешение {permission_id} добавлено к ACL {acl_id}")
+                        success_count += 1
+                        permission_added = True
+                        break
+                    else:
+                        logger.warning(f"Payload {payload} не сработал: {response.status_code}")
+                        logger.warning(f"Ответ: {response.text}")
+                        
+                except requests.RequestException as e:
+                    logger.warning(f"Ошибка с payload {payload}: {e}")
+                    continue
+            
+            if not permission_added:
+                logger.error(f"Не удалось добавить разрешение {permission_id} к ACL {acl_id}")
+        
+        # Если основной метод не сработал, пробуем альтернативный
+        if success_count == 0:
+            logger.info("Основной метод не сработал, пробуем альтернативный...")
+            return self.add_permissions_to_object_acl_alternative(app_label, model_name, object_id, acl_id, permission_ids)
+        
+        # Возвращаем True, если хотя бы одно разрешение было добавлено
+        if success_count > 0:
+            logger.info(f"Успешно добавлено {success_count} из {total_count} разрешений к ACL {acl_id}")
+            return True
+        else:
+            logger.error(f"Не удалось добавить ни одного разрешения к ACL {acl_id}")
+            return False
+    
+    def add_permissions_to_object_acl_alternative(self, app_label: str, model_name: str, object_id: str, 
+                                             acl_id: int, permission_ids: List) -> bool:
+        """
+        Альтернативный метод добавления разрешений к ACL объекта
+        Пробует разные endpoints
+        """
+        # Пробуем разные endpoints
+        endpoints_to_try = [
+            f'objects/{app_label}/{model_name}/{object_id}/acls/{acl_id}/permissions/add/',
+            f'acls/{acl_id}/permissions/add/',
+            f'access_control_lists/{acl_id}/permissions/add/',
+        ]
+        
+        for endpoint in endpoints_to_try:
+            try:
+                logger.info(f"Пробуем альтернативный endpoint: {endpoint}")
+                
+                # Добавляем разрешения по одному
+                success_count = 0
+                for permission_id in permission_ids:
+                    payloads_to_try = [
+                        {'permission': permission_id},
+                        {'permissions': [permission_id]},
+                        {'permission_id': permission_id},
+                        {'permission_pk': permission_id},
+                    ]
+                    
+                    permission_added = False
+                    for payload in payloads_to_try:
+                        try:
+                            response = self._make_request('POST', endpoint, json=payload)
+                            
+                            if response.status_code in [200, 201]:
+                                logger.info(f"Разрешение {permission_id} добавлено через {endpoint}")
+                                success_count += 1
+                                permission_added = True
+                                break
+                            else:
+                                logger.warning(f"Payload {payload} не сработал через {endpoint}: {response.status_code}")
+                                
+                        except requests.RequestException as e:
+                            logger.warning(f"Ошибка с payload {payload} через {endpoint}: {e}")
+                            continue
+                    
+                    if not permission_added:
+                        logger.warning(f"Не удалось добавить разрешение {permission_id} через {endpoint}")
+                
+                if success_count > 0:
+                    logger.info(f"Успешно добавлено {success_count} разрешений через {endpoint}")
+                    return True
+                    
+            except Exception as e:
+                logger.warning(f"Ошибка при использовании endpoint {endpoint}: {e}")
+                continue
+        
+        logger.error(f"Не удалось добавить разрешения через альтернативные endpoints")
+        return False
+
+    def delete_object_acl(self, app_label: str, model_name: str, object_id: str, acl_id: int) -> bool:
+        """
+        Удаляет ACL объекта
+        Endpoint: DELETE /api/v4/objects/{app_label}/{model_name}/{object_id}/acls/{acl_id}/
+        """
+        endpoint = f'objects/{app_label}/{model_name}/{object_id}/acls/{acl_id}/'
+        
+        try:
+            logger.info(f"Удаляем ACL {acl_id} объекта {app_label}.{model_name}.{object_id}")
+            logger.info(f"Endpoint: {endpoint}")
+            
+            response = self._make_request('DELETE', endpoint)
+            
+            if response.status_code in [200, 204]:
+                logger.info(f"ACL {acl_id} удален")
+                return True
+            else:
+                logger.error(f"Ошибка удаления ACL: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return False
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при удалении ACL: {e}")
+            return False
+    
+    def get_permission_by_pk(self, permission_pk: str) -> Optional[Dict[str, Any]]:
+        """
+        Получает детальную информацию о разрешении по pk
+        Endpoint: GET /api/v4/permissions/{pk}/
+        """
+        endpoint = f'permissions/{permission_pk}/'
+        
+        try:
+            logger.info(f"Получаем детальную информацию о разрешении: {permission_pk}")
+            response = self._make_request('GET', endpoint)
+            
+            if response.status_code == 200:
+                permission_data = response.json()
+                logger.info(f"Получена детальная информация о разрешении: {permission_data}")
+                return permission_data
+            else:
+                logger.error(f"Ошибка получения разрешения {permission_pk}: {response.status_code}")
+                logger.error(f"Ответ: {response.text}")
+                return None
+                
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении разрешения {permission_pk}: {e}")
+            return None
+
+    def get_permission_id_by_pk(self, permission_pk: str) -> Optional[str]:
+        """
+        Получает ID разрешения по pk (возвращает строковый pk, если числовой ID не найден)
+        """
+        try:
+            # Подход 1: Попробуем найти разрешение в общем списке
+            try:
+                permissions = self.get_permissions()
+                for permission in permissions:
+                    if permission and permission.get('pk') == permission_pk:
+                        # Попробуем извлечь числовой ID из URL
+                        url = permission.get('url', '')
+                        if url:
+                            import re
+                            match = re.search(r'/permissions/(\d+)/', url)
+                            if match:
+                                numeric_id = int(match.group(1))
+                                logger.info(f'Найден числовой ID для {permission_pk}: {numeric_id}')
+                                return numeric_id
+                        
+                        # Если числовой ID не найден, возвращаем строковый pk
+                        logger.info(f'Числовой ID не найден, используем строковый pk: {permission_pk}')
+                        return permission_pk
+            except Exception as e:
+                logger.warning(f"Не удалось найти разрешение в списке: {e}")
+            
+            # Подход 2: Попробуем альтернативные endpoints
+            alternative_endpoints = [
+                f'permissions/?pk={permission_pk}',
+                f'permissions/?codename={permission_pk}',
+                f'permissions/?name={permission_pk}'
+            ]
+            
+            for endpoint in alternative_endpoints:
+                try:
+                    logger.info(f"Пробуем альтернативный endpoint: {endpoint}")
+                    response = self._make_request('GET', endpoint)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        results = data.get('results', [])
+                        
+                        # Ищем наше разрешение в результатах
+                        for perm in results:
+                            if perm.get('pk') == permission_pk:
+                                # Попробуем извлечь числовой ID из URL
+                                url = perm.get('url', '')
+                                if url:
+                                    import re
+                                    match = re.search(r'/permissions/(\d+)/', url)
+                                    if match:
+                                        numeric_id = int(match.group(1))
+                                        logger.info(f'Найден числовой ID через {endpoint}: {numeric_id}')
+                                        return numeric_id
+                                
+                                # Если числовой ID не найден, возвращаем строковый pk
+                                logger.info(f'Числовой ID не найден через {endpoint}, используем pk: {permission_pk}')
+                                return permission_pk
+                                
+                except Exception as e:
+                    logger.warning(f"Ошибка при обращении к {endpoint}: {e}")
+                    continue
+            
+            # Если ничего не сработало, возвращаем строковый pk
+            logger.warning(f"Не удалось найти разрешение {permission_pk}, используем pk как есть")
+            return permission_pk
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении ID разрешения {permission_pk}: {e}")
+            return permission_pk  # Возвращаем pk как fallback
+
     @staticmethod
     def create_with_session_user() -> 'MayanClient':
         """
@@ -1748,7 +2280,6 @@ class MayanClient:
         except Exception as e:
             logger.error(f"❌ MayanClient.create_default: ошибка создания клиента: {e}")
             raise
-
 
 def get_mayan_client() -> MayanClient:
     """Получает клиент Mayan EDMS с учетными данными текущего пользователя"""
