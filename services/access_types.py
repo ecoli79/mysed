@@ -15,13 +15,15 @@ class AccessTypeManager:
     # Маппинг типов доступа на необходимые permissions
     ACCESS_TYPE_PERMISSIONS = {
         AccessType.VIEW_DOCUMENT: [
-            "View documents",
-            "View document versions"
+            'View documents',
+            'View document versions',
+            'View document files'
         ],
         AccessType.VIEW_AND_DOWNLOAD: [
-            "View documents", 
-            "View document versions",
-            "Download document files"
+            'View documents', 
+            'View document files',
+            'View document versions',
+            'Download document files'
         ]
     }
     

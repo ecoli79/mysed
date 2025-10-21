@@ -1,5 +1,6 @@
 from nicegui import ui
 from services.mayan_connector import MayanClient, MayanDocument
+from services.access_types import AccessTypeManager, AccessType
 from services.document_access_manager import document_access_manager
 from auth.middleware import get_current_user
 from config.settings import config
@@ -473,63 +474,136 @@ def show_grant_access_dialog(document: MayanDocument):
                 ui.label(f'Ошибка при загрузке ролей: {str(e)}').classes('text-red-500')
                 role_select = None
             
-            # Получаем список разрешений для документов
-            try:
-                permissions = document_access_manager.get_available_permissions_for_documents()
+            #Получаем список разрешений для документов
+            # try:
+            #     permissions = document_access_manager.get_available_permissions_for_documents()
                 
-                if permissions:
-                    # Создаем список названий разрешений
-                    permission_options = [perm['label'] for perm in permissions if perm.get('label')]
-                    logger.info(f"Доступные разрешения для документов: {permission_options}")
+            #     if permissions:
+            #         # Создаем список названий разрешений
+            #         permission_options = [perm['label'] for perm in permissions if perm.get('label')]
+            #         logger.info(f"Доступные разрешения для документов: {permission_options}")
                     
-                    if permission_options:
-                        # Множественный выбор разрешений
-                        permission_select = ui.select(
-                            options=permission_options,
-                            label='Выберите разрешения (можно несколько)',
-                            multiple=True,
-                            value=[]  # Начинаем с пустого списка
+            #         if permission_options:
+            #             # Множественный выбор разрешений
+            #             permission_select = ui.select(
+            #                 options=permission_options,
+            #                 label='Выберите разрешения (можно несколько)',
+            #                 multiple=True,
+            #                 value=[]  # Начинаем с пустого списка
+            #             ).classes('w-full')
+                        
+            #             # Добавляем подсказку
+            #             ui.label('💡 Совет: Выберите несколько разрешений для более гибкого управления доступом').classes('text-xs text-blue-600')
+            #         else:
+            #             ui.label('Разрешения найдены, но без названий').classes('text-orange-500')
+            #             permission_select = None
+            #     else:
+            #         ui.label('Разрешения для документов не найдены').classes('text-orange-500')
+            #         permission_select = None
+                    
+            # except Exception as e:
+            #     logger.error(f"Ошибка при получении разрешений: {e}")
+            #     ui.label(f'Ошибка при загрузке разрешений: {str(e)}').classes('text-red-500')
+            #     permission_select = None
+
+            #Получаем типы доступа вместо отдельных разрешений
+            try:
+                access_types = AccessTypeManager.get_all_access_types()
+                
+                if access_types:
+                    # Создаем список названий типов доступа
+                    access_type_options = [access_type['label'] for access_type in access_types]
+                    logger.info(f"Доступные типы доступа: {access_type_options}")
+                    
+                    if access_type_options:
+                        # Одиночный выбор типа доступа
+                        access_type_select = ui.select(
+                            options=access_type_options,
+                            label='Выберите тип доступа',
+                            value=None  # Начинаем без выбора
                         ).classes('w-full')
                         
                         # Добавляем подсказку
-                        ui.label('💡 Совет: Выберите несколько разрешений для более гибкого управления доступом').classes('text-xs text-blue-600')
+                        ui.label('💡 Выберите тип доступа - система автоматически применит необходимые разрешения').classes('text-xs text-blue-600')
                     else:
-                        ui.label('Разрешения найдены, но без названий').classes('text-orange-500')
-                        permission_select = None
+                        ui.label('Типы доступа не найдены').classes('text-orange-500')
+                        access_type_select = None
                 else:
-                    ui.label('Разрешения для документов не найдены').classes('text-orange-500')
-                    permission_select = None
+                    ui.label('Типы доступа не найдены').classes('text-orange-500')
+                    access_type_select = None
                     
             except Exception as e:
-                logger.error(f"Ошибка при получении разрешений: {e}")
-                ui.label(f'Ошибка при загрузке разрешений: {str(e)}').classes('text-red-500')
-                permission_select = None
-            
-            # Функция для обработки нажатия кнопки
+                logger.error(f"Ошибка при получении типов доступа: {e}")
+                ui.label(f'Ошибка при загрузке типов доступа: {str(e)}').classes('text-red-500')
+                access_type_select = None
+
+
+
+
             def handle_grant_access():
                 try:
+                    logger.info("=== НАЧАЛО ПРЕДОСТАВЛЕНИЯ ДОСТУПА ===")
+                    
                     if not role_select or not role_select.value:
+                        logger.warning("Роль не выбрана")
                         ui.notify('Выберите роль', type='error')
                         return
-                    
-                    if not permission_select or not permission_select.value:
-                        ui.notify('Выберите хотя бы одно разрешение', type='error')
+                        
+                    if not access_type_select or not access_type_select.value:
+                        logger.warning("Тип доступа не выбран")
+                        ui.notify('Выберите тип доступа', type='error')
                         return
-                    
+                        
                     role_name = role_select.value
-                    permission_labels = permission_select.value
+                    access_type_label = access_type_select.value
                     
-                    # Находим pk разрешений по их labels
+                    logger.info(f"Выбрана роль: {role_name}")
+                    logger.info(f"Выбран тип доступа: {access_type_label}")
+                        
+                    # Находим выбранный тип доступа
+                    selected_access_type = None
+                    for access_type in AccessTypeManager.get_all_access_types():
+                        if access_type['label'] == access_type_label:
+                            selected_access_type = AccessType(access_type['value'])
+                            break
+                            
+                    if not selected_access_type:
+                        logger.error(f"Не удалось найти тип доступа для: {access_type_label}")
+                        ui.notify('Ошибка: не удалось определить тип доступа', type='error')
+                        return
+                        
+                    logger.info(f"Найден тип доступа: {selected_access_type}")
+                        
+                    # Получаем разрешения для выбранного типа доступа
+                    permission_names = AccessTypeManager.get_access_type_permissions(selected_access_type)
+                    logger.info(f"Разрешения для типа доступа: {permission_names}")
+                    
+                    # Получаем все доступные разрешения из Mayan EDMS
+                    permissions = document_access_manager.get_available_permissions_for_documents()
+                    logger.info(f"Получено разрешений из Mayan EDMS: {len(permissions)}")
+                    
+                    # Находим pk разрешений по их названиям
                     permission_pks = []
-                    for perm_label in permission_labels:
+                    for perm_name in permission_names:
+                        logger.info(f"Ищем разрешение: {perm_name}")
+                        found = False
                         for perm in permissions:
-                            if perm['label'] == perm_label:
+                            if perm['label'] == perm_name:
                                 permission_pks.append(perm['pk'])
+                                logger.info(f"Найдено разрешение {perm_name} с pk: {perm['pk']}")
+                                found = True
                                 break
+                        if not found:
+                            logger.warning(f"Разрешение {perm_name} не найдено в Mayan EDMS")
                     
-                    if len(permission_pks) != len(permission_labels):
+                    logger.info(f"Найдено pk разрешений: {permission_pks}")
+                    
+                    if len(permission_pks) != len(permission_names):
+                        logger.error(f"Не все разрешения найдены. Ожидалось: {len(permission_names)}, найдено: {len(permission_pks)}")
                         ui.notify('Не удалось найти ID для некоторых разрешений', type='error')
                         return
+                        
+                    logger.info(f"Предоставляем доступ к документу {document.document_id} роли {role_name}")
                     
                     # Предоставляем доступ роли
                     success = document_access_manager.grant_document_access_to_role_by_pks(
@@ -539,22 +613,71 @@ def show_grant_access_dialog(document: MayanDocument):
                         permission_pks=permission_pks
                     )
                     
+                    logger.info(f"Результат предоставления доступа: {success}")
+                    
                     if success:
-                        permissions_text = ', '.join(permission_labels)
-                        ui.notify(f'Доступ к документу "{document.label}" предоставлен роли {role_name} с разрешениями: {permissions_text}', type='positive')
+                        permissions_text = ', '.join(permission_names)
+                        logger.info(f"Доступ успешно предоставлен: {permissions_text}")
+                        ui.notify(f'Доступ к документу "{document.label}" предоставлен роли {role_name} с типом доступа: {access_type_label} ({permissions_text})', type='positive')
                         dialog.close()
                     else:
+                        logger.error("Ошибка при предоставлении доступа роли")
                         ui.notify('Ошибка при предоставлении доступа роли', type='error')
-                        
+                            
                 except Exception as e:
                     logger.error(f"Ошибка при предоставлении доступа: {e}")
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
                     ui.notify(f'Ошибка: {str(e)}', type='error')
+            # Функция для обработки нажатия кнопки
+            # def handle_grant_access():
+            #     try:
+            #         if not role_select or not role_select.value:
+            #             ui.notify('Выберите роль', type='error')
+            #             return
+                    
+            #         if not permission_select or not permission_select.value:
+            #             ui.notify('Выберите хотя бы одно разрешение', type='error')
+            #             return
+                    
+            #         role_name = role_select.value
+            #         permission_labels = permission_select.value
+                    
+            #         # Находим pk разрешений по их labels
+            #         permission_pks = []
+            #         for perm_label in permission_labels:
+            #             for perm in permissions:
+            #                 if perm['label'] == perm_label:
+            #                     permission_pks.append(perm['pk'])
+            #                     break
+                    
+            #         if len(permission_pks) != len(permission_labels):
+            #             ui.notify('Не удалось найти ID для некоторых разрешений', type='error')
+            #             return
+                    
+            #         # Предоставляем доступ роли
+            #         success = document_access_manager.grant_document_access_to_role_by_pks(
+            #             document_id=document.document_id,
+            #             document_label=document.label,
+            #             role_name=role_name,
+            #             permission_pks=permission_pks
+            #         )
+                    
+            #         if success:
+            #             permissions_text = ', '.join(permission_labels)
+            #             ui.notify(f'Доступ к документу "{document.label}" предоставлен роли {role_name} с разрешениями: {permissions_text}', type='positive')
+            #             dialog.close()
+            #         else:
+            #             ui.notify('Ошибка при предоставлении доступа роли', type='error')
+                        
+            #     except Exception as e:
+            #         logger.error(f"Ошибка при предоставлении доступа: {e}")
+            #         ui.notify(f'Ошибка: {str(e)}', type='error')
             
-            # Кнопки
+            # # Кнопки
             with ui.row().classes('w-full gap-2'):
                 ui.button('Отмена').on('click', dialog.close)
                 ui.button('Предоставить доступ', icon='add', color='primary').classes('flex-1').on('click', handle_grant_access)
-    
     dialog.open()
 
 def grant_access_to_document(document: MayanDocument, username: str, 
@@ -1000,47 +1123,86 @@ def preview_document_file(document: MayanDocument):
         logger.error(f"Ошибка при просмотре файла: {e}")
         ui.notify(f'Ошибка при просмотре: {str(e)}', type='error')
 
+# def grant_access_to_document_enhanced(document: MayanDocument, access_type: str,
+#                                     username: str, role_name: str, 
+#                                     permission: str, dialog):
+#     """Предоставляет доступ к документу пользователю или роли"""
+#     try:
+#         if access_type == 'Пользователь':
+#             if not username or not username.strip():
+#                 ui.notify('Введите имя пользователя', type='error')
+#                 return
+            
+#             success = document_access_manager.grant_document_access_to_user(
+#                 document_id=document.document_id,
+#                 document_label=document.label,
+#                 username=username,
+#                 permission=permission
+#             )
+            
+#             if success:
+#                 ui.notify(f'Доступ к документу "{document.label}" предоставлен пользователю {username}', type='positive')
+#             else:
+#                 ui.notify('Ошибка при предоставлении доступа пользователю', type='error')
+        
+#         else:  # Роль
+#             if not role_name or not role_name.strip():
+#                 ui.notify('Введите название роли', type='error')
+#                 return
+            
+#             success = document_access_manager.grant_document_access_to_role(
+#                 document_id=document.document_id,
+#                 document_label=document.label,
+#                 role_name=role_name,
+#                 permission=permission
+#             )
+            
+#             if success:
+#                 ui.notify(f'Доступ к документу "{document.label}" предоставлен роли {role_name}', type='positive')
+#             else:
+#                 ui.notify('Ошибка при предоставлении доступа роли', type='error')
+        
+#         dialog.close()
+            
+#     except Exception as e:
+#         logger.error(f"Ошибка при предоставлении доступа: {e}")
+#         ui.notify(f'Ошибка: {str(e)}', type='error')
+
 def grant_access_to_document_enhanced(document: MayanDocument, access_type: str,
                                     username: str, role_name: str, 
                                     permission: str, dialog):
-    """Предоставляет доступ к документу пользователю или роли"""
+    """
+    Предоставляет доступ к документу с улучшенной обработкой ошибок
+    """
     try:
-        if access_type == 'Пользователь':
-            if not username or not username.strip():
-                ui.notify('Введите имя пользователя', type='error')
-                return
-            
-            success = document_access_manager.grant_document_access_to_user(
+        # Если permission содержит запятые, разделяем на отдельные разрешения
+        if ',' in permission:
+            permissions = [p.strip() for p in permission.split(',')]
+        else:
+            permissions = [permission]
+        
+        logger.info(f"Предоставляем доступ к документу {document.document_id}")
+        logger.info(f"Тип доступа: {access_type}")
+        logger.info(f"Роль: {role_name}")
+        logger.info(f"Разрешения: {permissions}")
+        
+        # Предоставляем доступ для каждого разрешения
+        for perm in permissions:
+            result = document_access_manager.grant_access_to_document(
                 document_id=document.document_id,
-                document_label=document.label,
                 username=username,
-                permission=permission
-            )
-            
-            if success:
-                ui.notify(f'Доступ к документу "{document.label}" предоставлен пользователю {username}', type='positive')
-            else:
-                ui.notify('Ошибка при предоставлении доступа пользователю', type='error')
-        
-        else:  # Роль
-            if not role_name or not role_name.strip():
-                ui.notify('Введите название роли', type='error')
-                return
-            
-            success = document_access_manager.grant_document_access_to_role(
-                document_id=document.document_id,
-                document_label=document.label,
                 role_name=role_name,
-                permission=permission
+                permission_name=perm
             )
             
-            if success:
-                ui.notify(f'Доступ к документу "{document.label}" предоставлен роли {role_name}', type='positive')
-            else:
-                ui.notify('Ошибка при предоставлении доступа роли', type='error')
+            if result.get('error'):
+                logger.error(f"Ошибка при предоставлении разрешения {perm}: {result['error']}")
+                ui.notify(f'Ошибка при предоставлении разрешения {perm}: {result["error"]}', type='error')
+                return
         
+        ui.notify(f'Доступ успешно предоставлен! Тип: {access_type}', type='positive')
         dialog.close()
-            
+        
     except Exception as e:
         logger.error(f"Ошибка при предоставлении доступа: {e}")
         ui.notify(f'Ошибка: {str(e)}', type='error')
