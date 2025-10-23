@@ -1799,7 +1799,68 @@ class CamundaClient:
                 user_completed[user] = False
         
         return user_completed
+    
 
+    def start_document_signing_process(self, document_id: str, document_name: str, 
+                                    signer_list: List[str], business_key: str = None) -> Optional[str]:
+        """Запускает процесс подписания документа"""
+        try:
+            variables = {
+                'documentId': document_id,
+                'documentName': document_name,
+                'signerList': signer_list,
+                'signedCount': 0,
+                'signatures': {}
+            }
+            
+            data = {
+                'processDefinitionKey': 'DocumentSigningProcess',
+                'variables': self._prepare_variables(variables),
+                'businessKey': business_key or f"signing_{document_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            }
+            
+            response = self._make_request('POST', 'process-definition/key/DocumentSigningProcess/start', json=data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"Процесс подписания запущен: {result['id']}")
+                return result['id']
+            else:
+                logger.error(f"Ошибка запуска процесса подписания: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Ошибка при запуске процесса подписания: {e}")
+            return None
+
+    def complete_signing_task(self, task_id: str, signature_data: str, 
+                            certificate_info: Dict[str, Any], comment: str = "") -> bool:
+        """Завершает задачу подписания"""
+        try:
+            variables = {
+                'signed': True,
+                'signatureData': signature_data,
+                'certificateInfo': json.dumps(certificate_info, ensure_ascii=False),
+                'signatureComment': comment,
+                'signatureDate': datetime.now().isoformat()
+            }
+            
+            data = {
+                'variables': self._prepare_variables(variables)
+            }
+            
+            response = self._make_request('POST', f'task/{task_id}/complete', json=data)
+            
+            if response.status_code == 204:
+                logger.info(f"Задача подписания {task_id} завершена")
+                return True
+            else:
+                logger.error(f"Ошибка завершения задачи подписания: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Ошибка при завершении задачи подписания: {e}")
+            return False
 
     def start_document_review_process_multi_instance(self, 
                                                document_name: str,
@@ -2386,6 +2447,86 @@ class CamundaClient:
         except requests.RequestException as e:
             logger.error(f"Ошибка при получении процессов создателя {creator_username}: {e}")
             return []
+
+    def start_document_signing_process(self, document_id: str, document_name: str, 
+                                    signer_list: List[str], business_key: str = None) -> Optional[str]:
+        """Запускает процесс подписания документа"""
+        try:
+            # Подготавливаем переменные в правильном формате для Camunda
+            process_variables = {
+                'documentId': {
+                    'value': document_id,
+                    'type': 'String'
+                },
+                'documentName': {
+                    'value': document_name,
+                    'type': 'String'
+                },
+                'signerList': {
+                    'value': json.dumps(signer_list),
+                    'type': 'Object',
+                    'valueInfo': {
+                        'serializationDataFormat': 'application/json',
+                        'objectTypeName': 'java.util.ArrayList'
+                    }
+                },
+                'signedCount': {
+                    'value': 0,
+                    'type': 'Integer'
+                },
+                'signatures': {
+                    'value': '{}',
+                    'type': 'String'
+                }
+            }
+            
+            data = {
+                'variables': process_variables,
+                'businessKey': business_key or f"signing_{document_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            }
+            
+            response = self._make_request('POST', 'process-definition/key/DocumentSigningProcess/start', json=data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"Процесс подписания запущен: {result['id']}")
+                return result['id']
+            else:
+                logger.error(f"Ошибка запуска процесса подписания: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Ошибка при запуске процесса подписания: {e}")
+            return None
+
+    def complete_signing_task(self, task_id: str, signature_data: str, 
+                            certificate_info: Dict[str, Any], comment: str = "") -> bool:
+        """Завершает задачу подписания"""
+        try:
+            variables = {
+                'signed': True,
+                'signatureData': signature_data,
+                'certificateInfo': json.dumps(certificate_info, ensure_ascii=False),
+                'signatureComment': comment,
+                'signatureDate': datetime.now().isoformat()
+            }
+            
+            data = {
+                'variables': self._prepare_variables(variables)
+            }
+            
+            response = self._make_request('POST', f'task/{task_id}/complete', json=data)
+            
+            if response.status_code == 204:
+                logger.info(f"Задача подписания {task_id} завершена")
+                return True
+            else:
+                logger.error(f"Ошибка завершения задачи подписания: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Ошибка при завершении задачи подписания: {e}")
+            return False
 
 
 def create_camunda_client() -> CamundaClient:

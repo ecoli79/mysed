@@ -2,9 +2,10 @@ import asyncio
 import api_router
 import class_example
 import function_example
-from pages import home_page, deploy_work, task_completion_page, document_review_page, login_page, my_processes_page, mayan_documents
+from pages import home_page, deploy_work, task_completion_page, document_review_page, login_page, my_processes_page, mayan_documents, document_signing_page
 from auth.middleware import require_auth, get_current_user
 import theme
+import os
 
 from nicegui import app, ui
 
@@ -16,6 +17,9 @@ logging.basicConfig(level=logging.DEBUG)
 
 # Настраиваем логирование при старте приложения
 logger = get_logger(__name__)
+
+# Настройка статических файлов
+app.add_static_files('/static', os.path.join(os.path.dirname(__file__), 'static'))
 
 # Страница входа (без авторизации)
 @ui.page('/login')
@@ -98,6 +102,18 @@ def admin_page() -> None:
         ui.label(f'Пользователь: {user.first_name} {user.last_name}')
         ui.label(f'Группы: {", ".join(user.groups)}')
 
+@ui.page('/document_signing')
+@require_auth
+def document_signing_page_handler() -> None:
+    user = get_current_user()
+    logger.info('Открыли страницу подписания документов', extra={
+        'component': 'document_signing',
+        'version': '1.0.0',
+        'user': user.username
+    })
+    with theme.frame('Подписание документов'):
+        document_signing_page.content()
+        
 # Тестовая страница (тоже с авторизацией)
 @ui.page('/d')
 @require_auth
@@ -130,6 +146,7 @@ from class_example import ClassExample
 task_assignment = ClassExample()
 
 # Example 4: use APIRouter as described in https://nicegui.io/documentation/page#modularize_with_apirouter
+# Подключаем API роутер для обработки событий КриптоПро
 app.include_router(api_router.router)
 
 ui.run(title='Modularization Example')

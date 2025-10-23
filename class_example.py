@@ -319,6 +319,30 @@ class ClassExample:
                                 placeholder='YYYY-MM-DD',
                                 value=''
                             ).classes('w-full mb-2').props('type="date"')
+
+                            if process_template_select.value and 'DocumentSigningProcess' in process_template_select.value:
+                                # Поля для подписания документов
+                                ui.label('Параметры подписания:').classes('font-bold mb-2')
+                                
+                                document_id_input = ui.input(
+                                    label='ID документа в Mayan EDMS',
+                                    placeholder='Введите ID документа',
+                                    value=''
+                                ).classes('w-full mb-2')
+                                
+                                document_name_input = ui.input(
+                                    label='Название документа',
+                                    placeholder='Введите название документа',
+                                    value=''
+                                ).classes('w-full mb-2')
+                                
+                                # Обновляем значения при изменении
+                                task_name_input.on('change', lambda e: document_id_input.set_value(e.args))
+                                task_description_input.on('change', lambda e: document_name_input.set_value(e.args))
+                            else:
+                                # Если это не процесс подписания, создаем пустые значения
+                                document_id_input = None
+                                document_name_input = None
                         
                         # Дополнительные переменные
                         with ui.column().classes('w-full mb-4'):
@@ -342,26 +366,28 @@ class ClassExample:
                         with ui.row().classes('w-full justify-end mt-4'):
                             ui.button('Отмена', on_click=dialog.close).classes('mr-2')
                             
-                            # Кнопка запуска с индикатором загрузки
-                            start_button = ui.button(
-                                'Запустить процесс',
-                                on_click=lambda: start_process_with_form(
-                                    dialog,
-                                    task_name_input.value,
-                                    task_description_input.value,
-                                    priority_select.value,
-                                    due_date_input.value,
-                                    category_input.value,
-                                    tags_input.value,
-                                    start_button
-                                ),
-                                icon='play_arrow'
-                            ).classes('bg-green-500 text-white')
+                        # Кнопка запуска с индикатором загрузки
+                        start_button = ui.button(
+                            'Запустить процесс',
+                            on_click=lambda: start_process_with_form(
+                                dialog,
+                                task_name_input.value,
+                                task_description_input.value,
+                                priority_select.value,
+                                due_date_input.value,
+                                category_input.value,
+                                tags_input.value,
+                                start_button,
+                                document_id_input.value if document_id_input else '',
+                                document_name_input.value if document_name_input else ''
+                            ),
+                            icon='play_arrow'
+                        ).classes('bg-green-500 text-white')
                     
                     dialog.open()
                 
                 # Функция для запуска процесса с параметрами из формы
-                async def start_process_with_form(dialog, task_name, task_description, priority, due_date, category, tags, start_button):
+                async def start_process_with_form(dialog, task_name, task_description, priority, due_date, category, tags, start_button, document_id='', document_name=''):
                     try:
                         if not camunda_client:
                             ui.notify('Camunda клиент не инициализирован', type='negative')
@@ -444,6 +470,28 @@ class ClassExample:
                                 document_content=task_description.strip(),
                                 assignee_list=assignee_list,
                                 business_key=f"batch_{int(time.time())}"
+                            )
+                        elif process_key == 'DocumentSigningProcess':
+                            # Специальная обработка для процесса подписания документов
+                            # Используем специальные поля для подписания документов
+                            if not document_id.strip():
+                                ui.notify('ID документа обязателен для процесса подписания!', type='error')
+                                return
+                            
+                            if not document_name.strip():
+                                ui.notify('Название документа обязательно для процесса подписания!', type='error')
+                                return
+                            
+                            # Проверяем, что document_id является числовым
+                            if not document_id.isdigit():
+                                ui.notify('ID документа должен быть числовым значением!', type='error')
+                                return
+                            
+                            process_id = camunda_client.start_document_signing_process(
+                                document_id=document_id.strip(),  # Используем специальное поле для ID документа
+                                document_name=document_name.strip(),  # Используем специальное поле для названия документа
+                                signer_list=assignee_list,
+                                business_key=f"signing_{int(time.time())}"
                             )
                         else:
                             # Для других процессов используем универсальный метод

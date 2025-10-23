@@ -252,7 +252,7 @@ class MayanClient:
             return False
     
     def get_documents(self, page: int = 1, page_size: int = 20, 
-                     search: str = "", label: str = "") -> List[MayanDocument]:
+                    search: str = "", label: str = "") -> List[MayanDocument]:
         """
         Получает список документов из Mayan EDMS
         
@@ -287,21 +287,30 @@ class MayanClient:
             
             logger.info(f"Получено {len(data.get('results', []))} документов")
             
-            for doc_data in data.get('results', []):
-                document = MayanDocument(
-                    document_id=doc_data['id'],
-                    label=doc_data['label'],
-                    description=doc_data.get('description', ''),
-                    file_latest_id=doc_data.get('file_latest', {}).get('id', ''),
-                    file_latest_filename=doc_data.get('file_latest', {}).get('filename', ''),
-                    file_latest_mimetype=doc_data.get('file_latest', {}).get('mimetype', ''),
-                    file_latest_size=doc_data.get('file_latest', {}).get('size', 0),
-                    datetime_created=doc_data.get('datetime_created', ''),
-                    datetime_modified=doc_data.get('datetime_modified', '')
-                )
-                documents.append(document)
+            for i, doc_data in enumerate(data.get('results', [])):
+                try:
+                    document = MayanDocument(
+                        document_id=doc_data['id'],
+                        label=doc_data['label'],
+                        description=doc_data.get('description', ''),
+                        file_latest_id=doc_data.get('file_latest', {}).get('id', ''),
+                        file_latest_filename=doc_data.get('file_latest', {}).get('filename', ''),
+                        file_latest_mimetype=doc_data.get('file_latest', {}).get('mimetype', ''),
+                        file_latest_size=doc_data.get('file_latest', {}).get('size', 0),
+                        datetime_created=doc_data.get('datetime_created', ''),
+                        datetime_modified=doc_data.get('datetime_modified', '')
+                    )
+                    documents.append(document)
+                    logger.debug(f"Документ {i+1} создан успешно: {document}")
+                except Exception as e:
+                    logger.error(f"Ошибка при создании документа {i+1}: {e}")
+                    logger.error(f"Данные документа: {doc_data}")
+                    # Пропускаем проблемный документ, но продолжаем обработку остальных
+                    continue
             
+            logger.info(f"Успешно создано {len(documents)} документов из {len(data.get('results', []))}")
             return documents
+            
         except requests.RequestException as e:
             logger.error(f"Ошибка при получении документов: {e}")
             return []
@@ -993,13 +1002,19 @@ class MayanClient:
             logger.error(f"Неожиданная ошибка при загрузке файла к документу {document_id}: {e}")
             return None
 
-    def create_document_with_file(self, label: str, description: str, filename: str, 
-                                file_content: bytes, mimetype: str, 
-                                document_type_id: int = None, cabinet_id: int = None,
-                                language: str = "rus") -> Optional[Dict[str, Any]]:
+    def create_document_with_file(
+        self, 
+        label: str, 
+        description: str, 
+        filename: str, 
+        file_content: bytes, 
+        mimetype: str,
+        document_type_id: Optional[int] = None,
+        cabinet_id: Optional[int] = None,
+        language: str = 'rus'
+    ) -> Optional[Dict[str, Any]]:
         """
-        Создает документ с файлом используя правильный endpoint /documents/upload/
-        согласно спецификации Mayan EDMS REST API
+        Создает документ с файлом с улучшенной обработкой ошибок
         """
         logger.info(f"Создаем документ с файлом через /documents/upload/: {label}")
         
@@ -1042,32 +1057,56 @@ class MayanClient:
             logger.info(f"Заголовки ответа: {dict(response.headers)}")
             logger.info(f"Текст ответа: {response.text[:500]}...")
             
-            if response.status_code in [200, 201, 202]:
-                try:
-                    result = response.json()
-                    document_id = result.get('id')
+            # ОБРАБОТКА ОШИБКИ 404: Тип документа не найден
+            if response.status_code == 404:
+                error_text = response.text
+                if "No DocumentType matches the given query" in error_text:
+                    logger.error(f"Тип документа с ID {document_type_id} больше не существует")
                     
-                    logger.info(f"Документ успешно создан с ID: {document_id}")
-                    
-                    # Добавляем в кабинет если указан
-                    if cabinet_id:
-                        logger.info(f"Добавляем документ {document_id} в кабинет {cabinet_id}")
-                        cabinet_result = self._add_document_to_cabinet(document_id, cabinet_id)
-                        logger.info(f"Результат добавления в кабинет: {cabinet_result}")
-                    
-                    return {
-                        'document_id': document_id,
-                        'label': label,
-                        'filename': filename,
-                        'mimetype': mimetype,
-                        'size': len(file_content),
-                        'download_url': self.get_document_file_url(document_id),
-                        'preview_url': self.get_document_preview_url(document_id)
-                    }
-                except json.JSONDecodeError as e:
-                    logger.error(f"Ошибка парсинга JSON ответа: {e}")
-                    logger.error(f"Ответ сервера: {response.text}")
+                    # Получаем актуальный список типов документов
+                    try:
+                        current_types = self.get_document_types()
+                        available_types = [dt['label'] for dt in current_types]
+                        logger.info(f"Доступные типы документов: {available_types}")
+                        
+                        # Если есть доступные типы, предлагаем использовать первый
+                        if current_types:
+                            fallback_type_id = current_types[0]['id']
+                            fallback_type_name = current_types[0]['label']
+                            logger.info(f"Предлагаем использовать тип '{fallback_type_name}' (ID: {fallback_type_id})")
+                            
+                            # Обновляем данные и повторяем запрос
+                            upload_data["document_type_id"] = fallback_type_id
+                            logger.info(f"Повторяем загрузку с типом документа: {fallback_type_name}")
+                            
+                            # Повторный запрос
+                            response = self._make_request(
+                                'POST', 
+                                'documents/upload/', 
+                                data=upload_data, 
+                                files=files
+                            )
+                            
+                            logger.info(f"Статус повторного ответа: {response.status_code}")
+                            
+                            if response.status_code in [200, 201, 202]:
+                                # Обрабатываем успешный ответ
+                                return self._process_successful_upload_response(response, label, filename, file_content, mimetype, cabinet_id)
+                            else:
+                                logger.error(f"Повторная попытка также не удалась: {response.status_code}")
+                                return None
+                        else:
+                            logger.error("Нет доступных типов документов в системе")
+                            return None
+                    except Exception as e:
+                        logger.error(f"Ошибка при получении списка типов документов: {e}")
+                        return None
+                else:
+                    logger.error(f"Неизвестная ошибка 404: {error_text}")
                     return None
+            
+            elif response.status_code in [200, 201, 202]:
+                return self._process_successful_upload_response(response, label, filename, file_content, mimetype, cabinet_id)
             else:
                 logger.error(f"Ошибка создания документа: {response.status_code}")
                 logger.error(f"Ответ сервера: {response.text}")
@@ -1078,6 +1117,37 @@ class MayanClient:
             return None
         except Exception as e:
             logger.error(f"Неожиданная ошибка при создании документа с файлом: {e}")
+            return None
+    
+    def _process_successful_upload_response(self, response: requests.Response, label: str, filename: str, file_content: bytes, 
+                                                mimetype: str,
+                                                cabinet_id: Optional[int]
+                                            ) -> Optional[Dict[str, Any]]:
+        """Обрабатывает успешный ответ от сервера"""
+        try:
+            result = response.json()
+            document_id = result.get('id')
+            
+            logger.info(f"Документ успешно создан с ID: {document_id}")
+            
+            # Добавляем в кабинет если указан
+            if cabinet_id:
+                logger.info(f"Добавляем документ {document_id} в кабинет {cabinet_id}")
+                cabinet_result = self._add_document_to_cabinet(document_id, cabinet_id)
+                logger.info(f"Результат добавления в кабинет: {cabinet_result}")
+            
+            return {
+                'document_id': document_id,
+                'label': label,
+                'filename': filename,
+                'mimetype': mimetype,
+                'size': len(file_content),
+                'download_url': self.get_document_file_url(document_id),
+                'preview_url': self.get_document_preview_url(document_id)
+            }
+        except json.JSONDecodeError as e:
+            logger.error(f"Ошибка парсинга JSON ответа: {e}")
+            logger.error(f"Ответ сервера: {response.text}")
             return None
 
     def _add_document_to_cabinet(self, document_id: int, cabinet_id: int) -> bool:

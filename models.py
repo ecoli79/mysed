@@ -594,3 +594,26 @@ class GroupedHistoryTask(DateTimeFormattedModel):
         if self.total_users == 0:
             return 0.0
         return (self.completed_users / self.total_users) * 100
+
+class DocumentSignature(pydantic.BaseModel):
+    """Модель для хранения информации о подписи документа"""
+    id: str
+    document_id: str
+    user_id: str
+    username: str
+    signature_data: str  # Подписанные данные в base64
+    certificate_info: Dict[str, Any]  # Информация о сертификате
+    signature_date: datetime
+    signature_hash: str  # Хеш подписи для проверки целостности
+    status: str  # 'pending', 'signed', 'verified', 'invalid'
+
+class SignatureProcess(pydantic.BaseModel):
+    """Модель для процесса подписания документа"""
+    id: str
+    document_id: str
+    initiator: str  # Кто инициировал процесс
+    required_signers: List[str]  # Список пользователей, которые должны подписать
+    signed_by: List[str]  # Кто уже подписал
+    status: str  # 'active', 'completed', 'cancelled'
+    created_date: datetime
+    deadline: Optional[datetime]

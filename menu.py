@@ -9,3 +9,4 @@ def menu() -> None:
     ui.link('Запущенные мной процессы', '/my_processes').classes(replace='text-white')
     ui.link('Управление шаблонами процессов', '/process_templates').classes(replace='text-white')
     ui.link('Назначение задач', '/task-assignment').classes(replace='text-white')
+    ui.link('Подписание документов', '/document_signing').classes('text-white hover:text-blue-200')

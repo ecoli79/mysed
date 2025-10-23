@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:camunda="http://camunda.org/schema/1.0/bpmn" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+  <process id="DocumentSigningProcess" name="Подписание документа" isExecutable="true" camunda:historyTimeToLive="30">
+    <documentation>Процесс подписания документа для нескольких пользователей</documentation>
+    <startEvent id="StartEvent_Signing" name="Начало процесса подписания" />
+    <userTask id="signingTask" name="Подписать документ" camunda:assignee="${assignee}" camunda:historyTimeToLive="30">
+      <documentation>Задача подписания документа</documentation>
+      <extensionElements>
+        <camunda:formData>
+          <camunda:formField id="signed" label="Подписан" type="boolean" defaultValue="false">
+            <camunda:validation>
+              <camunda:constraint name="required" />
+            </camunda:validation>
+          </camunda:formField>
+          <camunda:formField id="signatureData" label="Данные подписи" type="string" />
+          <camunda:formField id="certificateInfo" label="Информация о сертификате" type="string" />
+          <camunda:formField id="signatureComment" label="Комментарий к подписи" type="string" />
+        </camunda:formData>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false" camunda:collection="${signerList}" camunda:elementVariable="assignee">
+        <completionCondition>${nrOfCompletedInstances == nrOfInstances}</completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="EndEvent_Signing" name="Подписание завершено" />
+    <sequenceFlow id="Flow_Signing_1" sourceRef="StartEvent_Signing" targetRef="signingTask" />
+    <sequenceFlow id="Flow_Signing_2" sourceRef="signingTask" targetRef="EndEvent_Signing" />
+  </process>
+</definitions>

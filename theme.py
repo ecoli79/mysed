@@ -39,6 +39,29 @@ def frame(navigation_title: str):
     """Custom page frame to share the same styling and behavior across all pages"""
     ui.colors(primary='#6E93D6', secondary='#53B689', accent='#111B1E', positive='#53B689')
     
+    # Добавляем JavaScript файлы в head
+    ui.add_head_html('''
+        <!-- КриптоПро ЭЦП Browser Plug-in -->
+        <script type="text/javascript" src="/static/js/cadesplugin_api.js"></script>
+        <script type="text/javascript" src="/static/js/Code.js"></script>
+        <script type="text/javascript" src="/static/js/async_code.js"></script>
+        <script type="text/javascript" src="/static/js/cryptopro-integration.js"></script>
+
+        <script type="text/javascript">
+            // Инициализируем интеграцию после загрузки
+            document.addEventListener('DOMContentLoaded', function() {
+                // Ждем загрузки плагина
+                setTimeout(function() {
+                    if (typeof CryptoProIntegration !== 'undefined') {
+                        window.cryptoProIntegration = new CryptoProIntegration();
+                        console.log('CryptoPro интеграция инициализирована');
+                    } else {
+                        console.warn('CryptoProIntegration класс не найден');
+                    }
+                }, 1000);
+            });
+        </script>
+    ''')
     # Проверяем авторизацию
     user = get_current_user()
     
