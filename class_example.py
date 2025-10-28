@@ -337,8 +337,8 @@ class ClassExample:
                                 ).classes('w-full mb-2')
                                 
                                 # Обновляем значения при изменении
-                                task_name_input.on('change', lambda e: document_id_input.set_value(e.args))
-                                task_description_input.on('change', lambda e: document_name_input.set_value(e.args))
+                                # task_name_input.on('change', lambda e: document_id_input.set_value(e.args))
+                                # task_description_input.on('change', lambda e: document_name_input.set_value(e.args))
                             else:
                                 # Если это не процесс подписания, создаем пустые значения
                                 document_id_input = None

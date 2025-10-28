@@ -1,4 +1,5 @@
 import theme
+from datetime import datetime
 from message import message
 from nicegui import ui
 from fastapi import APIRouter, Request
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 # Глобальные переменные для КриптоПро
 _certificates_cache = []
 _selected_certificate = None
+_signature_result = None
 
 # Функции для работы с состоянием
 def get_selected_certificate():
@@ -54,7 +56,7 @@ def item(item_id: str):
 @api_router.post("/cryptopro-event")
 async def handle_cryptopro_event(request: Request):
     """Обрабатывает события от КриптоПро плагина"""
-    global _certificates_cache, _selected_certificate
+    global _certificates_cache, _selected_certificate, _signature_result
     
     try:
         data = await request.json()
@@ -90,11 +92,15 @@ async def handle_cryptopro_event(request: Request):
             text = event_data.get('text', '')
             logger.info(f"Выбран сертификат: {value} -> {text}")
             
+            # ИСПРАВЛЕНИЕ: Используем правильный индекс для JavaScript
+            cert_index = int(value) if value.isdigit() else 0
+            
             # Обновляем глобальную переменную с выбранным сертификатом
             _selected_certificate = {
                 'value': value,
                 'text': text,
-                'certificate': _certificates_cache[int(value)] if value.isdigit() and int(value) < len(_certificates_cache) else None
+                'certificate': _certificates_cache[cert_index] if cert_index < len(_certificates_cache) else None,
+                'js_index': cert_index  # JavaScript индекс (соответствует позиции в global_selectbox_container)
             }
             
             logger.info(f"DEBUG: Обновлен _selected_certificate = {_selected_certificate}")
@@ -140,11 +146,117 @@ async def handle_cryptopro_event(request: Request):
                 "message": message,
                 "action": "show_warning"
             }
+        
+        elif event_name == 'signature_completed':
+            signature = event_data.get('signature', '')
+            certificate_info = event_data.get('certificateInfo', {})
+            original_data = event_data.get('originalData', '')
+            
+            logger.info(f"ПОДПИСАНИЕ ЗАВЕРШЕНО УСПЕШНО!")
+            logger.info(f"Размер подписи: {len(signature)} символов")
+            
+            # ДОБАВЛЯЕМ ЛОГИРОВАНИЕ
+            logger.info(f"Certificate info получен из JavaScript: {certificate_info}")
+            logger.info(f"Certificate info keys: {certificate_info.keys() if certificate_info else 'None'}")
+            
+            # Сохраняем результат подписания в глобальной переменной
+            global _signature_result
+            _signature_result = {
+                'signature': signature,
+                'certificate_info': certificate_info,
+                'original_data': original_data,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            
+            return {
+                "status": "success",
+                "action": "signature_completed",
+                "message": "Документ успешно подписан"
+            }
+            
+        elif event_name == 'signature_error':
+            error = event_data.get('error', 'Неизвестная ошибка')
+            logger.error(f"❌ ОШИБКА ПОДПИСАНИЯ: {error}")
+            
+            return {
+                "status": "error",
+                "action": "signature_error",
+                "message": f"Ошибка подписания: {error}"
+            }
+
+        elif event_name == 'signature_verified':
+            is_valid = event_data.get('isValid', False)
+            certificate_info = event_data.get('certificateInfo', {})
+            error = event_data.get('error', '')
+            timestamp = event_data.get('timestamp', '')
+            
+            if is_valid:
+                logger.info(f"ПОДПИСЬ ПРОВЕРЕНА И ВАЛИДНА!")
+                logger.info(f"Сертификат: {certificate_info.get('subject', 'Неизвестно')}")
+                
+                return {
+                    "status": "success",
+                    "action": "signature_verified",
+                    "message": "Подпись проверена и валидна",
+                    "certificateInfo": certificate_info,
+                    "timestamp": timestamp
+                }
+            else:
+                logger.error(f"ПОДПИСЬ НЕВАЛИДНА: {error}")
+                
+                return {
+                    "status": "error",
+                    "action": "signature_verified",
+                    "message": f"Подпись невалидна: {error}"
+                }
+
+        elif event_name == 'signed_document_created':
+            signed_document = event_data.get('signedDocument', '')
+            filename = event_data.get('filename', 'signed_document.pdf')
+            timestamp = event_data.get('timestamp', '')
+            
+            logger.info(f"ПОДПИСАННЫЙ PDF СОЗДАН!")
+            logger.info(f"Размер подписанного документа: {len(signed_document)} символов")
+            
+            _signature_result = {
+                'signed_document': signed_document,
+                'filename': filename,
+                'timestamp': timestamp,
+                'action': 'signed_document_created'
+            }
+            
+            return {
+                "status": "success",
+                "action": "signed_document_created",
+                "message": "Подписанный PDF создан успешно"
+            }
+            
+        elif event_name == 'signed_document_error':
+            error = event_data.get('error', 'Неизвестная ошибка')
+            logger.error(f"ОШИБКА СОЗДАНИЯ ПОДПИСАННОГО PDF: {error}")
+            
+            return {
+                "status": "error",
+                "action": "signed_document_error",
+                "message": f"Ошибка создания подписанного PDF: {error}"
+            }
             
         return {"status": "success"}
         
     except Exception as e:
         logger.error(f"Ошибка обработки события КриптоПро: {e}")
         return {"status": "error", "message": str(e)}
+
+def get_signature_result():
+    """Возвращает результат последнего подписания"""
+    global _signature_result
+    return _signature_result
+
+def clear_signature_result():
+    """Очищает результат подписания"""
+    global _signature_result
+    _signature_result = None
+
 
 router = api_router

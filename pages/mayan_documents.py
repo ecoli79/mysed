@@ -372,6 +372,16 @@ def create_document_card(document: MayanDocument) -> ui.card:
     logger.info(f"  - Размер файла: {document.file_latest_size}")
     logger.info(f"  - MIME-тип: {document.file_latest_mimetype}")
     
+    # ИСПРАВЛЕНИЕ: Проверяем наличие подписей у документа
+    has_signatures = False
+    try:
+        from services.signature_manager import SignatureManager
+        signature_manager = SignatureManager()
+        has_signatures = signature_manager.document_has_signatures(document.document_id)
+        logger.info(f"  - Есть подписи: {has_signatures}")
+    except Exception as e:
+        logger.warning(f"Ошибка проверки подписей для документа {document.document_id}: {e}")
+    
     with ui.card().classes('w-full mb-4') as card:
         with ui.row().classes('w-full items-start'):
             # Основная информация
@@ -411,6 +421,12 @@ def create_document_card(document: MayanDocument) -> ui.card:
                     ui.button('Просмотр', icon='visibility').classes('text-xs').on_click(
                         lambda doc=document: preview_document_file(doc)
                     )
+                    
+                    # ИСПРАВЛЕНИЕ: Кнопка "Скачать с подписями" показывается только если есть подписи
+                    if has_signatures:
+                        ui.button('Скачать с подписями', icon='verified', color='green').classes('text-xs').on_click(
+                            lambda doc=document: download_signed_document(doc)
+                        )
                 
                 # Кнопка просмотра содержимого
                 ui.button('Содержимое', icon='text_fields').classes('text-xs').on_click(
@@ -629,50 +645,6 @@ def show_grant_access_dialog(document: MayanDocument):
                     import traceback
                     logger.error(f"Traceback: {traceback.format_exc()}")
                     ui.notify(f'Ошибка: {str(e)}', type='error')
-            # Функция для обработки нажатия кнопки
-            # def handle_grant_access():
-            #     try:
-            #         if not role_select or not role_select.value:
-            #             ui.notify('Выберите роль', type='error')
-            #             return
-                    
-            #         if not permission_select or not permission_select.value:
-            #             ui.notify('Выберите хотя бы одно разрешение', type='error')
-            #             return
-                    
-            #         role_name = role_select.value
-            #         permission_labels = permission_select.value
-                    
-            #         # Находим pk разрешений по их labels
-            #         permission_pks = []
-            #         for perm_label in permission_labels:
-            #             for perm in permissions:
-            #                 if perm['label'] == perm_label:
-            #                     permission_pks.append(perm['pk'])
-            #                     break
-                    
-            #         if len(permission_pks) != len(permission_labels):
-            #             ui.notify('Не удалось найти ID для некоторых разрешений', type='error')
-            #             return
-                    
-            #         # Предоставляем доступ роли
-            #         success = document_access_manager.grant_document_access_to_role_by_pks(
-            #             document_id=document.document_id,
-            #             document_label=document.label,
-            #             role_name=role_name,
-            #             permission_pks=permission_pks
-            #         )
-                    
-            #         if success:
-            #             permissions_text = ', '.join(permission_labels)
-            #             ui.notify(f'Доступ к документу "{document.label}" предоставлен роли {role_name} с разрешениями: {permissions_text}', type='positive')
-            #             dialog.close()
-            #         else:
-            #             ui.notify('Ошибка при предоставлении доступа роли', type='error')
-                        
-            #     except Exception as e:
-            #         logger.error(f"Ошибка при предоставлении доступа: {e}")
-            #         ui.notify(f'Ошибка: {str(e)}', type='error')
             
             # # Кнопки
             with ui.row().classes('w-full gap-2'):
@@ -1338,3 +1310,39 @@ def content() -> None:
         with ui.tab_panel(upload_tab):
             _upload_form_container = ui.column().classes('w-full')
             upload_document()
+
+def download_signed_document(document: MayanDocument):
+    '''Скачивает документ с информацией о подписях'''
+    try:
+        from services.signature_manager import SignatureManager
+        import tempfile
+        
+        ui.notify('Создание итогового документа с подписями...', type='info')
+        
+        signature_manager = SignatureManager()
+        signed_pdf = signature_manager.create_signed_document_pdf(document.document_id)
+        
+        if signed_pdf:
+            # Создаем имя файла
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"signed_{document.label.replace(' ', '_')}_{timestamp}.pdf"
+            
+            # ИСПРАВЛЕНИЕ: Создаем временный файл для скачивания через браузер
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as temp_file:
+                temp_file.write(signed_pdf)
+                temp_path = temp_file.name
+            
+            # Открываем файл для скачивания
+            ui.download(temp_path, filename)
+            
+            # Удаляем временный файл через некоторое время
+            ui.timer(5.0, lambda: os.unlink(temp_path), once=True)
+            
+            ui.notify(f'✅ Файл "{filename}" подготовлен для скачивания', type='success')
+            logger.info(f'Итоговый документ {document.document_id} подготовлен для скачивания как {filename}')
+        else:
+            ui.notify('⚠️ Не удалось создать документ с подписями', type='warning')
+            
+    except Exception as e:
+        logger.error(f'Ошибка скачивания документа с подписями: {e}', exc_info=True)
+        ui.notify(f'Ошибка: {str(e)}', type='error')

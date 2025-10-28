@@ -262,7 +262,8 @@ class CryptoProIntegration {
                                     validTo: validTo,
                                     isValid: isValid,
                                     hasPrivateKey: hasPrivateKey,
-                                    index: i
+                                    index: i,  // Индекс в КриптоПро
+                                    jsIndex: certList.length  // Индекс в JavaScript массиве
                                 };
                                 
                                 // Добавляем только сертификаты с приватным ключом (для подписи)
@@ -270,9 +271,9 @@ class CryptoProIntegration {
                                     certList.push(certInfo);
                                     window.global_selectbox_container.push(cert); // Сохраняем сертификат
                                     
-                                    // console.log(`✅ Сертификат для подписи: ${subject} (действителен: ${isValid})`);
+                                    console.log(`Сертификат для подписи: ${subject} (КриптоПро индекс: ${i}, JS индекс: ${certList.length - 1})`);
                                 } else {
-                                    // console.log(`⚠️ Сертификат без приватного ключа: ${subject}`);
+                                    console.log(`Сертификат без приватного ключа: ${subject}`);
                                 }
                                 
                             } catch (certError) {
@@ -299,6 +300,30 @@ class CryptoProIntegration {
         }
     }
     
+    async signFile(fileContent, certificateIndex = 0) {
+        if (!this.pluginAvailable) {
+            throw new Error('КриптоПро плагин недоступен');
+        }
+        
+        try {
+            console.log('Начинаем подписание файла...');
+            
+            // Конвертируем содержимое файла в base64 если это еще не сделано
+            let dataToSign;
+            if (typeof fileContent === 'string') {
+                dataToSign = fileContent;
+            } else {
+                dataToSign = btoa(String.fromCharCode(...new Uint8Array(fileContent)));
+            }
+            
+            return await this.signData(dataToSign, certificateIndex);
+            
+        } catch (e) {
+            console.error('Ошибка при подписании файла:', e);
+            throw e;
+        }
+    }
+
     // Используем готовую функцию подписания из async_code.js
     async signData(data, certificateIndex = 0) {
         if (!this.pluginAvailable) {

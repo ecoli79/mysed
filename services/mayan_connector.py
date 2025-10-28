@@ -901,9 +901,17 @@ class MayanClient:
             return False
 
     def upload_file_to_document(self, document_id: int, filename: str, file_content: bytes, 
-                            mimetype: str, description: str = "") -> Optional[Dict[str, Any]]:
+                            mimetype: str, description: str = "", skip_version_activation: bool = False) -> Optional[Dict[str, Any]]:
         """
-        Загружает файл к документу и активирует его версию
+        Загружает файл к документу и опционально активирует его версию
+        
+        Args:
+            document_id: ID документа
+            filename: Имя файла
+            file_content: Содержимое файла
+            mimetype: MIME-тип файла
+            description: Описание файла
+            skip_version_activation: Если True, не активирует версию после загрузки (для файлов подписи)
         """
         try:
             logger.info(f"Загружаем файл {filename} к документу {document_id}")
@@ -922,7 +930,7 @@ class MayanClient:
             logger.info(f"Файл: {filename}, размер: {len(file_content)} байт, тип: {mimetype}")
             
             upload_response = self._make_request('POST', f'documents/{document_id}/files/', 
-                                            data=upload_data, files=files)
+                                                data=upload_data, files=files)
             
             # Добавляем детальное логирование ответа
             logger.info(f"Статус ответа загрузки файла: {upload_response.status_code}")
@@ -954,10 +962,13 @@ class MayanClient:
                         logger.info(f"Найден файл с ID: {file_id}")
                         logger.info(f"Информация о файле: {latest_file}")
                         
-                        # ДОБАВЛЯЕМ ЛОГИРОВАНИЕ: Активируем версию файла
-                        logger.info(f"Начинаем активацию версии файла {file_id}")
-                        activation_result = self._activate_file_version(document_id, file_id)
-                        logger.info(f"Результат активации версии: {activation_result}")
+                        # ИСПРАВЛЕНИЕ: Активируем версию только если не skip
+                        if not skip_version_activation:
+                            logger.info(f"Начинаем активацию версии файла {file_id}")
+                            activation_result = self._activate_file_version(document_id, file_id)
+                            logger.info(f"Результат активации версии: {activation_result}")
+                        else:
+                            logger.info(f"Пропускаем активацию версии для файла {file_id}")
                         
                         return {
                             'file_id': file_id,
@@ -976,10 +987,13 @@ class MayanClient:
                     
                     logger.info(f"Файл загружен с ID: {file_id}")
                     
-                    # ДОБАВЛЯЕМ ЛОГИРОВАНИЕ: Активируем версию файла
-                    logger.info(f"Начинаем активацию версии файла {file_id}")
-                    activation_result = self._activate_file_version(document_id, file_id)
-                    logger.info(f"Результат активации версии: {activation_result}")
+                    # ИСПРАВЛЕНИЕ: Активируем версию только если не skip
+                    if not skip_version_activation:
+                        logger.info(f"Начинаем активацию версии файла {file_id}")
+                        activation_result = self._activate_file_version(document_id, file_id)
+                        logger.info(f"Результат активации версии: {activation_result}")
+                    else:
+                        logger.info(f"Пропускаем активацию версии для файла {file_id}")
                     
                     return {
                         'file_id': file_id,

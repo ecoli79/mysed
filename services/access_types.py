@@ -7,7 +7,8 @@ logger = logging.getLogger(__name__)
 class AccessType(Enum):
     """Типы доступа к документам"""
     VIEW_DOCUMENT = "view_document"
-    VIEW_AND_DOWNLOAD = "view_and_download"
+    VIEW_AND_DOWNLOAD = "view_and_download",
+    SUBSCRIBE_DOCUMENT = 'subscribe_document'
 
 class AccessTypeManager:
     """Менеджер типов доступа к документам"""
@@ -24,13 +25,26 @@ class AccessTypeManager:
             'View document files',
             'View document versions',
             'Download document files'
+        ],
+        AccessType.SUBSCRIBE_DOCUMENT: [
+            'Create new document files',
+            'Delete document files',
+            'Edit document files',
+            'Edit document versions',
+            'Print document files',
+            'Print document versions',
+            'View document files',
+            'View document versions',
+            'View documents',
+            'Download document files'
         ]
     }
     
     # Человекочитаемые названия типов доступа
     ACCESS_TYPE_LABELS = {
-        AccessType.VIEW_DOCUMENT: "Просмотр документа",
-        AccessType.VIEW_AND_DOWNLOAD: "Просмотр и скачивание"
+        AccessType.VIEW_DOCUMENT: 'Просмотр документа',
+        AccessType.VIEW_AND_DOWNLOAD: 'Просмотр и скачивание',
+        AccessType.SUBSCRIBE_DOCUMENT: 'Подписание документа'
     }
     
     @classmethod

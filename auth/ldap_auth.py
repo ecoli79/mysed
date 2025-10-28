@@ -1,9 +1,12 @@
+from turtle import position
 from ldap3 import Server, Connection, SUBTREE, ALL
 from models import UserSession, AuthResponse, LDAPUser
 from config.settings import config
 from datetime import datetime
 import secrets
 import logging
+from typing import Optional
+
 
 logger = logging.getLogger(__name__)
 
@@ -208,3 +211,92 @@ class LDAPAuthenticator:
         except Exception as e:
             logger.error(f"Ошибка поиска пользователей: {e}")
             return []
+
+    def get_user_by_login(self, username: str) -> Optional[LDAPUser]:
+        """Получает информацию о пользователе по логину (синхронно)"""
+        try:
+            conn = Connection(self.server, user=self.admin_dn, password=self.admin_password, auto_bind=True)
+            
+            search_filter = f'(uid={username})'
+            conn.search(
+                self.base_dn, 
+                search_filter, 
+                SUBTREE,
+                attributes=['uid', 'cn', 'givenName', 'sn', 'mail', 'description']
+            )
+            
+            if not conn.entries:
+                return None
+            
+            entry = conn.entries[0]
+            
+            # ИСПРАВЛЕНИЕ: Правильно обрабатываем поля, которые могут отсутствовать или быть None
+            email = entry.mail.value if hasattr(entry, 'mail') and entry.mail.value else None
+            description = entry.description.value if hasattr(entry, 'description') and entry.description.value else ''
+            
+            user = LDAPUser(
+                dn=str(entry.entry_dn),
+                uid=entry.uid.value,
+                cn=entry.cn.value,
+                givenName=entry.givenName.value,
+                sn=entry.sn.value,
+                email=email,
+                destription=description,
+                memberOf=[]
+            )
+            
+            conn.unbind()
+            return user
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения пользователя {username}: {e}")
+            return None
+
+    def find_user_by_login(self, username: str) -> Optional[LDAPUser]:
+        """Находит пользователя по логину с использованием широкого поиска"""
+        try:
+            logger.info(f"Широкий поиск пользователя в LDAP: {username}")
+            conn = Connection(self.server, user=self.admin_dn, password=self.admin_password, auto_bind=True)
+            
+            # Используем широкий поиск, как в search_users
+            search_filter = f'(uid=*{username}*)'
+            logger.info(f"LDAP широкий фильтр поиска: {search_filter}")
+            
+            conn.search(
+                self.base_dn, 
+                search_filter, 
+                SUBTREE,
+                attributes=['uid', 'cn', 'givenName', 'sn', 'mail', 'description']
+            )
+            
+            logger.info(f"LDAP широкий поиск найден записей: {len(conn.entries)}")
+            
+            # Ищем точное совпадение по uid
+            for entry in conn.entries:
+                if entry.uid.value == username:
+                    logger.info(f"LDAP точное совпадение найдено: {entry.entry_dn}")
+                    
+                    # ИСПРАВЛЕНИЕ: Правильно обрабатываем поля, которые могут отсутствовать или быть None
+                    email = entry.mail.value if hasattr(entry, 'mail') and entry.mail.value else None
+                    description = entry.description.value if hasattr(entry, 'description') and entry.description.value else ''
+                    
+                    user = LDAPUser(
+                        dn=str(entry.entry_dn),
+                        uid=entry.uid.value,
+                        cn=entry.cn.value,
+                        givenName=entry.givenName.value,
+                        sn=entry.sn.value,
+                        email=email,
+                        destription=description,
+                        memberOf=[]
+                    )
+                    conn.unbind()
+                    return user
+            
+            logger.warning(f"Пользователь {username} не найден при широком поиске")
+            conn.unbind()
+            return None
+            
+        except Exception as e:
+            logger.error(f"Ошибка широкого поиска пользователя {username}: {e}")
+            return None

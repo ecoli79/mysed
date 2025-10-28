@@ -241,7 +241,7 @@ class CamundaClient:
             process_instance_id: ID экземпляра процесса
             
         Returns:
-            Словарь с переменными процесса
+            Словарь с переменными процесса или пустой словарь при ошибке
         """
         endpoint = f'process-instance/{process_instance_id}/variables'
         
@@ -252,12 +252,32 @@ class CamundaClient:
             variables_data = response.json()
             variables = {}
             
-            for var_name, var_data in variables_data.items():
-                if 'value' in var_data:
-                    variables[var_name] = var_data['value']
+            if isinstance(variables_data, dict):
+                for key, value_info in variables_data.items():
+                    if isinstance(value_info, dict) and 'value' in value_info:
+                        variables[key] = value_info['value']
+                    else:
+                        variables[key] = value_info
+            
             return variables
+            
         except requests.RequestException as e:
             logger.error(f"Ошибка при получении переменных процесса {process_instance_id}: {e}")
+            
+            # ИСПРАВЛЕНИЕ: Добавляем детальное логирование
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_text = e.response.text[:1000]
+                    logger.error(f"Текст ошибки от Camunda: {error_text}")
+                except:
+                    pass
+                    
+                try:
+                    error_json = e.response.json()
+                    logger.error(f"JSON ошибки от Camunda: {error_json}")
+                except:
+                    pass
+            
             return {}
     
     def get_process_instance_variables_by_name(self, process_instance_id: str, variable_names: List[str]) -> Dict[str, Any]:
@@ -456,7 +476,7 @@ class CamundaClient:
                         process_definition_key=task_data['processDefinitionKey'],
                         process_definition_id=task_data['processDefinitionId'],
                         process_instance_id=task_data['processInstanceId'],
-                        execution_id=task_data['executionId'],
+                        execution_id=task_data.get('executionId'),
                         case_definition_key=task_data.get('caseDefinitionKey'),
                         case_definition_id=task_data.get('caseDefinitionId'),
                         case_instance_id=task_data.get('caseInstanceId'),
@@ -472,9 +492,9 @@ class CamundaClient:
                         duration=task_data.get('duration'),
                         task_definition_key=task_data['taskDefinitionKey'],
                         priority=task_data['priority'],
-                        due=due_date,
+                        due_date=due_date,
                         parent_task_id=task_data.get('parentTaskId'),
-                        follow_up=task_data.get('followUp'),
+                        follow_up_date=task_data.get('followUp'),
                         tenant_id=task_data.get('tenantId'),
                         removal_time=task_data.get('removalTime'),
                         root_process_instance_id=task_data.get('rootProcessInstanceId')
@@ -558,6 +578,18 @@ class CamundaClient:
             response = self._make_request('POST', endpoint, json=payload)
             response.raise_for_status()
             return True
+        except requests.HTTPError as e:
+            # ИСПРАВЛЕНИЕ: Добавляем детальное логирование ошибки
+            error_detail = ""
+            try:
+                error_detail = e.response.text[:500]  # Первые 500 символов ответа
+                logger.error(f"HTTP ошибка при завершении задачи {task_id}: {e.response.status_code}")
+                logger.error(f"Детали ошибки: {error_detail}")
+            except:
+                pass
+            
+            logger.error(f"Payload: {json.dumps(payload, indent=2)[:2000]}")  # Первые 2000 символов payload
+            return False
         except requests.RequestException as e:
             logger.error(f"Ошибка при завершении задачи {task_id}: {e}")
             return False
@@ -638,6 +670,20 @@ class CamundaClient:
             },
             
             'userCompleted': {
+                'value': '{}',
+                'type': 'String'
+            },
+            
+            # Инициализируем старые переменные для обратной совместимости
+            'reviewDates': {
+                'value': '{}',
+                'type': 'String'
+            },
+            'reviewComments': {
+                'value': '{}',
+                'type': 'String'
+            },
+            'reviewStatus': {
                 'value': '{}',
                 'type': 'String'
             },
@@ -893,6 +939,37 @@ class CamundaClient:
         if not process_vars.user_completed:
             process_vars.user_completed = JSONStringField(value="{}")
         
+        # ОБНОВЛЯЕМ СТАРЫЕ ПЕРЕМЕННЫЕ (reviewComments, reviewDates, reviewStatus) для обратной совместимости
+        # Получаем текущие старые переменные
+        review_dates = process_variables_raw.get('reviewDates', {})
+        review_comments = process_variables_raw.get('reviewComments', {})
+        review_status = process_variables_raw.get('reviewStatus', {})
+        
+        # Если это словари, работаем с ними, иначе парсим JSON строку
+        if isinstance(review_dates, str):
+            try:
+                review_dates = json.loads(review_dates)
+            except:
+                review_dates = {}
+        if isinstance(review_comments, str):
+            try:
+                review_comments = json.loads(review_comments)
+            except:
+                review_comments = {}
+        if isinstance(review_status, str):
+            try:
+                review_status = json.loads(review_status)
+            except:
+                review_status = {}
+        
+        # Обновляем старые переменные данными текущего пользователя
+        if status == "completed":
+            review_dates[assignee] = current_date
+            review_comments[assignee] = comment or ""
+            review_status[assignee] = True
+        else:
+            review_status[assignee] = False
+        
         # Подготавливаем переменные для обновления процесса в правильном формате Camunda API
         updated_variables = {
             'userCompletionDates': {
@@ -914,6 +991,19 @@ class CamundaClient:
             'completedTasks': {
                 'value': process_vars.completed_tasks,
                 'type': 'Integer'
+            },
+            # ДОБАВЛЯЕМ СТАРЫЕ ПЕРЕМЕННЫЕ для обратной совместимости
+            'reviewDates': {
+                'value': json.dumps(review_dates, ensure_ascii=False),
+                'type': 'String'
+            },
+            'reviewComments': {
+                'value': json.dumps(review_comments, ensure_ascii=False),
+                'type': 'String'
+            },
+            'reviewStatus': {
+                'value': json.dumps(review_status, ensure_ascii=False),
+                'type': 'String'
             }
         }
         
@@ -1654,24 +1744,52 @@ class CamundaClient:
             nr_of_instances = all_variables.get('nrOfInstances', 0)
             nr_of_completed_instances = all_variables.get('nrOfCompletedInstances', 0)
             
-            # Отладочная информация
+            # ИСПРАВЛЕНИЕ: Поддерживаем как задачи ознакомления (assigneeList), так и задачи подписания (signerList)
+            # Получаем список всех пользователей
+            assignee_list = all_variables.get('assigneeList', [])
+            signer_list = all_variables.get('signerList', [])
+            
+            # Используем signerList для задач подписания, если assigneeList пуст
+            user_list = signer_list if signer_list and not assignee_list else assignee_list
+            
+            if isinstance(user_list, str):
+                try:
+                    user_list = json.loads(user_list)
+                except:
+                    user_list = []
+            
+            if isinstance(signer_list, dict) and 'value' in signer_list:
+                signer_list = signer_list['value']
+            elif isinstance(signer_list, str):
+                try:
+                    signer_list = json.loads(signer_list)
+                except:
+                    signer_list = []
+            
             logger.info(f"Переменные процесса {process_instance_id}:")
             logger.info(f"  nrOfInstances: {nr_of_instances}")
             logger.info(f"  nrOfCompletedInstances: {nr_of_completed_instances}")
             logger.info(f"  nrOfActiveInstances: {all_variables.get('nrOfActiveInstances', 0)}")
-            
-            # Получаем список всех пользователей
-            assignee_list = all_variables.get('assigneeList', [])
-            if isinstance(assignee_list, str):
-                try:
-                    assignee_list = json.loads(assignee_list)
-                except:
-                    assignee_list = []
-            
             logger.info(f"  assigneeList: {assignee_list}")
+            logger.info(f"  signerList: {signer_list}")
+            logger.info(f"  Итоговый user_list: {user_list}")
             
             # Получаем статус пользователей из переменных процесса
             user_completed = all_variables.get('userCompleted', {})
+            signatures = all_variables.get('signatures', {})
+            
+            # ИСПРАВЛЕНИЕ: Для задач подписания используем signatures для определения статуса
+            if isinstance(signatures, str):
+                try:
+                    signatures = json.loads(signatures)
+                except:
+                    signatures = {}
+            
+            # Если есть данные о подписях, используем их
+            if signatures and isinstance(signatures, dict):
+                user_completed = {user: user in signatures for user in user_list}
+                logger.info(f"  Используем signatures для определения статуса: {user_completed}")
+            
             if isinstance(user_completed, str):
                 try:
                     user_completed = json.loads(user_completed)
@@ -1681,13 +1799,13 @@ class CamundaClient:
             logger.info(f"  userCompleted: {user_completed}")
             
             # Если переменная userCompleted пуста или неполная, проверяем историю задач
-            if not user_completed or len(user_completed) < len(assignee_list):
+            if not user_completed or len(user_completed) < len(user_list):
                 logger.info(f"Переменная userCompleted неполная для процесса {process_instance_id}, проверяем историю задач")
-                user_completed = self._get_user_completion_status_from_history(process_instance_id, assignee_list)
+                user_completed = self._get_user_completion_status_from_history(process_instance_id, user_list)
             
             # Создаем детальную информацию о пользователях
             user_status = []
-            for user in assignee_list:
+            for user in user_list:
                 completed = user_completed.get(user, False) if isinstance(user_completed, dict) else False
                 user_status.append({
                     'user': user,
@@ -1801,37 +1919,37 @@ class CamundaClient:
         return user_completed
     
 
-    def start_document_signing_process(self, document_id: str, document_name: str, 
-                                    signer_list: List[str], business_key: str = None) -> Optional[str]:
-        """Запускает процесс подписания документа"""
-        try:
-            variables = {
-                'documentId': document_id,
-                'documentName': document_name,
-                'signerList': signer_list,
-                'signedCount': 0,
-                'signatures': {}
-            }
+    # def start_document_signing_process(self, document_id: str, document_name: str, 
+    #                                 signer_list: List[str], business_key: str = None) -> Optional[str]:
+    #     """Запускает процесс подписания документа"""
+    #     try:
+    #         variables = {
+    #             'documentId': document_id,
+    #             'documentName': document_name,
+    #             'signerList': signer_list,
+    #             'signedCount': 0,
+    #             'signatures': {}
+    #         }
             
-            data = {
-                'processDefinitionKey': 'DocumentSigningProcess',
-                'variables': self._prepare_variables(variables),
-                'businessKey': business_key or f"signing_{document_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            }
+    #         data = {
+    #             'processDefinitionKey': 'DocumentSigningProcess',
+    #             'variables': self._prepare_variables(variables),
+    #             'businessKey': business_key or f"signing_{document_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    #         }
             
-            response = self._make_request('POST', 'process-definition/key/DocumentSigningProcess/start', json=data)
+    #         response = self._make_request('POST', 'process-definition/key/DocumentSigningProcess/start', json=data)
             
-            if response.status_code == 200:
-                result = response.json()
-                logger.info(f"Процесс подписания запущен: {result['id']}")
-                return result['id']
-            else:
-                logger.error(f"Ошибка запуска процесса подписания: {response.status_code} - {response.text}")
-                return None
+    #         if response.status_code == 200:
+    #             result = response.json()
+    #             logger.info(f"Процесс подписания запущен: {result['id']}")
+    #             return result['id']
+    #         else:
+    #             logger.error(f"Ошибка запуска процесса подписания: {response.status_code} - {response.text}")
+    #             return None
                 
-        except Exception as e:
-            logger.error(f"Ошибка при запуске процесса подписания: {e}")
-            return None
+    #     except Exception as e:
+    #         logger.error(f"Ошибка при запуске процесса подписания: {e}")
+    #         return None
 
     def complete_signing_task(self, task_id: str, signature_data: str, 
                             certificate_info: Dict[str, Any], comment: str = "") -> bool:
@@ -2239,10 +2357,20 @@ class CamundaClient:
                     
                     # Получаем переменные процесса для дополнительной информации
                     try:
-                        process_variables = self.get_history_process_instance_variables_by_name(
+                        # Читаем ВСЕ переменные для обратной совместимости
+                        process_variables_new = self.get_history_process_instance_variables_by_name(
                             process_id, 
                             ['taskDescription', 'dueDate', 'assigneeList', 'userComments', 'userCompletionDates', 'userStatus', 'userCompleted']
                         )
+                        
+                        # Пытаемся прочитать старые переменные
+                        process_variables_old = self.get_history_process_instance_variables_by_name(
+                            process_id,
+                            ['reviewComments', 'reviewDates', 'reviewStatus']
+                        )
+                        
+                        # Объединяем переменные
+                        process_variables = {**process_variables_new, **process_variables_old}
                     except:
                         process_variables = {}
                     
@@ -2284,8 +2412,22 @@ class CamundaClient:
                             from models import ProcessVariables
                             process_vars = ProcessVariables(**process_variables)
                             user_info = process_vars.get_user_info(assignee)
-                            comment = user_info['comment']
-                            review_date = user_info['completion_date'] or end_time
+                            comment = user_info['comment'] if user_info else None
+                            review_date = user_info['completion_date'] if user_info else end_time
+                            
+                            # Если комментарий не найден, пробуем прочитать из старых переменных
+                            if not comment and 'reviewComments' in process_variables:
+                                try:
+                                    import json
+                                    review_comments_str = process_variables.get('reviewComments', '{}')
+                                    if isinstance(review_comments_str, str):
+                                        review_comments = json.loads(review_comments_str)
+                                    else:
+                                        review_comments = review_comments_str
+                                    comment = review_comments.get(assignee)
+                                except:
+                                    pass
+                                    
                         except Exception as e:
                             logger.warning(f"Не удалось получить комментарий для {assignee}: {e}")
                             comment = None
@@ -2484,7 +2626,8 @@ class CamundaClient:
                 'variables': process_variables,
                 'businessKey': business_key or f"signing_{document_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             }
-            
+            logger.info(f'Отправляем переменные процесса подписания: {process_variables}')
+            logger.info(f'documentId: {document_id}, documentName: {document_name}')
             response = self._make_request('POST', 'process-definition/key/DocumentSigningProcess/start', json=data)
             
             if response.status_code == 200:

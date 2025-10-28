@@ -1,3 +1,4 @@
+from math import log
 from nicegui import ui
 from services.camunda_connector import create_camunda_client
 from services.mayan_connector import MayanClient
@@ -5,11 +6,27 @@ from config.settings import config
 from datetime import datetime
 import logging
 from typing import List, Dict, Any, Optional
-from models import CamundaHistoryTask
+from models import CamundaHistoryTask, LDAPUser
 from auth.middleware import get_current_user
+from auth.ldap_auth import LDAPAuthenticator
 from utils import validate_username
 from datetime import datetime
 import api_router
+from ldap3 import Server, Connection, SUBTREE, ALL
+from utils.date_utils import format_date_russian
+import base64
+from PyPDF2 import PdfReader, PdfWriter
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.units import cm
+from reportlab.lib.colors import Color, HexColor
+from reportlab.lib.pagesizes import A4
+import io
+import os
+from services.signature_manager import SignatureManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +44,9 @@ _tasks_header_container: Optional[ui.column] = None  # Добавляем пер
 _certificate_select_global = None
 _selected_certificate = None
 _certificates_cache = []
+_document_for_signing = None
+_signature_result_handler = None
+
 
 def get_mayan_client() -> MayanClient:
     """Получает клиент Mayan EDMS с учетными данными текущего пользователя"""
@@ -916,17 +936,162 @@ def complete_signing_task(task):
     """Завершает задачу подписания документа"""
     
     with ui.dialog() as dialog, ui.card().classes('w-full max-w-4xl'):
-        ui.label('Подписание документа').classes('text-2xl font-bold mb-4')
+        ui.label('Подписание документа').classes('text-xl font-bold mb-4')
         
         with ui.column().classes('w-full gap-4'):
-            # Информация о документе
-            ui.label(f'Документ: {task.name}').classes('text-lg')
-            ui.label(f'ID документа: {task.name}')
-            ui.label(f'ID задачи: {task.id}')
+            # Получаем переменные процесса
+            document_id = None
+            document_name = None
+            signer_list = []
             
-            # Документ для подписания
-            ui.label('Документ для подписания:').classes('text-lg font-semibold')
-            ui.label('Документ не найден').classes('text-red-500')
+            try:
+                camunda_client = create_camunda_client()
+                process_variables = camunda_client.get_process_instance_variables(task.process_instance_id)
+                
+                logger.info(f"Переменные процесса {task.process_instance_id}: {process_variables}")
+                
+                # Извлекаем ID документа из переменных
+                document_id = process_variables.get('documentId')
+                document_name = process_variables.get('documentName')
+                
+                # Извлекаем список подписантов
+                signer_list = process_variables.get('signerList', [])
+                if isinstance(signer_list, dict) and 'value' in signer_list:
+                    signer_list = signer_list['value']
+                elif isinstance(signer_list, str):
+                    try:
+                        import json
+                        signer_list = json.loads(signer_list)
+                    except:
+                        signer_list = [signer_list] if signer_list else []
+                
+            except Exception as e:
+                ui.label(f'Ошибка при получении переменных процесса: {str(e)}').classes('text-red-600')
+                logger.error(f"Ошибка в complete_signing_task при получении переменных: {e}")
+            
+            # ИСПРАВЛЕНИЕ: Проверяем, уже подписан ли документ текущим пользователем
+            # Добавляем проверку, что document_id - это валидный ID документа (число)
+            def is_valid_document_id(doc_id):
+                '''Проверяет, что document_id - это валидный идентификатор (число)'''
+                if not doc_id:
+                    return False
+                try:
+                    # Пытаемся преобразовать в число
+                    int(str(doc_id).strip())
+                    return True
+                except (ValueError, AttributeError):
+                    return False
+            
+            if document_id and document_id != 'НЕ НАЙДЕН' and str(document_id).strip() and is_valid_document_id(document_id):
+                try:
+                    # Получаем текущего пользователя
+                    user = get_current_user()
+                    
+                    if user:
+                        signature_manager = SignatureManager()
+                        
+                        # Проверяем, существует ли уже подпись пользователя
+                        if signature_manager.check_user_signature_exists(document_id, user.username):
+                            with ui.card().classes('p-4 bg-yellow-50 border border-yellow-200'):
+                                ui.label('⚠️ Документ уже подписан').classes('text-lg font-semibold text-yellow-800 mb-2')
+                                ui.label(f'Вы уже подписали этот документ ранее.').classes('text-yellow-700 mb-2')
+                                
+                                # Показываем кнопку "Завершить задачу" без возможности повторной подписи
+                                ui.button(
+                                    'Завершить задачу',
+                                    icon='check_circle',
+                                    on_click=lambda: submit_signing_task_completion(
+                                        task,
+                                        True,
+                                        '',
+                                        {},
+                                        'Документ уже подписан',
+                                        dialog
+                                    )
+                                ).classes('bg-green-600 text-white')
+                                
+                                ui.button('Закрыть', on_click=dialog.close).classes('bg-gray-500 text-white')
+                            
+                            dialog.open()
+                            return  # Выходим из функции, не показывая форму подписания
+                        
+                except Exception as e:
+                    logger.warning(f"Ошибка проверки существующей подписи: {e}")
+                    # Продолжаем процесс, если не удалось проверить
+            
+            # Отображение списка подписантов
+            if signer_list:
+                ui.label('Список подписантов:').classes('text-lg font-semibold mt-4 mb-2')
+                
+                try:
+                    # ИСПРАВЛЕНИЕ: Создаем объект LDAPAuthenticator
+                    from auth.ldap_auth import LDAPAuthenticator
+                    ldap_auth = LDAPAuthenticator()
+                    
+                    signers_container = ui.column().classes('w-full mb-4')
+                    
+                    with signers_container:                           
+                        with ui.column().classes('w-full'):
+                            for i, signer_login in enumerate(signer_list):
+                                try:
+                                    logger.info(f"Обрабатываем подписанта {i+1}: {signer_login}")
+                                    
+                                    # ДОБАВЛЯЕМ ЛОГИРОВАНИЕ: Проверяем пользователя в LDAP
+                                    user_info = ldap_auth.get_user_by_login(signer_login)
+                                    logger.info(f"Результат get_user_by_login для {signer_login}: {user_info is not None}")
+                                    
+                                    if not user_info:
+                                        logger.info(f"Пользователь {signer_login} не найден через точный поиск, пробуем широкий поиск")
+                                        user_info = ldap_auth.find_user_by_login(signer_login)
+                                        logger.info(f"Результат find_user_by_login для {signer_login}: {user_info is not None}")
+                                    
+                                    if user_info:
+                                        ui.label(f'{i+1}. {user_info.givenName} {user_info.sn} - {user_info.destription}').classes('text-sm mb-1')
+                                        logger.info(f"Найдена информация о пользователе {signer_login}: {user_info.givenName} {user_info.sn}")
+                                    else:
+                                        ui.label(f'{i+1}. {signer_login} (не найден в LDAP)').classes('text-sm mb-1 text-red-600')
+                                        logger.warning(f"Пользователь {signer_login} не найден в LDAP после всех попыток поиска")
+                                        
+                                except Exception as e:
+                                    logger.error(f"Ошибка получения информации о пользователе {signer_login}: {e}")
+                                    ui.label(f'{i+1}. {signer_login} (ошибка: {str(e)})').classes('text-sm mb-1 text-red-600')
+                except Exception as e:
+                    logger.error(f"Ошибка получения списка подписантов из LDAP: {e}")
+                    ui.label(f'Ошибка получения информации о подписантах: {str(e)}').classes('text-red-600')
+            else:
+                ui.label('Список подписантов не найден в переменных процесса').classes('text-yellow-600 mt-4')
+            
+            # Загружаем документ из Mayan EDMS
+            if document_id and document_id != 'НЕ НАЙДЕН' and str(document_id).strip():
+                try:
+                    mayan_client = get_mayan_client()
+                    document_content = mayan_client.get_document_file_content(document_id)
+                    
+                    if document_content:
+                        import base64
+                        document_base64 = base64.b64encode(document_content).decode('utf-8')
+                        
+                        ui.label(f'Документ загружен: {document_name or "Неизвестно"}').classes('text-green-600 mb-2')
+                        ui.label(f'Размер файла: {len(document_content)} байт').classes('text-sm text-gray-600 mb-4')
+                        
+                        global _document_for_signing
+                        _document_for_signing = {
+                            'content': document_content,
+                            'base64': document_base64,
+                            'name': document_name,
+                            'id': document_id
+                        }
+                    else:
+                        ui.label('Не удалось загрузить содержимое документа').classes('text-red-600')
+                        return
+                        
+                except Exception as e:
+                    ui.label(f'Ошибка при загрузке документа: {str(e)}').classes('text-red-600')
+                    logger.error(f"Ошибка при загрузке документа {document_id}: {e}")
+                    return
+            else:
+                ui.label('ID документа не найден').classes('text-red-600')
+                return
             
             # Статус КриптоПро
             ui.label('Электронная подпись:').classes('text-lg font-semibold')
@@ -942,10 +1107,12 @@ def complete_signing_task(task):
             with signing_fields_container:
                 ui.label('Данные для подписания:').classes('text-lg font-semibold mb-2')
                 
+                data_to_sign_value = f"Документ ID: {document_id}, Название: {document_name}"
+                
                 data_to_sign = ui.textarea(
                     label='Данные для подписания',
                     placeholder='Введите данные для подписания...',
-                    value='Тестовые данные для подписания'
+                    value=data_to_sign_value
                 ).classes('w-full mb-4')
                 
                 ui.button(
@@ -961,6 +1128,12 @@ def complete_signing_task(task):
                         signed_data_display
                     )
                 ).classes('mb-4 bg-green-500 text-white')
+                ui.button(
+                    'Проверить результат подписания',
+                    icon='refresh',
+                    on_click=lambda: check_and_display_signature_result(signature_info, signed_data_display, result_container)
+                ).classes('mb-4 bg-blue-500 text-white')
+
             
             # Результат подписания (изначально скрыт)
             result_container = ui.column().classes('w-full mb-4')
@@ -969,17 +1142,14 @@ def complete_signing_task(task):
             with result_container:
                 ui.label('Результат подписания:').classes('text-lg font-semibold mb-2 text-green-600')
                 
-                # Информация о подписи
                 signature_info = ui.html('').classes('w-full mb-4 p-4 bg-green-50 rounded border border-green-200')
                 
-                # Подписанные данные - обычный редактируемый textarea
                 signed_data_display = ui.textarea(
-                    label='Подписанные данные (Base64)',
+                    label='Подпись (Base64)',
                     value='',
                     placeholder='Здесь будет отображена подпись после подписания...'
                 ).classes('w-full mb-4')
                 
-                # Кнопки для работы с результатом
                 with ui.row().classes('w-full gap-2'):
                     ui.button(
                         'Копировать подпись',
@@ -994,15 +1164,65 @@ def complete_signing_task(task):
                     ).classes('bg-purple-500 text-white')
                     
                     ui.button(
-                        'Сохранить в файл',
+                        'Сохранить подписанный PDF',
                         icon='save',
-                        on_click=lambda: save_signature_to_file(signed_data_display.value, task.name)
+                        on_click=lambda: save_signature_to_file(signed_data_display.value, document_name or task.name)
                     ).classes('bg-orange-500 text-white')
+
+                    ui.button(
+                        'Проверить созданный PDF',
+                        icon='refresh',
+                        on_click=lambda: check_and_save_signed_pdf()
+                    ).classes('mb-4 bg-blue-500 text-white')
+                    
+                    ui.button(
+                        'Завершить задачу',
+                        icon='check',
+                        on_click=lambda: complete_signing_task_with_result(
+                            task,
+                            signature_info,
+                            signed_data_display,
+                            result_container,
+                            document_id,
+                            document_name,
+                            dialog
+                        )
+                    ).classes('bg-green-600 text-white')
             
-            # Кнопка отмены
             ui.button('ОТМЕНА', on_click=dialog.close).classes('bg-gray-500 text-white')
     
     dialog.open()
+
+def check_and_save_signed_pdf():
+    """Проверяет результат создания подписанного PDF и сохраняет его"""
+    try:
+        signature_result = api_router.get_signature_result()
+        
+        if signature_result and signature_result.get('action') == 'signed_document_created':
+            signed_document = signature_result.get('signed_document', '')
+            filename = signature_result.get('filename', 'signed_document.pdf')
+            
+            if signed_document:
+                # Декодируем Base64 в бинарные данные
+                import base64
+                pdf_binary = base64.b64decode(signed_document)
+                
+                # Сохраняем подписанный PDF в файл
+                with open(filename, 'wb') as f:
+                    f.write(pdf_binary)
+                
+                ui.notify(f'✅ Подписанный PDF сохранен в файл: {filename}', type='positive')
+                
+                # Очищаем результат после обработки
+                api_router.clear_signature_result()
+            else:
+                ui.notify('Подписанный документ не найден', type='error')
+        else:
+            ui.notify('Результат создания подписанного PDF не найден. Сначала создайте подписанный PDF.', type='warning')
+            
+    except Exception as e:
+        logger.error(f"Ошибка сохранения подписанного PDF: {e}")
+        ui.notify(f'Ошибка сохранения подписанного PDF: {str(e)}', type='error')
 
 def sign_document(certificate_value, data_to_sign, signing_fields_container, certificate_info_display):
     """Подписывает документ выбранным сертификатом"""
@@ -1029,6 +1249,68 @@ def sign_document(certificate_value, data_to_sign, signing_fields_container, cer
     except Exception as e:
         logger.error(f"Ошибка при подписании документа: {e}")
         ui.notify(f'Ошибка при подписании: {str(e)}', type='error')
+
+def complete_signing_task_with_result(task, signature_info, signed_data_display, result_container, document_id, document_name, dialog):
+    '''Завершает задачу подписания с проверкой результата'''
+    try:
+        # ИСПРАВЛЕНИЕ: Проверяем наличие данных подписи в UI элементе
+        # Если данные уже отображаются в UI, используем их
+        if signed_data_display.value and len(signed_data_display.value) > 100:
+            logger.info('Данные подписи найдены в UI элементе, завершаем задачу')
+            
+            # ДОБАВЛЯЕМ ЛОГИРОВАНИЕ
+            signature_result = api_router.get_signature_result()
+            logger.info(f'Signature result from api_router: {signature_result}')
+            
+            # Получаем информацию о сертификате из результата
+            certificate_info = {}
+            if signature_result:
+                certificate_info = signature_result.get('certificate_info', {})
+                logger.info(f'Certificate info from signature_result: {certificate_info}')
+                if not certificate_info or certificate_info == {}:
+                    logger.warning('Certificate info пуст! Проверяем что в signature_result')
+                    logger.info(f'Полный signature_result: {signature_result}')
+            else:
+                logger.warning('Signature result is None или пустой')
+            
+            # Завершаем задачу с данными подписи
+            submit_signing_task_completion(
+                task, 
+                True,
+                signed_data_display.value,
+                certificate_info,
+                'Документ подписан',
+                dialog
+            )
+            return
+        
+        # Если данных в UI нет, пытаемся получить из api_router
+        if not check_and_display_signature_result(signature_info, signed_data_display, result_container):
+            ui.notify('Результат подписания не найден. Сначала подпишите документ.', type='warning')
+            return
+        
+        # ИСПРАВЛЕНИЕ: Получаем certificate_info из результата подписания
+        signature_result = api_router.get_signature_result()
+        logger.info(f'Signature result after check_and_display: {signature_result}')
+        
+        certificate_info = {}
+        if signature_result:
+            certificate_info = signature_result.get('certificate_info', {})
+            logger.info(f'Certificate info after check_and_display: {certificate_info}')
+        
+        # Теперь завершаем задачу с данными подписи
+        submit_signing_task_completion(
+            task, 
+            True,
+            signed_data_display.value,
+            certificate_info,
+            'Документ подписан',
+            dialog
+        )
+        
+    except Exception as e:
+        ui.notify(f'Ошибка: {str(e)}', type='error')
+        logger.error(f'Ошибка при завершении задачи подписания {task.id}: {e}', exc_info=True)
 
 def check_crypto_pro_availability(status_container):
     """Проверяет доступность КриптоПро плагина"""
@@ -1121,16 +1403,16 @@ def load_certificates(certificate_select, status_container: ui.html):
                     try {
                         console.log('Создаем объект Store...');
                         const oStore = yield window.cadesplugin.CreateObjectAsync("CAdESCOM.Store");
-                        console.log('✅ Объект Store создан');
+                        console.log('Объект Store создан');
                         
                         console.log('Открываем хранилище сертификатов...');
                         yield oStore.Open();
-                        console.log('✅ Хранилище открыто');
+                        console.log('Хранилище открыто');
                         
                         console.log('Получаем список сертификатов...');
                         const certs = yield oStore.Certificates;
                         const certCnt = yield certs.Count;
-                        console.log(`✅ Найдено сертификатов: ${certCnt}`);
+                        console.log(`Найдено сертификатов: ${certCnt}`);
                         
                         const certList = [];
                         
@@ -1206,6 +1488,35 @@ def load_certificates(certificate_select, status_container: ui.html):
         logger.error(f"Ошибка при загрузке сертификатов: {e}")
         ui.notify(f'Ошибка при загрузке сертификатов: {str(e)}', type='error')
 
+def handle_signature_result(result, signature_info, signed_data_display, result_container):
+    """Обрабатывает результат подписания"""
+    try:
+        logger.info("Получен результат подписания")
+        
+        # Обновляем UI с результатом подписания
+        signature_info_html = f'''
+        <div style="font-family: monospace; font-size: 12px;">
+            <div style="color: #2e7d32; font-weight: bold; margin-bottom: 10px;">✅ Документ успешно подписан!</div>
+            <div style="margin-bottom: 5px;"><strong>Сертификат:</strong> {result['certificate_info'].get('subject', 'Неизвестно')}</div>
+            <div style="margin-bottom: 5px;"><strong>Издатель:</strong> {result['certificate_info'].get('issuer', 'Неизвестно')}</div>
+            <div style="margin-bottom: 5px;"><strong>Серийный номер:</strong> {result['certificate_info'].get('serialNumber', 'Неизвестно')}</div>
+            <div style="margin-bottom: 5px;"><strong>Время подписания:</strong> {result['timestamp']}</div>
+        </div>
+        '''
+        
+        # Обновляем элементы интерфейса
+        signature_info.content = signature_info_html
+        signed_data_display.value = result['signature']
+        
+        # Показываем результат
+        result_container.visible = True
+        
+        ui.notify('✅ Документ успешно подписан!', type='positive')
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки результата подписания: {e}")
+        ui.notify(f'Ошибка обработки результата: {str(e)}', type='error')
+
 def show_certificate_info(certificate_index: str, info_container: ui.html):
     """Показывает информацию о выбранном сертификате"""
     try:
@@ -1250,7 +1561,7 @@ def show_certificate_info(certificate_index: str, info_container: ui.html):
         info_container.content = f'<div style="color: red;">Ошибка: {str(e)}</div>'
 
 def sign_document_with_certificate(task, data_to_sign, signing_fields_container, certificate_info_display, result_container, signature_info, signed_data_display):
-    """Подписывает документ с использованием выбранного сертификата"""
+    """Подписывает документ с использованием выбранного сертификата - ПОДПИСАНИЕ РЕАЛЬНОГО ДОКУМЕНТА"""
     try:
         selected_cert = api_router.get_selected_certificate()
         
@@ -1266,63 +1577,250 @@ def sign_document_with_certificate(task, data_to_sign, signing_fields_container,
             ui.notify('Данные сертификата не найдены!', type='error')
             return
         
+        # Получаем РЕАЛЬНЫЙ индекс сертификата в КриптоПро
+        cryptopro_index = certificate_data.get('index', 1)
+        
+        logger.info(f"Используем РЕАЛЬНЫЙ индекс КриптоПро: {cryptopro_index}")
+        
         # Показываем информацию о сертификате
         ui.notify(f'Подписание с сертификатом: {certificate_data.get("subject", "Неизвестно")}', type='info')
         
-        # Создаем имитацию подписи
-        import base64
-        import json
-        from datetime import datetime
+        # Получаем реальное содержимое документа для подписи
+        global _document_for_signing
+        if not _document_for_signing:
+            ui.notify('Документ не загружен для подписи!', type='error')
+            return
         
-        # Создаем структуру подписи
-        signature_data = {
-            "original_data": data_to_sign,
-            "signature_info": {
-                "certificate_subject": certificate_data.get("subject"),
-                "certificate_issuer": certificate_data.get("issuer"),
-                "certificate_serial": certificate_data.get("serialNumber"),
-                "signature_time": datetime.now().isoformat(),
-                "signature_algorithm": "GOST R 34.10-2012",
-                "hash_algorithm": "GOST R 34.11-2012"
-            },
-            "signature_value": "ИМИТАЦИЯ_ПОДПИСИ_" + base64.b64encode(data_to_sign.encode()).decode()[:50] + "...",
-            "signature_format": "CAdES-BES"
-        }
+        # Используем Base64 содержимое документа
+        document_base64 = _document_for_signing.get('base64', '')
+        if not document_base64:
+            ui.notify('Содержимое документа не найдено!', type='error')
+            return
         
-        # Кодируем в Base64
-        signature_json = json.dumps(signature_data, ensure_ascii=False, indent=2)
-        signature_base64 = base64.b64encode(signature_json.encode()).decode()
+        logger.info(f"Подписываем документ размером: {len(document_base64)} символов Base64")
         
-        # Скрываем поля подписания
-        signing_fields_container.visible = False
+        # ИСПРАВЛЕННОЕ РЕШЕНИЕ: Подписание реального содержимого документа
+        ui.run_javascript(f'''
+            console.log('=== ПОДПИСАНИЕ РЕАЛЬНОГО ДОКУМЕНТА ===');
+            console.log('Размер документа в Base64:', `{document_base64}`.length);
+            console.log('Реальный индекс КриптоПро:', {cryptopro_index});
+            
+            if (typeof window.cadesplugin !== 'undefined') {{
+                console.log('cadesplugin найден, начинаем подписание...');
+                
+                // ИСПРАВЛЕНИЕ: Выносим переменные в область видимости для всех блоков
+                const documentBase64 = `{document_base64}`;
+                const certIndex = {cryptopro_index};
+                
+                window.cadesplugin.async_spawn(function*() {{
+                    try {{
+                        console.log('=== ШАГ 1: Создаем Store ===');
+                        const oStore = yield window.cadesplugin.CreateObjectAsync("CAdESCOM.Store");
+                        console.log('✅ Store создан');
+                        
+                        console.log('=== ШАГ 2: Открываем хранилище ===');
+                        yield oStore.Open();
+                        console.log('✅ Хранилище открыто');
+                        
+                        console.log('=== ШАГ 3: Получаем сертификаты ===');
+                        const certs = yield oStore.Certificates;
+                        const certCnt = yield certs.Count;
+                        console.log(`✅ Найдено сертификатов: ${{certCnt}}`);
+                        
+                        console.log('=== ШАГ 4: Получаем сертификат по индексу ===');
+                        console.log(`Получаем сертификат с индексом: ${{certIndex}}`);
+                        const certificate = yield certs.Item(certIndex);
+                        console.log('✅ Сертификат получен');
+                        
+                        // Проверяем сертификат
+                        const subject = yield certificate.SubjectName;
+                        const hasPrivateKey = yield certificate.HasPrivateKey();
+                        console.log(`Сертификат: ${{subject}}`);
+                        console.log(`Имеет приватный ключ: ${{hasPrivateKey}}`);
+                        
+                        if (!hasPrivateKey) {{
+                            throw new Error('Сертификат не имеет приватного ключа для подписи');
+                        }}
+                        
+                        console.log('=== ШАГ 5: Создаем подписанта ===');
+                        const oSigner = yield window.cadesplugin.CreateObjectAsync("CAdESCOM.CPSigner");
+                        yield oSigner.propset_Certificate(certificate);
+                        console.log('✅ Подписант создан');
+                        
+                        // ИСПРАВЛЕНИЕ: Включаем цепочку сертификатов в подпись
+                        // Устанавливаем Options для включения цепочки сертификатов
+                        const signerOptions = window.cadesplugin.CAPICOM_CERTIFICATE_INCLUDE_WHOLE_CHAIN;
+                        yield oSigner.propset_Options(signerOptions);
+                        console.log('✅ Установлены опции подписанта (включена цепочка сертификатов)');
+                        
+                        console.log('=== ШАГ 6: Создаем объект данных ===');
+                        const oSignedData = yield window.cadesplugin.CreateObjectAsync("CAdESCOM.CadesSignedData");
+                        
+                        // ИСПРАВЛЕНИЕ: Правильное кодирование данных
+                        console.log('Устанавливаем кодировку контента...');
+                        yield oSignedData.propset_ContentEncoding(window.cadesplugin.CADESCOM_BASE64_TO_BINARY);
+                        
+                        console.log('Устанавливаем данные для подписи (реальное содержимое документа)...');
+                        yield oSignedData.propset_Content(documentBase64);
+                        console.log('✅ Объект данных создан');
+                        
+                        console.log('=== ШАГ 7: ВЫПОЛНЯЕМ ПОДПИСЬ ===');
+                        // ИСПРАВЛЕНИЕ: Используем правильные параметры подписи
+                        const signature = yield oSignedData.SignCades(oSigner, window.cadesplugin.CADESCOM_CADES_BES, false);
+                        console.log('✅ ПОДПИСЬ СОЗДАНА!');
+                        
+                        console.log('=== ШАГ 8: Получаем информацию о сертификате ===');
+                        const certificateInfo = {{
+                            subject: yield certificate.SubjectName,
+                            issuer: yield certificate.IssuerName,
+                            serialNumber: yield certificate.SerialNumber,
+                            validFrom: yield certificate.ValidFromDate,
+                            validTo: yield certificate.ValidToDate
+                        }};
+                        console.log('✅ Информация о сертификате получена');
+                        
+                        console.log('=== ШАГ 9: Закрываем хранилище ===');
+                        yield oStore.Close();
+                        console.log('✅ Хранилище закрыто');
+                        
+                        console.log('=== УСПЕХ! ПОДПИСАНИЕ ЗАВЕРШЕНО ===');
+                        return {{
+                            signature: signature,
+                            certificateInfo: certificateInfo
+                        }};
+                        
+                    }} catch (e) {{
+                        console.error('=== ОШИБКА ПОДПИСАНИЯ ===');
+                        console.error('Ошибка:', e);
+                        console.error('Код ошибки:', e.number);
+                        console.error('Сообщение:', e.message);
+                        
+                        const errorMessage = "Ошибка подписания: " + (e.message || e.toString());
+                        console.error('Сообщение об ошибке:', errorMessage);
+                        throw new Error(errorMessage);
+                    }}
+                }})
+                .then(result => {{
+                    console.log('=== ОТПРАВЛЯЕМ РЕЗУЛЬТАТ В PYTHON ===');
+                    console.log('Результат:', result);
+                    
+                    window.nicegui_handle_event('signature_completed', {{
+                        signature: result.signature,
+                        certificateInfo: result.certificateInfo,
+                        originalData: documentBase64
+                    }});
+                }})
+                .catch(error => {{
+                    console.error('=== ОТПРАВЛЯЕМ ОШИБКУ В PYTHON ===');
+                    console.error('Ошибка:', error);
+                    
+                    window.nicegui_handle_event('signature_error', {{
+                        error: error.message || 'Неизвестная ошибка подписания'
+                    }});
+                }});
+                
+            }} else {{
+                console.error('❌ cadesplugin не найден');
+                window.nicegui_handle_event('signature_error', {{
+                    error: 'cadesplugin не инициализирован'
+                }});
+            }}
+        ''')
         
-        # Показываем результат
-        result_container.visible = True
-        
-        # Обновляем информацию о подписи
-        signature_info_html = f'''
-        <div style="font-family: monospace; font-size: 12px;">
-            <div style="color: #2e7d32; font-weight: bold; margin-bottom: 10px;">✅ Документ успешно подписан!</div>
-            <div style="margin-bottom: 5px;"><strong>Сертификат:</strong> {certificate_data.get("subject", "Неизвестно")}</div>
-            <div style="margin-bottom: 5px;"><strong>Издатель:</strong> {certificate_data.get("issuer", "Неизвестно")}</div>
-            <div style="margin-bottom: 5px;"><strong>Серийный номер:</strong> {certificate_data.get("serialNumber", "Неизвестно")}</div>
-            <div style="margin-bottom: 5px;"><strong>Действителен до:</strong> {certificate_data.get("validTo", "Неизвестно")}</div>
-            <div style="margin-bottom: 5px;"><strong>Алгоритм подписи:</strong> GOST R 34.10-2012</div>
-            <div style="margin-bottom: 5px;"><strong>Алгоритм хеширования:</strong> GOST R 34.11-2012</div>
-            <div style="margin-bottom: 5px;"><strong>Формат подписи:</strong> CAdES-BES</div>
-            <div style="margin-bottom: 5px;"><strong>Время подписания:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>
-        </div>
-        '''
-        
-        # Обновляем элементы напрямую
-        signature_info.content = signature_info_html
-        signed_data_display.value = signature_base64
-        
-        ui.notify('Документ успешно подписан!', type='positive')
+        # Показываем индикатор загрузки
+        ui.notify('Подписание документа...', type='info')
         
     except Exception as e:
         logger.error(f"Ошибка подписания документа: {e}")
         ui.notify(f'Ошибка подписания: {str(e)}', type='error')
+
+def check_and_display_signature_result(signature_info, signed_data_display, result_container):
+    """Проверяет наличие результата подписания и обновляет UI"""
+    signature_result = api_router.get_signature_result()
+    if signature_result:
+        # Обновляем UI с результатом подписания
+        signature_info_html = f'''
+        <div style="font-family: monospace; font-size: 12px;">
+            <div style="color: #2e7d32; font-weight: bold; margin-bottom: 10px;">Документ успешно подписан!</div>
+            <div style="margin-bottom: 5px;"><strong>Сертификат:</strong> {signature_result['certificate_info'].get('subject', 'Неизвестно')}</div>
+            <div style="margin-bottom: 5px;"><strong>Издатель:</strong> {signature_result['certificate_info'].get('issuer', 'Неизвестно')}</div>
+            <div style="margin-bottom: 5px;"><strong>Серийный номер:</strong> {signature_result['certificate_info'].get('serialNumber', 'Неизвестно')}</div>
+            <div style="margin-bottom: 5px;"><strong>Время подписания:</strong> {signature_result['timestamp']}</div>
+        </div>
+        '''
+        
+        # Обновляем элементы интерфейса
+        signature_info.content = signature_info_html
+        signed_data_display.value = signature_result['signature']
+        
+        # Показываем результат
+        result_container.visible = True
+        
+        ui.notify('Документ успешно подписан!', type='positive')
+        
+        # ИСПРАВЛЕНИЕ: НЕ очищаем результат здесь, он нужен для завершения задачи
+        # api_router.clear_signature_result()  # <-- УДАЛЯЕМ ЭТУ СТРОКУ
+        return True
+    return False
+
+def check_certificates_container():
+    """Проверяет состояние глобального контейнера сертификатов"""
+    ui.run_javascript('''
+        console.log('=== ПРОВЕРКА КОНТЕЙНЕРА СЕРТИФИКАТОВ ===');
+        console.log('window.global_selectbox_container:', window.global_selectbox_container);
+        console.log('Тип:', typeof window.global_selectbox_container);
+        console.log('Длина:', window.global_selectbox_container ? window.global_selectbox_container.length : 'не определено');
+        
+        if (window.global_selectbox_container && window.global_selectbox_container.length > 0) {
+            console.log('✅ Контейнер содержит сертификаты:');
+            for (let i = 0; i < window.global_selectbox_container.length; i++) {
+                console.log(`  Сертификат ${i}:`, window.global_selectbox_container[i]);
+                try {
+                    // Пробуем получить информацию о сертификате
+                    if (window.global_selectbox_container[i] && typeof window.global_selectbox_container[i].SubjectName !== 'undefined') {
+                        console.log(`    Subject: ${window.global_selectbox_container[i].SubjectName}`);
+                    }
+                } catch (e) {
+                    console.log(`    Ошибка получения Subject: ${e.message}`);
+                }
+            }
+        } else {
+            console.log('❌ Контейнер пуст или не определен');
+            console.log('Попытка перезагрузки сертификатов...');
+            
+            // Попытка перезагрузить сертификаты
+            if (window.cryptoProIntegration) {
+                window.cryptoProIntegration.getAvailableCertificates()
+                    .then(certs => {
+                        console.log('✅ Сертификаты перезагружены:', certs);
+                        console.log('Новый контейнер:', window.global_selectbox_container);
+                    })
+                    .catch(error => {
+                        console.error('❌ Ошибка перезагрузки сертификатов:', error);
+                    });
+            }
+        }
+    ''')
+
+def handle_signature_result():
+    """Обрабатывает результат подписания от JavaScript"""
+    global _signature_result
+    
+    try:
+        # Получаем результат подписания из API роутера
+        signature_result = api_router.get_signature_result()
+        
+        if signature_result:
+            logger.info("Получен результат подписания")
+            
+            # Обновляем UI с результатом подписания
+            # Здесь можно обновить соответствующие элементы интерфейса
+            
+            # Очищаем результат после обработки
+            api_router.clear_signature_result()
+            
+    except Exception as e:
+        logger.error(f"Ошибка обработки результата подписания: {e}")
 
 def copy_signature_to_clipboard(signed_data_display):
     """Копирует подпись в буфер обмена"""
@@ -1341,64 +1839,493 @@ def copy_signature_to_clipboard(signed_data_display):
         ui.notify(f'Ошибка копирования: {str(e)}', type='error')
 
 def verify_signature(signature_base64, signature_info):
-    """Проверяет подпись"""
+    """Проверяет подпись через CryptoPro API"""
     try:
-        import base64
-        import json
+        if not signature_base64:
+            ui.notify('Подпись не найдена для проверки', type='warning')
+            return
         
-        # Декодируем подпись
-        signature_json = base64.b64decode(signature_base64).decode()
-        signature_data = json.loads(signature_json)
+        # Используем JavaScript для проверки подписи через CryptoPro
+        ui.run_javascript(f'''
+            console.log('=== ПРОВЕРКА ПОДПИСИ ===');
+            console.log('Размер подписи:', `{signature_base64}`.length);
+            
+            if (typeof window.cadesplugin !== 'undefined') {{
+                console.log('cadesplugin найден, начинаем проверку...');
+                
+                window.cadesplugin.async_spawn(function*() {{
+                    try {{
+                        console.log('=== ШАГ 1: Создаем объект для проверки ===');
+                        const oSignedData = yield window.cadesplugin.CreateObjectAsync("CAdESCOM.CadesSignedData");
+                        console.log('✅ Объект создан');
+                        
+                        console.log('=== ШАГ 2: Устанавливаем подпись ===');
+                        yield oSignedData.propset_ContentEncoding(window.cadesplugin.CADESCOM_BASE64_TO_BINARY);
+                        yield oSignedData.propset_Content(`{signature_base64}`);
+                        console.log('✅ Подпись установлена');
+                        
+                        console.log('=== ШАГ 3: ВЫПОЛНЯЕМ ПРОВЕРКУ ===');
+                        const isValid = yield oSignedData.VerifyCades(`{signature_base64}`, window.cadesplugin.CADESCOM_CADES_BES, false);
+                        console.log('✅ Проверка завершена, результат:', isValid);
+                        
+                        if (isValid) {{
+                            console.log('=== УСПЕХ! ПОДПИСЬ ВАЛИДНА ===');
+                            
+                            // Получаем информацию о сертификате
+                            const signers = yield oSignedData.Signers;
+                            const signerCount = yield signers.Count;
+                            console.log(`Найдено подписантов: ${{signerCount}}`);
+                            
+                            let certificateInfo = null;
+                            if (signerCount > 0) {{
+                                const signer = yield signers.Item(1);
+                                const certificate = yield signer.Certificate;
+                                certificateInfo = {{
+                                    subject: yield certificate.SubjectName,
+                                    issuer: yield certificate.IssuerName,
+                                    serialNumber: yield certificate.SerialNumber,
+                                    validFrom: yield certificate.ValidFromDate,
+                                    validTo: yield certificate.ValidToDate
+                                }};
+                            }}
+                            
+                            window.nicegui_handle_event('signature_verified', {{
+                                isValid: true,
+                                certificateInfo: certificateInfo,
+                                timestamp: new Date().toISOString()
+                            }});
+                        }} else {{
+                            console.log('=== ОШИБКА! ПОДПИСЬ НЕВАЛИДНА ===');
+                            window.nicegui_handle_event('signature_verified', {{
+                                isValid: false,
+                                error: 'Подпись не прошла проверку',
+                                timestamp: new Date().toISOString()
+                            }});
+                        }}
+                        
+                    }} catch (e) {{
+                        console.error('=== ОШИБКА ПРОВЕРКИ ===');
+                        console.error('Ошибка:', e);
+                        
+                        window.nicegui_handle_event('signature_verified', {{
+                            isValid: false,
+                            error: e.message || 'Ошибка при проверке подписи',
+                            timestamp: new Date().toISOString()
+                        }});
+                    }}
+                }});
+                
+            }} else {{
+                console.error('❌ cadesplugin не найден');
+                window.nicegui_handle_event('signature_verified', {{
+                    isValid: false,
+                    error: 'cadesplugin не инициализирован',
+                    timestamp: new Date().toISOString()
+                }});
+            }}
+        ''')
         
-        # Проверяем структуру
-        if 'signature_value' in signature_data and 'signature_info' in signature_data:
-            ui.notify('✅ Подпись корректна!', type='positive')
-            
-            # Обновляем информацию о проверке
-            verification_html = f'''
-            <div style="color: #2e7d32; font-weight: bold; margin-bottom: 10px;">✅ Подпись проверена и корректна!</div>
-            <div style="margin-bottom: 5px;"><strong>Статус:</strong> Валидная</div>
-            <div style="margin-bottom: 5px;"><strong>Время проверки:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>
-            '''
-            
-            ui.run_javascript(f'''
-                const signatureInfoElements = document.querySelectorAll('[class*="bg-green-50"]');
-                if (signatureInfoElements.length > 0) {{
-                    signatureInfoElements[0].innerHTML = `{verification_html}`;
-                }}
-            ''')
-        else:
-            ui.notify('❌ Подпись некорректна!', type='error')
-            
+        ui.notify('Проверка подписи...', type='info')
+        
     except Exception as e:
         logger.error(f"Ошибка проверки подписи: {e}")
-        ui.notify(f'Ошибка проверки: {str(e)}', type='error')
+        ui.notify(f'Ошибка проверки подписи: {str(e)}', type='error')
 
 def save_signature_to_file(signature_base64, task_name):
-    """Сохраняет подпись в файл"""
-    try:
-        import base64
-        import json
-        from datetime import datetime
+    """Сохраняет PDF с профессиональной встроенной электронной подписью"""
+    try:       
+        # Получаем исходный документ из глобальной переменной
+        global _document_for_signing
+        if not _document_for_signing:
+            ui.notify('Исходный документ не найден', type='error')
+            return
         
-        # Декодируем подпись
-        signature_json = base64.b64decode(signature_base64).decode()
-        signature_data = json.loads(signature_json)
+        original_document_base64 = _document_for_signing.get('base64', '')
+        if not original_document_base64:
+            ui.notify('Содержимое исходного документа не найдено', type='error')
+            return
         
-        # Создаем имя файла
+        # Создаем имя файла для подписанного PDF
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"signature_{task_name}_{timestamp}.json"
+        filename = f"signed_{task_name}_{timestamp}.pdf"
         
-        # Сохраняем в файл
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(signature_data, f, ensure_ascii=False, indent=2)
+        # Декодируем исходный PDF
+        pdf_binary = base64.b64decode(original_document_base64)
         
-        ui.notify(f'Подпись сохранена в файл: {filename}', type='positive')
+        try:            
+            # Путь к директории со шрифтами
+            fonts_dir = os.path.join(os.path.dirname(__file__), '..', 'static', 'fonts')
+            
+            # Регистрируем шрифт для поддержки русского текста
+            font_name = 'Helvetica'  # По умолчанию
+            
+            # Пытаемся загрузить локальные шрифты
+            font_files = [
+                ('DejaVuSans', 'DejaVuSans.ttf'),
+                ('LiberationSans', 'LiberationSans-Regular.ttf'),
+                ('Roboto', 'Roboto.ttf'),
+                ('OpenSans', 'OpenSans.ttf')
+            ]
+            
+            for font_name, font_file in font_files:
+                font_path = os.path.join(fonts_dir, font_file)
+                if os.path.exists(font_path):
+                    try:
+                        pdfmetrics.registerFont(TTFont(font_name, font_path))
+                        logger.info(f"Загружен шрифт: {font_name} из {font_path}")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Не удалось загрузить шрифт {font_name}: {e}")
+                        continue
+            
+            # Получаем информацию о сертификате из результата подписания
+            signature_result = api_router.get_signature_result()
+            certificate_info = {}
+            if signature_result and signature_result.get('certificate_info'):
+                certificate_info = signature_result.get('certificate_info', {})
+            
+            # Извлекаем данные сертификата
+            cert_subject = certificate_info.get('subject', 'Неизвестно')
+            cert_issuer = certificate_info.get('issuer', 'Неизвестно')
+            serial_number = certificate_info.get('serialNumber', 'Неизвестно')
+            valid_from = certificate_info.get('validFrom', '')
+            valid_to = certificate_info.get('validTo', '')
+            
+            # Обрабатываем даты
+            from_date_str = "Неизвестно"
+            to_date_str = "Неизвестно"
+            if valid_from and valid_to:
+                try:
+                    from_date = datetime.fromisoformat(valid_from.replace('Z', '+00:00'))
+                    to_date = datetime.fromisoformat(valid_to.replace('Z', '+00:00'))
+                    from_date_str = from_date.strftime('%d.%m.%Y')
+                    to_date_str = to_date.strftime('%d.%m.%Y')
+                except:
+                    pass
+            
+            # Создаем страницу с блоком электронной подписи
+            packet = io.BytesIO()
+            can = canvas.Canvas(packet, pagesize=A4)
+            
+            # Создаем профессиональный блок подписи
+            # Позиция блока - ПОДБИРАЕМ ТОЧНУЮ ВЫСОТУ
+            block_x = 10*cm
+            block_y = 1.5*cm
+            block_width = 5.6*cm
+            block_height = 3.2*cm  # Еще уменьшили, чтобы убрать место внизу
+            
+            # Фон блока (светло-голубой)
+            can.setFillColor(HexColor('#F0F8FF'))
+            can.setStrokeColor(HexColor('#1E3A8A'))
+            can.setLineWidth(1.5)
+            can.roundRect(block_x, block_y, block_width, block_height, 6, fill=1, stroke=1)
+            
+            # Внутренняя рамка
+            can.setStrokeColor(HexColor('#3B82F6'))
+            can.setLineWidth(0.5)
+            can.roundRect(block_x + 0.1*cm, block_y + 0.1*cm, block_width - 0.2*cm, block_height - 0.2*cm, 4, fill=0, stroke=1)
+            
+            # Заголовок блока
+            can.setFillColor(HexColor('#1E3A8A'))
+            can.setFont(font_name, 9)
+            can.drawString(block_x + 0.3*cm, block_y + 2.5*cm, "ДОКУМЕНТ ПОДПИСАН ЭП")
+            
+            # Линия под заголовком
+            can.setStrokeColor(HexColor('#1E3A8A'))
+            can.setLineWidth(1)
+            can.line(block_x + 0.3*cm, block_y + 2.3*cm, block_x + block_width - 0.3*cm, block_y + 2.3*cm)
+            
+            # Информация о сертификате - ПРАВИЛЬНЫЕ ИНТЕРВАЛЫ
+            can.setFillColor(HexColor('#000000'))
+            can.setFont(font_name, 7)
+            
+            # Дата подписания - ИНТЕРВАЛ 0.25cm
+            sign_date = datetime.now().strftime('%d.%m.%Y')
+            can.drawString(block_x + 0.3*cm, block_y + 2.0*cm, f"Дата: {sign_date}")
+            
+            # Сертификат - ИНТЕРВАЛ 0.25cm
+            cert_subject_short = cert_subject[:35] + "..." if len(cert_subject) > 35 else cert_subject
+            can.drawString(block_x + 0.3*cm, block_y + 1.75*cm, f"Сертификат: {cert_subject_short}")
+            
+            # Владелец - ИНТЕРВАЛ 0.25cm
+            cert_issuer_short = cert_issuer[:35] + "..." if len(cert_issuer) > 35 else cert_issuer
+            can.drawString(block_x + 0.3*cm, block_y + 1.5*cm, f"Владелец: {cert_issuer_short}")
+            
+            # Срок действия - ИНТЕРВАЛ 0.25cm
+            can.drawString(block_x + 0.3*cm, block_y + 1.25*cm, f"Действителен: {from_date_str} - {to_date_str}")
+            
+            # Статус подписи - БОЛЬШИЙ ИНТЕРВАЛ перед ним
+            can.setFillColor(HexColor('#059669'))
+            can.setFont(font_name, 8)
+            can.drawString(block_x + 0.3*cm, block_y + 0.95*cm, "✓ ПОДПИСЬ ДЕЙСТВИТЕЛЬНА")
+            
+            # Дополнительная информация - ОЧЕНЬ БЛИЗКО К НИЖНЕЙ ГРАНИЦЕ
+            can.setFillColor(HexColor('#6B7280'))
+            can.setFont(font_name, 6)
+            can.drawString(block_x + 0.3*cm, block_y + 0.5*cm, "CryptoPro • CAdES-BES")
+            
+            can.save()
+            
+            # Получаем данные блока подписи
+            packet.seek(0)
+            signature_page = packet.getvalue()
+            
+            # Объединяем исходный PDF с блоком подписи
+            from PyPDF2 import PdfReader, PdfWriter
+            
+            # Читаем исходный PDF
+            original_pdf = PdfReader(io.BytesIO(pdf_binary))
+            
+            # Создаем новый PDF с блоком подписи
+            signature_pdf = PdfReader(io.BytesIO(signature_page))
+            
+            # Объединяем PDF
+            writer = PdfWriter()
+            
+            # Добавляем все страницы исходного PDF
+            for page in original_pdf.pages:
+                writer.add_page(page)
+            
+            # Добавляем страницу с блоком подписи
+            writer.add_page(signature_pdf.pages[0])
+            
+            # Сохраняем объединенный PDF
+            with open(filename, 'wb') as output_file:
+                writer.write(output_file)
+            
+            ui.notify(f'✅ PDF с профессиональной электронной подписью сохранен: {filename}', type='positive')
+            
+        except ImportError:
+            # Если библиотеки не установлены, сохраняем исходный PDF
+            with open(filename, 'wb') as f:
+                f.write(pdf_binary)
+            
+            ui.notify(f'✅ PDF сохранен: {filename}\\n(Для профессиональной подписи установите: pip install reportlab PyPDF2)', type='info')
+            
+        except Exception as e:
+            # В случае ошибки сохраняем исходный PDF
+            logger.error(f"Ошибка создания PDF с профессиональной подписью: {e}")
+            with open(filename, 'wb') as f:
+                f.write(pdf_binary)
+            
+            ui.notify(f'✅ PDF сохранен: {filename}\\n(Ошибка создания профессиональной подписи: {str(e)})', type='warning')
         
     except Exception as e:
-        logger.error(f"Ошибка сохранения: {e}")
-        ui.notify(f'Ошибка сохранения: {str(e)}', type='error')
+        logger.error(f"Ошибка сохранения PDF: {e}")
+        ui.notify(f'Ошибка сохранения PDF: {str(e)}', type='error')
 
+
+def add_additional_signature_to_pdf(existing_pdf_path, signature_base64, signer_name, task_name):
+    """Добавляет дополнительную подпись к существующему PDF"""
+    try:       
+        # Создаем имя файла для обновленного PDF
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"signed_{task_name}_{signer_name}_{timestamp}.pdf"
+        
+        try:           
+            # Загружаем шрифт
+            fonts_dir = os.path.join(os.path.dirname(__file__), '..', 'static', 'fonts')
+            font_name = 'Helvetica'
+            
+            for font_name, font_file in [('DejaVuSans', 'DejaVuSans.ttf')]:
+                font_path = os.path.join(fonts_dir, font_file)
+                if os.path.exists(font_path):
+                    try:
+                        pdfmetrics.registerFont(TTFont(font_name, font_path))
+                        break
+                    except:
+                        continue
+            
+            # Создаем страницу с дополнительным блоком подписи
+            packet = io.BytesIO()
+            can = canvas.Canvas(packet, pagesize=A4)
+            
+            # Получаем информацию о сертификате
+            signature_result = api_router.get_signature_result()
+            certificate_info = {}
+            if signature_result and signature_result.get('certificate_info'):
+                certificate_info = signature_result.get('certificate_info', {})
+            
+            # Создаем дополнительный блок подписи
+            block_x = 12*cm
+            block_y = 2*cm
+            block_width = 6*cm
+            block_height = 4*cm
+            
+            # Фон блока (светло-синий)
+            can.setFillColor(HexColor('#E3F2FD'))
+            can.setStrokeColor(HexColor('#1976D2'))
+            can.setLineWidth(2)
+            can.roundRect(block_x, block_y, block_width, block_height, 8, fill=1, stroke=1)
+            
+            # Заголовок блока
+            can.setFillColor(HexColor('#1976D2'))
+            can.setFont(font_name, 10)
+            can.drawString(block_x + 0.3*cm, block_y + 3.2*cm, "ДОПОЛНИТЕЛЬНАЯ ПОДПИСЬ")
+            
+            # Информация о подписанте
+            can.setFillColor(HexColor('#000000'))
+            can.setFont(font_name, 8)
+            can.drawString(block_x + 0.3*cm, block_y + 2.8*cm, f"Подписант: {signer_name}")
+            
+            # Дата подписания
+            sign_date = datetime.now().strftime('%d.%m.%Y')
+            can.drawString(block_x + 0.3*cm, block_y + 2.6*cm, f"Дата подписания: {sign_date}")
+            
+            # Статус
+            can.setFillColor(HexColor('#2E7D32'))
+            can.setFont(font_name, 9)
+            can.drawString(block_x + 0.3*cm, block_y + 2.2*cm, "✓ ПОДПИСЬ ДЕЙСТВИТЕЛЬНА")
+            
+            can.save()
+            
+            # Объединяем с существующим PDF
+            packet.seek(0)
+            signature_page = packet.getvalue()
+            
+            from PyPDF2 import PdfReader, PdfWriter
+            
+            # Читаем существующий PDF
+            with open(existing_pdf_path, 'rb') as f:
+                existing_pdf = PdfReader(f)
+            
+            # Создаем новый PDF с дополнительной подписью
+            signature_pdf = PdfReader(io.BytesIO(signature_page))
+            
+            # Объединяем PDF
+            writer = PdfWriter()
+            
+            # Добавляем все страницы существующего PDF
+            for page in existing_pdf.pages:
+                writer.add_page(page)
+            
+            # Добавляем страницу с дополнительной подписью
+            writer.add_page(signature_pdf.pages[0])
+            
+            # Сохраняем обновленный PDF
+            with open(filename, 'wb') as output_file:
+                writer.write(output_file)
+            
+            ui.notify(f'✅ PDF обновлен с дополнительной подписью {signer_name}: {filename}', type='positive')
+            
+        except Exception as e:
+            logger.error(f"Ошибка добавления дополнительной подписи: {e}")
+            ui.notify(f'Ошибка добавления дополнительной подписи: {str(e)}', type='error')
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки PDF: {e}")
+        ui.notify(f'Ошибка обработки PDF: {str(e)}', type='error')
+
+
+# def save_signature_to_file(signature_base64, task_name):
+#     """Сохраняет подписанный PDF документ в файл"""
+#     try:
+#         import base64
+#         from datetime import datetime
+        
+#         # Получаем исходный документ из глобальной переменной
+#         global _document_for_signing
+#         if not _document_for_signing:
+#             ui.notify('Исходный документ не найден', type='error')
+#             return
+        
+#         original_document_base64 = _document_for_signing.get('base64', '')
+#         if not original_document_base64:
+#             ui.notify('Содержимое исходного документа не найдено', type='error')
+#             return
+        
+#         # Создаем имя файла для подписанного PDF
+#         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#         filename = f"signed_{task_name}_{timestamp}.pdf"
+        
+#         # Используем JavaScript для создания подписанного PDF через CryptoPro
+#         ui.run_javascript(f'''
+#             console.log('=== СОЗДАНИЕ ПОДПИСАННОГО PDF ===');
+#             console.log('Размер исходного документа:', `{original_document_base64}`.length);
+#             console.log('Размер подписи:', `{signature_base64}`.length);
+            
+#             if (typeof window.cadesplugin !== 'undefined') {{
+#                 console.log('cadesplugin найден, создаем подписанный PDF...');
+                
+#                 window.cadesplugin.async_spawn(function*() {{
+#                     try {{
+#                         console.log('=== ШАГ 1: Создаем объект для подписанных данных ===');
+#                         const oSignedData = yield window.cadesplugin.CreateObjectAsync("CAdESCOM.CadesSignedData");
+#                         console.log('✅ Объект создан');
+                        
+#                         console.log('=== ШАГ 2: Устанавливаем исходный документ ===');
+#                         yield oSignedData.propset_ContentEncoding(window.cadesplugin.CADESCOM_BASE64_TO_BINARY);
+#                         yield oSignedData.propset_Content(`{original_document_base64}`);
+#                         console.log('✅ Исходный документ установлен');
+                        
+#                         console.log('=== ШАГ 3: Создаем подписанный документ ===');
+#                         // Создаем подписанный документ с встроенной подписью
+#                         const signedDocument = yield oSignedData.SignCades(null, window.cadesplugin.CADESCOM_CADES_BES, true);
+#                         console.log('✅ Подписанный документ создан');
+                        
+#                         console.log('=== ШАГ 4: Отправляем результат в Python ===');
+#                         window.nicegui_handle_event('signed_document_created', {{
+#                             signedDocument: signedDocument,
+#                             filename: `{filename}`,
+#                             timestamp: new Date().toISOString()
+#                         }});
+                        
+#                     }} catch (e) {{
+#                         console.error('=== ОШИБКА СОЗДАНИЯ ПОДПИСАННОГО PDF ===');
+#                         console.error('Ошибка:', e);
+                        
+#                         window.nicegui_handle_event('signed_document_error', {{
+#                             error: e.message || 'Ошибка при создании подписанного PDF',
+#                             timestamp: new Date().toISOString()
+#                         }});
+#                     }}
+#                 }});
+                
+#             }} else {{
+#                 console.error('❌ cadesplugin не найден');
+#                 window.nicegui_handle_event('signed_document_error', {{
+#                     error: 'cadesplugin не инициализирован',
+#                     timestamp: new Date().toISOString()
+#                 }});
+#             }}
+#         ''')
+        
+#         ui.notify('Создание подписанного PDF...', type='info')
+        
+#     except Exception as e:
+#         logger.error(f"Ошибка создания подписанного PDF: {e}")
+#         ui.notify(f'Ошибка создания подписанного PDF: {str(e)}', type='error')
+
+def save_signed_pdf_to_file():
+    """Сохраняет подписанный PDF в файл"""
+    try:
+        signature_result = api_router.get_signature_result()
+        
+        if signature_result and signature_result.get('action') == 'signed_document_created':
+            signed_document = signature_result.get('signed_document', '')
+            filename = signature_result.get('filename', 'signed_document.pdf')
+            
+            if signed_document:
+                # Декодируем Base64 в бинарные данные
+                import base64
+                pdf_binary = base64.b64decode(signed_document)
+                
+                # Сохраняем подписанный PDF в файл
+                with open(filename, 'wb') as f:
+                    f.write(pdf_binary)
+                
+                ui.notify(f'✅ Подписанный PDF сохранен в файл: {filename}', type='positive')
+                
+                # Очищаем результат после обработки
+                api_router.clear_signature_result()
+            else:
+                ui.notify('Подписанный документ не найден', type='error')
+        else:
+            ui.notify('Результат создания подписанного PDF не найден', type='warning')
+            
+    except Exception as e:
+        logger.error(f"Ошибка сохранения подписанного PDF: {e}")
+        ui.notify(f'Ошибка сохранения подписанного PDF: {str(e)}', type='error')
 
 def refresh_tasks():
     """Обновляет список задач"""
@@ -1419,11 +2346,33 @@ def set_selected_certificate(certificate_data):
     global _selected_certificate
     _selected_certificate = certificate_data
 
+def set_signature_result_handler(handler):
+    """Устанавливает обработчик результата подписания"""
+    global _signature_result_handler
+    _signature_result_handler = handler
+
+def check_signature_result():
+    """Проверяет наличие результата подписания и обрабатывает его"""
+    global _signature_result_handler
+    
+    try:
+        signature_result = api_router.get_signature_result()
+        
+        if signature_result and _signature_result_handler:
+            logger.info("Обрабатываем результат подписания")
+            _signature_result_handler(signature_result)
+            api_router.clear_signature_result()
+            
+    except Exception as e:
+        logger.error(f"Ошибка обработки результата подписания: {e}")
+
 def load_and_display_document(document_id: str, container: ui.column):
     """Загружает и отображает документ"""
     try:
         from services.mayan_connector import MayanClient
         mayan_client = MayanClient.create_with_session_user()
+        logger.info(f'mayan_client: {mayan_client}')
+        logger.info(f'Загружаем документ {document_id}')
         
         # Получаем информацию о документе
         document_info = mayan_client.get_document_info_for_review(document_id)
@@ -1488,23 +2437,23 @@ def load_document_content_for_signing(document_id: str, content_container: ui.ht
             return
         
         # Получаем документ из Mayan EDMS
-        mayan_client = get_mayan_client()  # Используем существующую функцию
-        document_info = mayan_client.get_document_info(document_id)
+        mayan_client = get_mayan_client()
+        document = mayan_client.get_document(document_id)  # ← ИСПРАВЛЕНО: используем правильный метод
         
-        if document_info:
+        if document:
             # Получаем содержимое документа
-            document_content = mayan_client.get_document_content(document_id)
-            
+            document_content = mayan_client.get_document_file_content_as_text(document_id)  # ← ИСПРАВЛЕНО: используем правильный метод
+            logger.info(f'Документ: {document}')
             if document_content:
+                formated_date_document_create = format_date_russian(document.datetime_created)
+
                 # Отображаем содержимое документа
                 content_html = f'''
                     <div class="document-content p-4">
-                        <h3 class="text-lg font-semibold mb-4">Документ: {document_info.get('label', 'Без названия')}</h3>
-                        <div class="document-preview border rounded p-4 bg-white">
-                            <pre class="whitespace-pre-wrap text-sm">{document_content}</pre>
-                        </div>
+                        <h3 class="text-lg font-semibold mb-4">Документ: {document.label}</h3>
+                        <p>{formated_date_document_create}</p>
                         <div class="mt-4">
-                            <a href="{mayan_client.base_url}/documents/{document_id}/" 
+                            <a href="{mayan_client.base_url}/documents/documents/{document_id}/preview" 
                                target="_blank" 
                                class="text-blue-600 hover:text-blue-800 underline">
                                 Открыть документ в Mayan EDMS
@@ -1517,8 +2466,11 @@ def load_document_content_for_signing(document_id: str, content_container: ui.ht
                 content_container.content = f'''
                     <div class="text-yellow-600 p-4">
                         <h3>Документ найден, но содержимое недоступно</h3>
-                        <p>Документ: {document_info.get('label', 'Без названия')}</p>
-                        <a href="{mayan_client.base_url}/documents/{document_id}/" 
+                        <p>Документ: {document.label}</p>
+                        <p>Файл: {document.file_latest_filename}</p>
+                        <p>Тип: {document.file_latest_mimetype}</p>
+                        <p>Размер: {document.file_latest_size} байт</p>
+                        <a href="{mayan_client.base_url}/documents/documents/{document_id}/preview" 
                            target="_blank" 
                            class="text-blue-600 hover:text-blue-800 underline">
                             Открыть документ в Mayan EDMS
@@ -1545,26 +2497,63 @@ def load_document_content_for_signing(document_id: str, content_container: ui.ht
         '''
 
 def submit_signing_task_completion(task, signed, signature_data, certificate_info, comment, dialog):
-    """Отправляет завершение задачи подписания"""
+    '''Отправляет завершение задачи подписания'''
     try:
         if not signed:
             ui.notify('Необходимо подтвердить подписание документа', type='warning')
             return
         
+        # Загружаем подпись в Mayan EDMS
+        try:
+            user = get_current_user()
+            if not user:
+                ui.notify('Не удалось получить информацию о пользователе', type='error')
+                logger.error('Пользователь не авторизован при загрузке подписи')
+            else:
+                username = user.username
+                
+                camunda_client = create_camunda_client()
+                process_variables = camunda_client.get_process_instance_variables(task.process_instance_id)
+                document_id = process_variables.get('documentId')
+                
+                if document_id and signature_data:
+                    from services.signature_manager import SignatureManager
+                    signature_manager = SignatureManager()
+                    
+                    success = signature_manager.upload_signature_to_document(
+                        document_id=document_id,
+                        username=username,
+                        signature_base64=signature_data,
+                        certificate_info=certificate_info
+                    )
+                    
+                    if success:
+                        ui.notify(f'✅ Подпись {username}.p7s загружена к документу', type='positive')
+                        logger.info(f'Подпись пользователя {username} загружена к документу {document_id}')
+                    else:
+                        logger.error(f'Не удалось загрузить подпись пользователя {username} к документу {document_id}')
+                        ui.notify('⚠️ Подпись создана, но не загружена в Mayan', type='warning')
+                        
+        except Exception as e:
+            logger.error(f'Ошибка при загрузке подписи в Mayan EDMS: {e}', exc_info=True)
+            ui.notify('⚠️ Ошибка загрузки подписи в Mayan, задача будет завершена', type='warning')
+        
         # Подготавливаем переменные для процесса подписания
         variables = {
             'signed': signed,
-            'signatureData': signature_data,
-            'certificateInfo': certificate_info,
+            # 'signatureData': signature_data,  # Не передаем - слишком большой
+            # 'certificateInfo': certificate_info,  # Не передаем - сохранен в Mayan
             'signatureComment': comment or '',
-            'signatureDate': datetime.now().isoformat()
+            'signatureDate': datetime.now().isoformat(),
+            'signatureUploaded': True  # Флаг что подпись загружена
         }
         
         # Завершаем задачу в Camunda
-        camunda_client = create_camunda_client()
         success = camunda_client.complete_task_with_variables(task.id, variables)
         
         if success:
+            # Очищаем результат подписания после успешного завершения
+            api_router.clear_signature_result()
             ui.notify('Документ успешно подписан!', type='success')
             dialog.close()
             # Обновляем список задач
@@ -1574,8 +2563,7 @@ def submit_signing_task_completion(task, signed, signature_data, certificate_inf
             
     except Exception as e:
         ui.notify(f'Ошибка: {str(e)}', type='error')
-        logger.error(f"Ошибка при завершении задачи подписания {task.id}: {e}", exc_info=True)
-
+        logger.error(f'Ошибка при завершении задачи подписания {task.id}: {e}', exc_info=True)
 
 def handle_file_upload(e):
     """Обрабатывает загрузку файлов"""

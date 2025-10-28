@@ -469,6 +469,7 @@ class LDAPUser(pydantic.BaseModel):
     cn: str
     givenName: str
     sn: str
+    destription: str
     mail: Optional[str] = None
     memberOf: List[str] = []
     userPassword: Optional[str] = None
@@ -617,3 +618,31 @@ class SignatureProcess(pydantic.BaseModel):
     status: str  # 'active', 'completed', 'cancelled'
     created_date: datetime
     deadline: Optional[datetime]
+
+
+class DocumentSignatureMetadata(pydantic.BaseModel):
+    '''Метаданные для подписи документа'''
+    document_id: str
+    document_version_hash: str  # Хеш актуальной версии документа
+    signatures: List[Dict[str, Any]]  # Список подписей
+    created_at: str
+    updated_at: str
+    
+    @property
+    def is_valid(self) -> bool:
+        '''Проверяет, все ли подписи действительны'''
+        return all(sig.get('status') == 'valid' for sig in self.signatures)
+    
+    def add_signature(self, username: str, signature_file_id: str, 
+                     signature_hash: str, certificate_info: Dict[str, Any]) -> None:
+        '''Добавляет новую подпись'''
+        new_signature = {
+            'username': username,
+            'signature_file_id': signature_file_id,
+            'signature_hash': signature_hash,
+            'certificate_info': certificate_info,
+            'sign_date': datetime.now().isoformat(),
+            'status': 'valid'
+        }
+        self.signatures.append(new_signature)
+        self.updated_at = datetime.now().isoformat()
