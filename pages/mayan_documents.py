@@ -429,14 +429,14 @@ def create_document_card(document: MayanDocument) -> ui.card:
                         )
                 
                 # Кнопка просмотра содержимого
-                ui.button('Содержимое', icon='text_fields').classes('text-xs').on_click(
-                    lambda doc=document: show_document_content(doc)
-                )
+                # ui.button('Содержимое', icon='text_fields').classes('text-xs').on_click(
+                #     lambda doc=document: show_document_content(doc)
+                # )
                 
                 # Кнопка просмотра доступа
-                ui.button('Доступ', icon='security').classes('text-xs').on_click(
-                    lambda doc=document: show_document_access_info(doc)
-                )
+                # ui.button('Доступ', icon='security').classes('text-xs').on_click(
+                #     lambda doc=document: show_document_access_info(doc)
+                # )
                 
                 # Кнопка предоставления доступа
                 current_user = get_current_user()

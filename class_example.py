@@ -336,6 +336,42 @@ class ClassExample:
                                     value=''
                                 ).classes('w-full mb-2')
                                 
+                                # Добавляем выбор ролей для предоставления доступа
+                                ui.label('Роли для предоставления доступа к документу:').classes('font-bold mb-2')
+                                
+                                # Получаем доступные роли из Mayan EDMS
+                                from services.document_access_manager import document_access_manager
+                                from services.mayan_connector import MayanClient
+                                
+                                try:
+                                    # Используем системный клиент для получения ролей
+                                    system_client = MayanClient.create_default()
+                                    roles = system_client.get_roles(page=1, page_size=1000)
+                                    
+                                    # Создаем словарь role_label -> role_label для выбора
+                                    role_options = {}
+                                    for role in roles:
+                                        role_label = role.get('label')
+                                        if role_label:
+                                            role_options[role_label] = role_label
+                                    
+                                    roles_select = ui.select(
+                                        options=role_options,
+                                        label='Выберите роли (множественный выбор)',
+                                        multiple=True,
+                                        value=[],
+                                        with_input=True
+                                    ).classes('w-full mb-2')
+                                    
+                                    if not role_options:
+                                        ui.label('Роли не найдены в системе').classes('text-sm text-orange-500 mb-2')
+                                        roles_select = None
+                                    
+                                except Exception as e:
+                                    logger.error(f'Ошибка при загрузке ролей: {e}')
+                                    ui.label(f'Ошибка загрузки ролей: {str(e)}').classes('text-sm text-red-500 mb-2')
+                                    roles_select = None
+                                
                                 # Обновляем значения при изменении
                                 # task_name_input.on('change', lambda e: document_id_input.set_value(e.args))
                                 # task_description_input.on('change', lambda e: document_name_input.set_value(e.args))
@@ -343,6 +379,7 @@ class ClassExample:
                                 # Если это не процесс подписания, создаем пустые значения
                                 document_id_input = None
                                 document_name_input = None
+                                roles_select = None
                         
                         # Дополнительные переменные
                         with ui.column().classes('w-full mb-4'):
@@ -379,7 +416,8 @@ class ClassExample:
                                 tags_input.value,
                                 start_button,
                                 document_id_input.value if document_id_input else '',
-                                document_name_input.value if document_name_input else ''
+                                document_name_input.value if document_name_input else '',
+                                roles_select.value if roles_select else []
                             ),
                             icon='play_arrow'
                         ).classes('bg-green-500 text-white')
@@ -387,7 +425,7 @@ class ClassExample:
                     dialog.open()
                 
                 # Функция для запуска процесса с параметрами из формы
-                async def start_process_with_form(dialog, task_name, task_description, priority, due_date, category, tags, start_button, document_id='', document_name=''):
+                async def start_process_with_form(dialog, task_name, task_description, priority, due_date, category, tags, start_button, document_id='', document_name='', selected_roles=None):
                     try:
                         if not camunda_client:
                             ui.notify('Camunda клиент не инициализирован', type='negative')
@@ -487,10 +525,19 @@ class ClassExample:
                                 ui.notify('ID документа должен быть числовым значением!', type='error')
                                 return
                             
+                            # Валидация ролей (может быть пустым списком, но должно быть списком)
+                            if selected_roles is None:
+                                selected_roles = []
+                            
+                            # Преобразуем в список, если это не список
+                            if isinstance(selected_roles, str):
+                                selected_roles = [selected_roles] if selected_roles else []
+                            
                             process_id = camunda_client.start_document_signing_process(
-                                document_id=document_id.strip(),  # Используем специальное поле для ID документа
-                                document_name=document_name.strip(),  # Используем специальное поле для названия документа
+                                document_id=document_id.strip(),
+                                document_name=document_name.strip(),
                                 signer_list=assignee_list,
+                                role_names=selected_roles,  # Передаем выбранные роли
                                 business_key=f"signing_{int(time.time())}"
                             )
                         else:

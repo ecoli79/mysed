@@ -289,14 +289,106 @@ class MayanClient:
             
             for i, doc_data in enumerate(data.get('results', [])):
                 try:
+                    # Получаем file_latest из API
+                    file_latest_data = doc_data.get('file_latest', {})
+                    file_latest_filename = file_latest_data.get('filename', '')
+                    
+                    # Проверяем, не является ли это файлом подписи или метаданных
+                    is_signature_file = (file_latest_filename.endswith('.p7s') or 
+                                       'signature_metadata_' in file_latest_filename)
+                    
+                    # Если это файл подписи/метаданных, получаем основной файл из всех файлов документа
+                    if is_signature_file:
+                        logger.debug(f"Документ {doc_data['id']}: file_latest является файлом подписи/метаданных, ищем основной файл")
+                        
+                        try:
+                            # Получаем все файлы документа напрямую
+                            files_response = self._make_request('GET', f'documents/{doc_data["id"]}/files/', params={'page': 1, 'page_size': 100})
+                            files_response.raise_for_status()
+                            files_data = files_response.json()
+                            all_files = files_data.get('results', [])
+                            
+                            logger.debug(f"Получено {len(all_files)} файлов для документа {doc_data['id']}")
+                            
+                            # Фильтруем файлы: исключаем подписи и метаданные
+                            main_files = []
+                            for file_info in all_files:
+                                filename = file_info.get('filename', '')
+                                # Пропускаем файлы подписей и метаданных
+                                if filename.endswith('.p7s') or 'signature_metadata_' in filename:
+                                    logger.debug(f"Пропускаем файл подписи/метаданных: {filename}")
+                                    continue
+                                main_files.append(file_info)
+                            
+                            # Если нашли основные файлы, берем самый старый (первый созданный)
+                            # или предпочитаем файлы с определенными типами MIME
+                            if main_files:
+                                # Сортируем по datetime_created (если есть) или по ID
+                                # Старшие ID обычно означают более ранние файлы
+                                def get_sort_key(file_info):
+                                    # ИСПРАВЛЕНИЕ: Обрабатываем случай, когда mimetype может быть None
+                                    mimetype = file_info.get('mimetype') or ''
+                                    if mimetype:
+                                        mimetype = str(mimetype).lower()
+                                    else:
+                                        mimetype = ''
+                                    
+                                    priority = 0
+                                    if 'pdf' in mimetype:
+                                        priority = 3
+                                    elif 'image' in mimetype:
+                                        priority = 2
+                                    elif 'office' in mimetype or 'word' in mimetype or 'excel' in mimetype:
+                                        priority = 2
+                                    else:
+                                        priority = 1
+                                    
+                                    # Сортируем по приоритету (убывание), затем по ID (возрастание - старые файлы первыми)
+                                    file_id = file_info.get('id', 0)
+                                    if isinstance(file_id, str):
+                                        try:
+                                            file_id = int(file_id)
+                                        except:
+                                            file_id = 0
+                                    return (-priority, file_id)
+                                
+                                main_files_sorted = sorted(main_files, key=get_sort_key)
+                                main_file = main_files_sorted[0]
+                                
+                                logger.debug(f"Выбран основной файл: {main_file.get('filename')} (MIME: {main_file.get('mimetype')})")
+                                file_latest_id = str(main_file.get('id', ''))
+                                file_latest_filename = main_file.get('filename', '')
+                                file_latest_mimetype = main_file.get('mimetype', '')
+                                file_latest_size = main_file.get('size', 0)
+                            else:
+                                # Если не нашли основные файлы, оставляем file_latest как есть
+                                logger.warning(f"Не найден основной файл в документе {doc_data['id']}, только подписи/метаданные")
+                                file_latest_id = file_latest_data.get('id', '')
+                                file_latest_mimetype = file_latest_data.get('mimetype', '')
+                                file_latest_size = file_latest_data.get('size', 0)
+                        except Exception as e:
+                            logger.warning(f"Ошибка при получении основных файлов документа {doc_data['id']}: {e}")
+                            import traceback
+                            logger.debug(f"Traceback: {traceback.format_exc()}")
+                            # В случае ошибки используем file_latest как есть
+                            file_latest_id = file_latest_data.get('id', '')
+                            file_latest_filename = file_latest_data.get('filename', '')
+                            file_latest_mimetype = file_latest_data.get('mimetype', '')
+                            file_latest_size = file_latest_data.get('size', 0)
+                    else:
+                        # Если это не файл подписи/метаданных, используем file_latest как есть
+                        file_latest_id = file_latest_data.get('id', '')
+                        file_latest_mimetype = file_latest_data.get('mimetype', '')
+                        file_latest_size = file_latest_data.get('size', 0)
+                    
                     document = MayanDocument(
                         document_id=doc_data['id'],
                         label=doc_data['label'],
                         description=doc_data.get('description', ''),
-                        file_latest_id=doc_data.get('file_latest', {}).get('id', ''),
-                        file_latest_filename=doc_data.get('file_latest', {}).get('filename', ''),
-                        file_latest_mimetype=doc_data.get('file_latest', {}).get('mimetype', ''),
-                        file_latest_size=doc_data.get('file_latest', {}).get('size', 0),
+                        file_latest_id=file_latest_id,
+                        file_latest_filename=file_latest_filename,
+                        file_latest_mimetype=file_latest_mimetype,
+                        file_latest_size=file_latest_size,
                         datetime_created=doc_data.get('datetime_created', ''),
                         datetime_modified=doc_data.get('datetime_modified', '')
                     )
@@ -446,9 +538,73 @@ class MayanClient:
             logger.error(f"Ошибка при получении файлов документа {document_id}: {e}")
             return None
 
+    def _get_main_document_file(self, document_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Получает основной файл документа, исключая файлы подписей и метаданных
+        
+        Args:
+            document_id: ID документа
+            
+        Returns:
+            Информация о файле или None
+        """
+        # Получаем список всех файлов документа
+        files_data = self.get_document_files(document_id, page=1, page_size=10)
+        if not files_data or not files_data.get('results'):
+            return None
+        # Исключаем файлы подписей и метаданные
+        exclude_patterns = ['.p7s', 'signature_metadata_']
+        main_files = []
+        
+        for file_info in files_data.get('results', []):
+            filename = file_info.get('filename', '')
+            # Пропускаем файлы подписей и метаданных
+            if any(pattern in filename for pattern in exclude_patterns):
+                logger.debug(f"Пропускаем файл подписи/метаданных: {filename}")
+                continue
+            main_files.append(file_info)
+        
+        if not main_files:
+            logger.warning(f"Документ {document_id} не содержит основных файлов (только подписи/метаданные)")
+            return None
+        
+        # Сортируем файлы по приоритету: PDF > изображения > офисные документы > остальные
+        def get_sort_key(file_info):
+            # ИСПРАВЛЕНИЕ: Обрабатываем случай, когда mimetype может быть None
+            mimetype = file_info.get('mimetype') or ''
+            if mimetype:
+                mimetype = str(mimetype).lower()
+            else:
+                mimetype = ''
+            priority = 0
+            if 'pdf' in mimetype:
+                priority = 3
+            elif 'image' in mimetype:
+                priority = 2
+            elif 'office' in mimetype or 'word' in mimetype or 'excel' in mimetype:
+                priority = 2
+            else:
+                priority = 1
+            
+            # Сортируем по приоритету (убывание), затем по ID (возрастание - старые файлы первыми)
+            file_id = file_info.get('id', 0)
+            if isinstance(file_id, str):
+                try:
+                    file_id = int(file_id)
+                except:
+                    file_id = 0
+            return (-priority, file_id)
+        
+        main_files_sorted = sorted(main_files, key=get_sort_key)
+        main_file = main_files_sorted[0]
+        
+        logger.debug(f"Выбран основной файл документа {document_id}: {main_file.get('filename')} (MIME: {main_file.get('mimetype')})")
+        return main_file
+
     def get_document_file_content(self, document_id: str) -> Optional[bytes]:
         """
         Получает содержимое файла документа используя правильный endpoint
+        Исключает файлы подписей (*.p7s) и метаданные (signature_metadata_*.json)
         
         Args:
             document_id: ID документа
@@ -458,17 +614,12 @@ class MayanClient:
         """
         logger.info(f"Получаем содержимое файла документа {document_id}")
         
-        # Получаем список файлов документа используя правильный endpoint
-        files_data = self.get_document_files(document_id, page=1, page_size=1)
-        if not files_data or not files_data.get('results'):
-            logger.warning(f"Документ {document_id} не найден или не имеет файлов")
+        file_info = self._get_main_document_file(document_id)
+        if not file_info:
+            logger.warning(f"Документ {document_id} не найден или не имеет основных файлов")
             return None
-        
-        # Берем первый файл (обычно это последний загруженный файл)
-        file_info = files_data['results'][0]
-        file_id = file_info['id']  # ID файла
-        
-        logger.info(f"Найден файл с file_id: {file_id}, имя: {file_info.get('filename', 'Неизвестно')}")
+        file_id = file_info['id']
+        logger.info(f"Выбран основной файл: file_id={file_id}, имя={file_info.get('filename', 'Неизвестно')}")
         
         # Используем правильный endpoint для скачивания файла
         endpoint = f'documents/{document_id}/files/{file_id}/download/'
@@ -494,6 +645,7 @@ class MayanClient:
     def get_document_file_url(self, document_id: str) -> Optional[str]:
         """
         Получает URL для скачивания файла документа
+        Исключает файлы подписей (*.p7s) и метаданные (signature_metadata_*.json)
         
         Args:
             document_id: ID документа
@@ -501,18 +653,38 @@ class MayanClient:
         Returns:
             URL для скачивания или None
         """
-        # Получаем информацию о файлах документа
-        files_data = self.get_document_files(document_id, page=1, page_size=1)
-        if not files_data or not files_data.get('results'):
+        file_info = self._get_main_document_file(document_id)
+        if not file_info:
             return None
-        
-        file_info = files_data['results'][0]
         file_id = file_info['id']
         
         # Строим URL для скачивания используя правильный endpoint
-        url = f"{self.api_url}documents/{document_id}/files/{file_id}/download/"
-        logger.debug(f"URL для скачивания документа {document_id}: {url}")
-        return url
+        return f'{self.api_url}documents/{document_id}/files/{file_id}/download/'
+
+    def get_document_preview_url(self, document_id: str) -> Optional[str]:
+        """
+        Получает URL для предварительного просмотра документа
+        Исключает файлы подписей (*.p7s) и метаданные (signature_metadata_*.json)
+        
+        Args:
+            document_id: ID документа
+            
+        Returns:
+            URL для предварительного просмотра или None
+        """
+        file_info = self._get_main_document_file(document_id)
+        if not file_info:
+            return None
+        # Используем готовый image_url из ответа API для превью
+        if 'pages_first' in file_info and 'image_url' in file_info['pages_first']:
+            preview_url = file_info['pages_first']['image_url']
+            logger.debug(f"URL превью из API: {preview_url}")
+            return preview_url
+        # Если нет image_url, строим URL вручную
+        file_id = file_info.get('id')
+        if file_id:
+            return f'{self.api_url}documents/{document_id}/files/{file_id}/preview/'
+        return None
 
     def search_documents(self, query: str, page: int = 1, page_size: int = 20) -> List[MayanDocument]:
         """
@@ -529,31 +701,6 @@ class MayanClient:
         logger.info(f"Выполняем поиск документов по запросу: '{query}'")
         return self.get_documents(page=page, page_size=page_size, search=query)
     
-    def get_document_preview_url(self, document_id: str) -> Optional[str]:
-        """
-        Получает URL для предварительного просмотра документа
-        
-        Args:
-            document_id: ID документа
-            
-        Returns:
-            URL для предварительного просмотра или None
-        """
-        # Получаем информацию о файлах документа
-        files_data = self.get_document_files(document_id, page=1, page_size=1)
-        if not files_data or not files_data.get('results'):
-            return None
-        
-        file_info = files_data['results'][0]
-        
-        # Используем готовый image_url из ответа API для превью
-        if 'pages_first' in file_info and 'image_url' in file_info['pages_first']:
-            preview_url = file_info['pages_first']['image_url']
-            logger.debug(f"URL для предварительного просмотра документа {document_id}: {preview_url}")
-            return preview_url
-        
-        return None
-
     def get_all_document_files(self, document_id: str) -> List[Dict[str, Any]]:
         """
         Получает все файлы документа
@@ -1545,33 +1692,55 @@ class MayanClient:
             logger.error(f"Ошибка при добавлении разрешений к ACL: {e}")
             return False
 
-    def get_groups(self) -> List[Dict[str, Any]]:
+    def get_groups(self, page: int = 1, page_size: int = 100) -> List[Dict[str, Any]]:
         """
         Получает список групп пользователей
         
+        Args:
+            page: Номер страницы
+            page_size: Размер страницы
+            
         Returns:
             Список групп
         """
         endpoint = 'groups/'
+        params = {'page': page, 'page_size': page_size}
         
         logger.info("Получаем список групп пользователей")
+        logger.info(f"Параметры пагинации: {params}")
         
         try:
-            response = self._make_request('GET', endpoint)
+            response = self._make_request('GET', endpoint, params=params)
+            logger.info(f"Статус ответа получения групп: {response.status_code}")
+            
             response.raise_for_status()
             
             data = response.json()
-            groups = data.get('results', [])
+            logger.info(f"Ответ API: count={data.get('count', 0)}, next={data.get('next')}, previous={data.get('previous')}")
             
-            logger.info(f"Получено {len(groups)} групп")
+            groups = data.get('results', [])
+            logger.info(f"Получено {len(groups)} групп со страницы {page}")
+            
+            # Проверяем, есть ли еще страницы
+            if data.get('next'):
+                logger.info(f"Есть следующая страница, загружаем следующие группы...")
+                next_groups = self.get_groups(page=page + 1, page_size=page_size)
+                groups.extend(next_groups)
+                logger.info(f"Всего загружено групп: {len(groups)}")
             
             # Отладочная информация
             if groups:
                 logger.info(f"Пример группы: {json.dumps(groups[0], indent=2, ensure_ascii=False)}")
+            else:
+                logger.warning(f"Группы не найдены. Структура ответа: {list(data.keys())}")
+                if 'results' in data and not data['results']:
+                    logger.warning(f"Поле 'results' существует, но пустое. Count: {data.get('count')}")
             
             return groups
         except requests.RequestException as e:
             logger.error(f"Ошибка при получении групп: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Ответ сервера: {e.response.text[:500]}")
             return []
 
     def get_group_users(self, group_id: str) -> List[Dict[str, Any]]:
@@ -2245,7 +2414,8 @@ class MayanClient:
 
     def _get_page_count_from_pages_api(self, document_id: str) -> Optional[int]:
         """
-        Получает количество страниц через API страниц документа
+        Получает количество страниц документа через API страниц
+        Использует основной файл документа (исключая подписи и метаданные)
         
         Args:
             document_id: ID документа
@@ -2254,13 +2424,12 @@ class MayanClient:
             Количество страниц или None
         """
         try:
-            # Сначала получаем информацию о файлах документа
-            files_data = self.get_document_files(document_id, page=1, page_size=1)
-            if not files_data or not files_data.get('results'):
-                logger.warning(f"Документ {document_id} не найден или не имеет файлов")
+            # Получаем основной файл документа
+            file_info = self._get_main_document_file(document_id)
+            if not file_info:
+                logger.warning(f"Документ {document_id} не найден или не имеет основных файлов")
                 return None
             
-            file_info = files_data['results'][0]
             file_id = file_info.get('id')
             
             if not file_id:
@@ -2308,6 +2477,7 @@ class MayanClient:
     def get_document_page_count(self, document_id: str) -> Optional[int]:
         """
         Получает количество страниц документа
+        Использует основной файл документа (исключая подписи и метаданные)
         
         Args:
             document_id: ID документа
@@ -2318,20 +2488,22 @@ class MayanClient:
         logger.info(f"Получаем количество страниц документа {document_id}")
         
         try:
-            # Получаем информацию о файлах документа
-            files_data = self.get_document_files(document_id, page=1, page_size=1)
-            if not files_data or not files_data.get('results'):
-                logger.warning(f"Документ {document_id} не найден или не имеет файлов")
+            # Получаем основной файл документа
+            file_info = self._get_main_document_file(document_id)
+            if not file_info:
+                logger.warning(f"Документ {document_id} не найден или не имеет основных файлов")
                 return None
-            
-            file_info = files_data['results'][0]
             
             # ОТЛАДКА: Выводим все поля файла
             logger.info(f"=== ОТЛАДКА: Поля файла документа {document_id} ===")
-            for key, value in file_info.items():
-                logger.info(f"  {key}: {value}")
+            logger.info(f"  id: {file_info.get('id')}")
+            logger.info(f"  filename: {file_info.get('filename')}")
+            logger.info(f"  mimetype: {file_info.get('mimetype')}")
+            logger.info(f"  size: {file_info.get('size')}")
+            logger.info(f"  timestamp: {file_info.get('timestamp')}")
+            logger.info(f"  url: {file_info.get('url')}")
             logger.info("=== КОНЕЦ ОТЛАДКИ ===")
-            
+
             # ВСЕГДА обращаемся к API страниц для получения правильного количества
             # Поле count в ответе API страниц содержит точное количество страниц
             logger.info("Получаем количество страниц через API страниц...")

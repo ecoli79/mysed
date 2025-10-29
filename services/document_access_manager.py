@@ -789,5 +789,329 @@ class DocumentAccessManager:
                 'error': str(e)
             }
 
+    def get_user_roles(self, username: str) -> List[str]:
+        """
+        Получает список названий ролей пользователя
+        Использует обратный подход: проверяет все роли и ищет пользователя по username
+        
+        Args:
+            username: Имя пользователя
+            
+        Returns:
+            Список названий ролей (label)
+        """
+        try:
+            client = self._get_mayan_client()
+            
+            # Получаем все роли (без пагинации, если возможно)
+            logger.info(f'Получаем все роли для поиска пользователя {username}')
+            all_roles = client.get_roles(page=1, page_size=1000)
+            logger.info(f'Получено {len(all_roles)} ролей')
+            
+            # Находим роли, в которых состоит пользователь
+            user_roles = []
+            for role in all_roles:
+                role_id = role.get('id')
+                role_label = role.get('label')
+                
+                if not role_id or not role_label:
+                    continue
+                
+                try:
+                    role_users = client.get_role_users(role_id)
+                    logger.debug(f'Роль {role_label} (ID: {role_id}) содержит {len(role_users)} пользователей')
+                    
+                    # Проверяем, есть ли пользователь в этой роли по username
+                    for role_user in role_users:
+                        role_username = role_user.get('username')
+                        if role_username == username:
+                            if role_label not in user_roles:
+                                user_roles.append(role_label)
+                                logger.info(f'Найден пользователь {username} в роли {role_label}')
+                            break
+                            
+                except Exception as e:
+                    logger.warning(f'Ошибка при получении пользователей роли {role_label} (ID: {role_id}): {e}')
+                    continue
+            
+            logger.info(f'Пользователь {username} состоит в ролях: {user_roles}')
+            return user_roles
+            
+        except Exception as e:
+            logger.error(f'Ошибка при получении ролей пользователя {username}: {e}')
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return []
+    
+    def grant_document_access_for_signing(self, document_id: str, document_label: str, 
+                                         signer_usernames: List[str]) -> bool:
+        """
+        Предоставляет доступ к документу ролям подписантов для подписания
+        Использует связь через группы: пользователь -> группа -> роль
+        
+        Args:
+            document_id: ID документа
+            document_label: Название документа
+            signer_usernames: Список имен пользователей-подписантов
+            
+        Returns:
+            True если доступ предоставлен хотя бы одной роли
+        """
+        try:
+            from services.access_types import AccessType, AccessTypeManager
+            from services.mayan_connector import MayanClient
+            
+            # Используем системный клиент для получения групп (административные права)
+            # и пользовательский клиент для предоставления доступа
+            system_client = MayanClient.create_default()
+            user_client = self._get_mayan_client()
+            
+            logger.info(f'=== НАЧАЛО ПОИСКА РОЛЕЙ ЧЕРЕЗ ГРУППЫ ===')
+            logger.info(f'Подписанты: {signer_usernames}')
+            
+            # Шаг 1: Получаем все группы через системный клиент
+            logger.info('Шаг 1: Получаем все группы (используем системный клиент)')
+            all_groups = system_client.get_groups()
+            logger.info(f'Получено {len(all_groups)} групп')
+            
+            if not all_groups:
+                logger.error('Не найдено ни одной группы в Mayan EDMS')
+                return False
+            
+            logger.info(f'Найдены группы: {[g.get("name") for g in all_groups]}')
+            
+            # Шаг 2: Строим маппинг username -> set(group_ids)
+            # Для каждой группы получаем пользователей и запоминаем, в каких группах они состоят
+            logger.info('Шаг 2: Получаем пользователей групп и строим маппинг')
+            username_to_groups = {}  # username -> set(group_ids)
+            signer_usernames_set = set(signer_usernames)
+            
+            for group in all_groups:
+                group_id = group.get('id')
+                group_name = group.get('name')
+                
+                if not group_id:
+                    continue
+                
+                try:
+                    # Получаем пользователей группы через системный клиент
+                    group_users = system_client.get_group_users(str(group_id))
+                    logger.debug(f'Группа {group_name} (ID: {group_id}) содержит {len(group_users)} пользователей')
+                    
+                    # Для каждого пользователя группы запоминаем эту группу
+                    for user in group_users:
+                        username = user.get('username')
+                        if username:
+                            if username not in username_to_groups:
+                                username_to_groups[username] = set()
+                            username_to_groups[username].add(group_id)
+                            logger.debug(f'Пользователь {username} состоит в группе {group_name} (ID: {group_id})')
+                    
+                except Exception as e:
+                    logger.warning(f'Ошибка при получении пользователей группы {group_name} (ID: {group_id}): {e}')
+                    continue
+            
+            # Шаг 3: Собираем группы подписантов
+            logger.info('Шаг 3: Собираем группы подписантов')
+            signer_groups = set()
+            for username in signer_usernames:
+                if username in username_to_groups:
+                    groups = username_to_groups[username]
+                    signer_groups.update(groups)
+                    logger.info(f'Подписант {username} состоит в группах: {groups}')
+                else:
+                    logger.warning(f'Подписант {username} не найден ни в одной группе')
+            
+            if not signer_groups:
+                logger.warning(f'Подписанты не состоят ни в одной группе')
+                return False
+            
+            logger.info(f'Всего уникальных групп подписантов: {len(signer_groups)}')
+            
+            # Шаг 4: Получаем все роли и для каждой роли получаем группы
+            # Используем системный клиент для получения ролей
+            logger.info('Шаг 4: Получаем роли и их группы (используем системный клиент)')
+            all_roles = system_client.get_roles(page=1, page_size=1000)
+            logger.info(f'Получено {len(all_roles)} ролей')
+            
+            if not all_roles:
+                logger.error('Не найдено ни одной роли в Mayan EDMS')
+                return False
+            
+            # Шаг 5: Собираем роли, в которых есть группы подписантов
+            unique_roles = set()
+            
+            for role in all_roles:
+                role_id = role.get('id')
+                role_label = role.get('label')
+                
+                if not role_id or not role_label:
+                    continue
+                
+                try:
+                    # Получаем группы роли через системный клиент
+                    role_groups = system_client.get_role_groups(role_id)
+                    logger.debug(f'Роль {role_label} (ID: {role_id}) содержит {len(role_groups)} групп')
+                    
+                    # Проверяем, есть ли пересечение между группами роли и группами подписантов
+                    role_group_ids = {g.get('id') for g in role_groups if g.get('id')}
+                    
+                    # Находим пересечение
+                    common_groups = signer_groups.intersection(role_group_ids)
+                    
+                    if common_groups:
+                        unique_roles.add(role_label)
+                        logger.info(f'✓ Найдена роль {role_label} для подписантов (общие группы: {common_groups})')
+                        
+                except Exception as e:
+                    logger.warning(f'Ошибка при получении групп роли {role_label} (ID: {role_id}): {e}')
+                    continue
+            
+            logger.info(f'=== РЕЗУЛЬТАТ ПОИСКА ===')
+            logger.info(f'Найдено ролей: {unique_roles if unique_roles else "НЕТ"}')
+            
+            if not unique_roles:
+                logger.warning(f'Не найдено ролей для подписантов: {signer_usernames}')
+                return False
+            
+            logger.info(f'Предоставляем доступ к документу {document_id} ролям: {unique_roles}')
+            
+            # Шаг 6: Получаем разрешения для типа доступа SUBSCRIBE_DOCUMENT
+            # Используем пользовательский клиент для получения разрешений и предоставления доступа
+            permission_names = AccessTypeManager.get_access_type_permissions(AccessType.SUBSCRIBE_DOCUMENT)
+            
+            # Получаем все разрешения через пользовательский клиент
+            all_permissions = user_client.get_permissions()
+            
+            # Составляем маппинг название -> pk
+            permission_map = {}
+            for perm in all_permissions:
+                if perm:
+                    label = perm.get('label', '')
+                    pk = perm.get('pk')
+                    if label in permission_names and pk:
+                        permission_map[label] = pk
+            
+            # Получаем список pk разрешений
+            permission_pks = list(permission_map.values())
+            
+            if not permission_pks:
+                logger.error(f'Не найдено разрешений для типа доступа SUBSCRIBE_DOCUMENT')
+                logger.error(f'Ожидаемые разрешения: {permission_names}')
+                return False
+            
+            logger.info(f'Найдено {len(permission_pks)} разрешений для подписания')
+            
+            # Шаг 7: Предоставляем доступ каждой уникальной роли через пользовательский клиент
+            success_count = 0
+            for role_name in unique_roles:
+                try:
+                    result = self.grant_document_access_to_role_by_pks(
+                        document_id=document_id,
+                        document_label=document_label,
+                        role_name=role_name,
+                        permission_pks=permission_pks
+                    )
+                    if result:
+                        success_count += 1
+                        logger.info(f'✓ Доступ к документу {document_id} предоставлен роли {role_name}')
+                    else:
+                        logger.error(f'✗ Не удалось предоставить доступ роли {role_name}')
+                except Exception as e:
+                    logger.error(f'Ошибка при предоставлении доступа роли {role_name}: {e}')
+                    import traceback
+                    logger.error(f'Traceback: {traceback.format_exc()}')
+            
+            logger.info(f'=== ИТОГ ===')
+            logger.info(f'Доступ предоставлен {success_count} из {len(unique_roles)} ролей')
+            return success_count > 0
+            
+        except Exception as e:
+            logger.error(f'Ошибка при предоставлении доступа для подписания: {e}')
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return False
+
+    def grant_document_access_to_roles(self, document_id: str, document_label: str, 
+                                      role_names: List[str]) -> bool:
+        """
+        Предоставляет доступ к документу указанным ролям для подписания
+        
+        Args:
+            document_id: ID документа
+            document_label: Название документа
+            role_names: Список названий ролей для предоставления доступа
+            
+        Returns:
+            True если доступ предоставлен хотя бы одной роли
+        """
+        try:
+            from services.access_types import AccessType, AccessTypeManager
+            
+            if not role_names:
+                logger.warning('Список ролей пуст, доступ не предоставляется')
+                return False
+            
+            logger.info(f'=== ПРЕДОСТАВЛЕНИЕ ДОСТУПА К ДОКУМЕНТУ РОЛЯМ ===')
+            logger.info(f'Документ: {document_id} ({document_label})')
+            logger.info(f'Роли: {role_names}')
+            
+            client = self._get_mayan_client()
+            
+            # Получаем разрешения для типа доступа SUBSCRIBE_DOCUMENT
+            permission_names = AccessTypeManager.get_access_type_permissions(AccessType.SUBSCRIBE_DOCUMENT)
+            
+            # Получаем все разрешения
+            all_permissions = client.get_permissions()
+            
+            # Составляем маппинг название -> pk
+            permission_map = {}
+            for perm in all_permissions:
+                if perm:
+                    label = perm.get('label', '')
+                    pk = perm.get('pk')
+                    if label in permission_names and pk:
+                        permission_map[label] = pk
+            
+            # Получаем список pk разрешений
+            permission_pks = list(permission_map.values())
+            
+            if not permission_pks:
+                logger.error(f'Не найдено разрешений для типа доступа SUBSCRIBE_DOCUMENT')
+                logger.error(f'Ожидаемые разрешения: {permission_names}')
+                return False
+            
+            logger.info(f'Найдено {len(permission_pks)} разрешений для подписания')
+            
+            # Предоставляем доступ каждой роли
+            success_count = 0
+            for role_name in role_names:
+                try:
+                    result = self.grant_document_access_to_role_by_pks(
+                        document_id=document_id,
+                        document_label=document_label,
+                        role_name=role_name,
+                        permission_pks=permission_pks
+                    )
+                    if result:
+                        success_count += 1
+                        logger.info(f'✓ Доступ к документу {document_id} предоставлен роли {role_name}')
+                    else:
+                        logger.error(f'✗ Не удалось предоставить доступ роли {role_name}')
+                except Exception as e:
+                    logger.error(f'Ошибка при предоставлении доступа роли {role_name}: {e}')
+                    import traceback
+                    logger.error(f'Traceback: {traceback.format_exc()}')
+            
+            logger.info(f'=== ИТОГ ===')
+            logger.info(f'Доступ предоставлен {success_count} из {len(role_names)} ролей')
+            return success_count > 0
+            
+        except Exception as e:
+            logger.error(f'Ошибка при предоставлении доступа ролям: {e}')
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return False
+
 # Глобальный экземпляр менеджера
 document_access_manager = DocumentAccessManager()

@@ -1,6 +1,7 @@
 import requests
 from requests.auth import HTTPBasicAuth
 from datetime import datetime
+from services.document_access_manager import document_access_manager
 import json
 from typing import List, Optional, Dict, Any, Union
 from urllib.parse import urljoin
@@ -2591,8 +2592,17 @@ class CamundaClient:
             return []
 
     def start_document_signing_process(self, document_id: str, document_name: str, 
-                                    signer_list: List[str], business_key: str = None) -> Optional[str]:
-        """Запускает процесс подписания документа"""
+                                    signer_list: List[str], business_key: str = None,
+                                    role_names: List[str] = None) -> Optional[str]:
+        """Запускает процесс подписания документа
+        
+        Args:
+            document_id: ID документа
+            document_name: Название документа
+            signer_list: Список пользователей-подписантов
+            business_key: Бизнес-ключ процесса
+            role_names: Список названий ролей для предоставления доступа (опционально)
+        """
         try:
             # Подготавливаем переменные в правильном формате для Camunda
             process_variables = {
@@ -2632,8 +2642,29 @@ class CamundaClient:
             
             if response.status_code == 200:
                 result = response.json()
-                logger.info(f"Процесс подписания запущен: {result['id']}")
-                return result['id']
+                process_id = result['id']
+                logger.info(f"Процесс подписания запущен: {process_id}")
+                
+                # Предоставляем доступ к документу выбранным ролям
+                if role_names:
+                    try:                    
+                        logger.info(f'Предоставляем доступ к документу {document_id} ролям: {role_names}')
+                        access_granted = document_access_manager.grant_document_access_to_roles(
+                            document_id=document_id,
+                            document_label=document_name,
+                            role_names=role_names
+                        )
+                        
+                        if access_granted:
+                            logger.info(f'Доступ к документу {document_id} успешно предоставлен ролям {role_names}')
+                        else:
+                            logger.warning(f'Не удалось предоставить доступ к документу {document_id}')
+                            
+                    except Exception as e:
+                        logger.error(f'Ошибка при предоставлении доступа к документу: {e}')
+                        # Не прерываем выполнение, т.к. процесс уже запущен
+                
+                return process_id
             else:
                 logger.error(f"Ошибка запуска процесса подписания: {response.status_code} - {response.text}")
                 return None

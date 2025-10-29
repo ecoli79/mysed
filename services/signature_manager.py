@@ -57,19 +57,18 @@ class SignatureManager:
             return None
     
     def upload_signature_to_document(self, document_id: str, username: str, 
-                                     signature_base64: str, certificate_info: Dict[str, Any]) -> bool:
+                                 signature_base64: str, certificate_info: Dict[str, Any]) -> bool:
         '''Загружает файл подписи *.p7s к документу'''
         try:
             mayan_client = self._get_mayan_client()
             
-            # ИМЕНЯЕМ: Декодируем подпись из base64
+            # Декодируем подпись из base64
             import base64
             signature_binary = base64.b64decode(signature_base64)
             
-            # ИМЕНЯЕМ: Создаем имя файла подписи
+            # Создаем имя файла подписи
             signature_filename = f'{username}.p7s'
             
-            # ИМЕНЯЕМ: Проверяем, существует ли уже подпись этого пользователя
             logger.info(f'Проверяем наличие существующих подписей пользователя {username} для документа {document_id}')
             
             # Получаем список файлов документа
@@ -98,50 +97,57 @@ class SignatureManager:
                     logger.warning(f'Не удалось удалить существующую подпись: {e}')
                     # Продолжаем загрузку новой подписи
             
-            # Загружаем новый файл подписи к документу
+            # ИСПРАВЛЕНИЕ: Используем метод upload_file_to_document с skip_version_activation=True
+            # чтобы не создавать новую версию документа при загрузке подписи
+            logger.info(f'Загружаем подпись {signature_filename} к документу {document_id}')
+            
             result = mayan_client.upload_file_to_document(
                 document_id=int(document_id),
                 filename=signature_filename,
                 file_content=signature_binary,
                 mimetype='application/pkcs7-signature',
                 description=f'Подпись пользователя {username}',
-                skip_version_activation=True  # ИСПРАВЛЕНИЕ: Не создаем новую версию документа
+                skip_version_activation=True  # Не создаем новую версию документа при загрузке подписи
             )
             
             if not result:
                 logger.error(f'Не удалось загрузить подпись для документа {document_id}')
                 return False
             
-            # Получаем текущий хеш документа
+            file_id = result.get('file_id')
+            if not file_id:
+                logger.error(f'Не удалось получить ID загруженного файла подписи')
+                return False
+            
+            logger.info(f'Подпись загружена с ID: {file_id}')
+            
+            # Получаем текущий хеш документа (после загрузки, но версия не изменилась)
             document_hash = self.get_document_current_hash(document_id)
             if not document_hash:
                 logger.error(f'Не удалось получить хеш документа {document_id}')
                 return False
             
             # Сохраняем метаданные о подписи
-            self._save_signature_metadata(document_id, username, result['file_id'], 
+            self._save_signature_metadata(document_id, username, file_id, 
                                         document_hash, signature_base64, certificate_info)
             
             logger.info(f'Подпись {username}.p7s успешно загружена к документу {document_id}')
             return True
             
         except Exception as e:
-            logger.error(f'Ошибка загрузки подписи: {e}')
+            logger.error(f'Ошибка загрузки подписи: {e}', exc_info=True)
             return False
     
     def _save_signature_metadata(self, document_id: str, username: str, file_id: str,
-                                 document_hash: str, signature_base64: str, 
-                                 certificate_info: Dict[str, Any]) -> bool:
+                                document_hash: str, signature_base64: str, 
+                                certificate_info: Dict[str, Any]) -> bool:
         '''Сохраняет метаданные подписи'''
         try:
             import hashlib
             import json
             
-            # ДОБАВЛЯЕМ ЛОГИРОВАНИЕ
             logger.info(f'=== Сохранение метаданных подписи ===')
             logger.info(f'Certificate info получен: {certificate_info}')
-            logger.info(f'Certificate info type: {type(certificate_info)}')
-            logger.info(f'Certificate info keys: {certificate_info.keys() if isinstance(certificate_info, dict) else "не словарь"}')
             
             # Создаем хеш подписи
             signature_hash = hashlib.sha256(signature_base64.encode()).hexdigest()
@@ -158,25 +164,37 @@ class SignatureManager:
                 'status': 'valid',
             }
             
-            # Сохраняем как метаданные файла в Mayan
             mayan_client = self._get_mayan_client()
+            
+            # Создаем имя файла метаданных
             metadata_filename = f'signature_metadata_{username}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
             
-            mayan_client.upload_file_to_document(
+            # Подготавливаем содержимое метаданных
+            metadata_content = json.dumps(signature_metadata, ensure_ascii=False, indent=2).encode('utf-8')
+            
+            # ИСПРАВЛЕНИЕ: Используем метод upload_file_to_document с skip_version_activation=True
+            # чтобы не создавать новую версию документа при загрузке метаданных
+            logger.info(f'Загружаем метаданные подписи {metadata_filename} к документу {document_id}')
+            
+            result = mayan_client.upload_file_to_document(
                 document_id=int(document_id),
                 filename=metadata_filename,
-                file_content=json.dumps(signature_metadata, ensure_ascii=False, indent=2).encode('utf-8'),
+                file_content=metadata_content,
                 mimetype='application/json',
                 description=f'Метаданные подписи {username}',
-                skip_version_activation=True  # Не создаем новую версию для метаданных
+                skip_version_activation=True  # Не создаем новую версию документа при загрузке метаданных
             )
+            
+            if not result:
+                logger.error(f'Не удалось загрузить метаданные подписи для документа {document_id}')
+                return False
             
             logger.info(f'Сохранены метаданные подписи для {username}')
             
             return True
             
         except Exception as e:
-            logger.error(f'Ошибка сохранения метаданных подписи: {e}')
+            logger.error(f'Ошибка сохранения метаданных подписи: {e}', exc_info=True)
             return False
     
     def check_user_signature_exists(self, document_id: str, username: str) -> bool:

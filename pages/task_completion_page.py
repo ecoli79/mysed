@@ -1260,7 +1260,7 @@ def complete_signing_task_with_result(task, signature_info, signed_data_display,
             
             # ДОБАВЛЯЕМ ЛОГИРОВАНИЕ
             signature_result = api_router.get_signature_result()
-            logger.info(f'Signature result from api_router: {signature_result}')
+            # logger.info(f'Signature result from api_router: {signature_result}')
             
             # Получаем информацию о сертификате из результата
             certificate_info = {}
