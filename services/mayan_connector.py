@@ -59,6 +59,8 @@ class MayanClient:
         self.verify_ssl = verify_ssl
         self.session = requests.Session()
         self.session.verify = verify_ssl
+        self.documentSearchModelPk = None
+        self.documentSearchModelUrl = None
                 
         logger.info(f"Инициализация MayanClient для {self.base_url}")
         
@@ -123,7 +125,168 @@ class MayanClient:
         except requests.RequestException as e:
             logger.error(f"🌐 MayanClient: Ошибка при выполнении запроса {method} {url}: {e}")
             raise
+    
+    def _get_search_models_root(self) -> str:
+        return 'search_models/'
+    
+    def get_search_models(self) -> list:
+        root = self._get_search_models_root()
+        page = 1
+        out = []
+        while True:
+            resp = self._make_request('GET', root, params={'page': page, 'page_size': 100})
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get('results') if isinstance(data, dict) else data
+            if not results:
+                break
+            out.extend(results)
+            if isinstance(data, dict) and not data.get('next'):
+                break
+            page += 1
+        return out
+    
+    def _ensure_document_search_model(self) -> bool:
+        if self.documentSearchModelPk and self.documentSearchModelUrl:
+            return True
+        try:
+            root = self._get_search_models_root()
+            page = 1
+            while True:
+                r = self._make_request('GET', root, params={'page': page, 'page_size': 100})
+                r.raise_for_status()
+                data = r.json()
+                results = data.get('results') if isinstance(data, dict) else data
+                if not results:
+                    break
+                for m in results:
+                    if m.get('app_label') == 'documents' and m.get('model_name') == 'documentsearchresult':
+                        pk = m.get('pk') or m.get('id')
+                        url = m.get('url')
+                        if pk and url:
+                            # нормализуем в относительный путь для _make_request
+                            rel = url[len(self.api_url):].lstrip('/') if url.startswith(self.api_url) else f"{root.rstrip('/')}/{pk}/"
+                            self.documentSearchModelPk = pk
+                            self.documentSearchModelUrl = rel
+                            return True
+                if isinstance(data, dict) and not data.get('next'):
+                    break
+                page += 1
+        except Exception:
+            pass
+        return False
 
+    def _search_via_short_model(self, query: str, page: int, page_size: int) -> List[MayanDocument]:
+        """
+        Полнотекст через короткий путь модели:
+        GET /api/v4/search/documents.documentsearchresult[/?] ? q=...
+        """
+        candidates = [
+            'search/documents.documentsearchresult',
+            'search/documents.documentsearchresult/',
+        ]
+        last_exc = None
+        import re
+
+        for ep in candidates:
+            try:
+                resp = self._make_request('GET', ep, params={'q': query, 'page': page, 'page_size': page_size})
+                if resp.status_code == 404:
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                items = data.get('results', data if isinstance(data, list) else [])
+
+                doc_ids = []
+                for it in items:
+                    did = (
+                        it.get('id')
+                        or it.get('object_id')
+                        or it.get('document_id')
+                        or it.get('document__id')
+                    )
+                    if not did:
+                        url = it.get('url') or it.get('object_url')
+                        if url:
+                            m = re.search(r'/documents/(\d+)/', url)
+                            if m:
+                                did = m.group(1)
+                    if did:
+                        doc_ids.append(str(did))
+
+                docs: List[MayanDocument] = []
+                for did in doc_ids:
+                    d = self.get_document(did)
+                    if d:
+                        docs.append(d)
+                return docs
+            except Exception as e:
+                last_exc = e
+                continue
+
+        if last_exc:
+            raise last_exc
+        return []
+    
+    def _search_via_document_search_model(self, query: str, page: int, page_size: int) -> list:
+        if not self._ensure_document_search_model():
+            # ВАЖНО: нет модели — пусть верхний уровень решает fallback
+            raise RuntimeError('documentsearchresult model not available')
+        base = self.documentSearchModelUrl.rstrip('/')
+        try:
+            resp = self._make_request('GET', f'{base}/results/', params={'q': query, 'page': page, 'page_size': page_size})
+            if resp.status_code == 404:
+                resp = self._make_request('GET', f'{base}/results/', params={'query': query, 'page': page, 'page_size': page_size})
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get('results', data if isinstance(data, list) else [])
+        except Exception as e:
+            # Если сам endpoint падает — пробуем title выше
+            raise e
+
+        import re
+        docIds = []
+        for it in items:
+            did = (
+                it.get('document_id')
+                or it.get('document__id')
+                or it.get('object_id')
+                or it.get('id')  # иногда id совпадает с id документа, но не всегда
+                or it.get('pk')
+            )
+            if not did:
+                url = it.get('url') or it.get('object_url')
+                if url:
+                    m = re.search(r'/documents/(\d+)/', url)
+                    if m:
+                        did = m.group(1)
+            if did:
+                docIds.append(str(did))
+
+        out = []
+        for did in docIds:
+            d = self.get_document(did)
+            if d:
+                out.append(d)
+        return out
+    
+    def _fetch_results_for_model(self, model_pk: str, query: str, page: int, page_size: int) -> list:
+        rel = self._ensure_search_model_by_pk(model_pk)
+        if not rel:
+            return []
+        base = rel.rstrip('/')
+        for params in ({'q': query}, {'query': query}):
+            try:
+                r = self._make_request('GET', f'{base}/results/', params={**params, 'page': page, 'page_size': page_size})
+                if r.status_code == 404:
+                    continue
+                r.raise_for_status()
+                data = r.json()
+                return data.get('results', data if isinstance(data, list) else [])
+            except Exception:
+                continue
+        return []
+            
     def create_user_api_token(self, username: str, password: str) -> Optional[str]:
         """
         Создает API токен для пользователя в Mayan EDMS используя endpoint /auth/token/obtain/
@@ -268,7 +431,8 @@ class MayanClient:
         endpoint = 'documents/'
         params = {
             'page': page,
-            'page_size': page_size
+            'page_size': page_size,
+            'ordering': '-datetime_created'
         }
         
         if search:
@@ -685,54 +849,24 @@ class MayanClient:
         if file_id:
             return f'{self.api_url}documents/{document_id}/files/{file_id}/preview/'
         return None
-
+            
     def search_documents(self, query: str, page: int = 1, page_size: int = 20) -> List[MayanDocument]:
-        """
-        Выполняет поиск документов
-        
-        Args:
-            query: Поисковый запрос
-            page: Номер страницы
-            page_size: Размер страницы
-            
-        Returns:
-            Список найденных документов
-        """
-        logger.info(f"Выполняем поиск документов по запросу: '{query}'")
+        # 1) короткий путь search/documents.documentsearchresult?q=...
+        try:
+            docs = self._search_via_short_model(query, page, page_size)
+            return docs  # пусто = честно "ничего не найдено"
+        except Exception:
+            pass
+
+        # 2) прежний путь через search_models (если настроен)
+        try:
+            docs = self._search_via_document_search_model(query, page, page_size)
+            return docs
+        except Exception:
+            pass
+
+        # 3) fallback по названию
         return self.get_documents(page=page, page_size=page_size, search=query)
-    
-    def get_all_document_files(self, document_id: str) -> List[Dict[str, Any]]:
-        """
-        Получает все файлы документа
-        
-        Args:
-            document_id: ID документа
-            
-        Returns:
-            Список всех файлов документа
-        """
-        logger.info(f"Получаем все файлы документа {document_id}")
-        
-        all_files = []
-        page = 1
-        page_size = 100  # Большой размер страницы для получения всех файлов
-        
-        while True:
-            files_data = self.get_document_files(document_id, page=page, page_size=page_size)
-            if not files_data or not files_data.get('results'):
-                break
-            
-            files = files_data['results']
-            all_files.extend(files)
-            
-            # Проверяем, есть ли следующая страница
-            if not files_data.get('next'):
-                break
-            
-            page += 1
-        
-        logger.info(f"Получено {len(all_files)} файлов для документа {document_id}")
-        return all_files
 
     def download_document_file(self, document_id: str, file_id: str) -> Optional[bytes]:
         """
@@ -1325,40 +1459,31 @@ class MayanClient:
         try:
             logger.info(f"Добавляем документ {document_id} в кабинет {cabinet_id}")
             
-            # ИСПРАВЛЕНИЕ: Используем правильный endpoint для добавления документа в кабинет
-            # В Mayan EDMS нужно использовать PATCH метод для обновления кабинета
+            # Используем правильный endpoint согласно спецификации Mayan EDMS API
+            # POST /cabinets/{cabinet_id}/documents/add/ с параметром document (ID документа)
             try:
-                logger.info(f"Пробуем добавить документ через PATCH метод")
-                cabinet_data = {'documents': [document_id]}
+                logger.info(f"Добавляем документ через POST к cabinets/{cabinet_id}/documents/add/")
+                # Согласно спецификации, передаем параметр document (ID документа)
+                # Используем data (form-data) вместо json, так как это POST запрос с параметром
                 response = self._make_request(
-                    'PATCH', 
-                    f'cabinets/{cabinet_id}/', 
-                    json=cabinet_data
+                    'POST', 
+                    f'cabinets/{cabinet_id}/documents/add/', 
+                    data={'document': document_id}
                 )
+                logger.info(f"Статус ответа: {response.status_code}")
+                logger.info(f"Ответ сервера: {response.text[:500] if response.text else 'Пустой ответ'}")
                 response.raise_for_status()
                 logger.info(f"Документ {document_id} успешно добавлен в кабинет {cabinet_id}")
                 return True
             except Exception as e:
-                logger.warning(f"PATCH метод не сработал: {e}")
-                
-                # Альтернативный способ - через документ
-                try:
-                    logger.info(f"Пробуем добавить документ через обновление документа")
-                    document_data = {'cabinets': [cabinet_id]}
-                    response = self._make_request(
-                        'PATCH', 
-                        f'documents/{document_id}/', 
-                        json=document_data
-                    )
-                    response.raise_for_status()
-                    logger.info(f"Документ {document_id} успешно добавлен в кабинет {cabinet_id}")
-                    return True
-                except Exception as e2:
-                    logger.warning(f"Обновление документа не сработало: {e2}")
-                    return False
+                logger.error(f"Ошибка при добавлении документа в кабинет через POST к /documents/add/: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    logger.error(f"Статус ответа: {e.response.status_code}")
+                    logger.error(f"Текст ответа: {e.response.text[:1000] if e.response.text else 'Пустой'}")
+                return False
         
         except Exception as e:
-            logger.warning(f"Не удалось добавить документ в кабинет: {e}")
+            logger.error(f"Не удалось добавить документ в кабинет: {e}", exc_info=True)
             return False
 
     def get_acls_for_object(self, content_type: str, object_id: str) -> List[Dict[str, Any]]:

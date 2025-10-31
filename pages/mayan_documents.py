@@ -18,6 +18,7 @@ import json
 import tempfile
 import os
 import base64
+from components.loading_indicator import LoadingIndicator, with_loading
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class UploadParams:
     description: str
     document_type_name: Optional[str] = None
     cabinet_name: Optional[str] = None
+    cabinet_id: Optional[int] = None  # Добавляем поле для прямого указания ID
     language_name: Optional[str] = None
     tag_names: Optional[List[str]] = None
 
@@ -233,8 +235,15 @@ class SimpleFormDataExtractor:
         # Получаем ID типа документа
         document_type_id = self._get_document_type_id_by_name(client, params.document_type_name)
         
-        # Получаем ID кабинета
-        cabinet_id = self._get_cabinet_id_by_name(client, params.cabinet_name)
+        # Получаем ID кабинета - используем переданный ID, если он есть, иначе ищем по имени
+        cabinet_id = params.cabinet_id
+        logger.info(f"SimpleFormDataExtractor: params.cabinet_id={params.cabinet_id}, params.cabinet_name={params.cabinet_name}")
+        if not cabinet_id and params.cabinet_name:
+            logger.info(f"SimpleFormDataExtractor: Ищем кабинет по имени '{params.cabinet_name}'")
+            cabinet_id = self._get_cabinet_id_by_name(client, params.cabinet_name)
+            logger.info(f"SimpleFormDataExtractor: Найден cabinet_id={cabinet_id}")
+        
+        logger.info(f"SimpleFormDataExtractor: Итоговый cabinet_id={cabinet_id}")
         
         # Получаем ID языка
         # language_id = self._get_language_id_by_name(client, params.language_name)
@@ -367,10 +376,10 @@ def create_document_card(document: MayanDocument) -> ui.card:
     
     # Временное логирование для отладки
     logger.info(f"Создаем карточку для документа {document.document_id}:")
-    logger.info(f"  - Название: {document.label}")
-    logger.info(f"  - Файл: {document.file_latest_filename}")
-    logger.info(f"  - Размер файла: {document.file_latest_size}")
-    logger.info(f"  - MIME-тип: {document.file_latest_mimetype}")
+    logger.info(f"- Название: {document.label}")
+    logger.info(f"- Файл: {document.file_latest_filename}")
+    logger.info(f"- Размер файла: {document.file_latest_size}")
+    logger.info(f"- MIME-тип: {document.file_latest_mimetype}")
     
     # ИСПРАВЛЕНИЕ: Проверяем наличие подписей у документа
     has_signatures = False
@@ -426,18 +435,7 @@ def create_document_card(document: MayanDocument) -> ui.card:
                     if has_signatures:
                         ui.button('Скачать с подписями', icon='verified', color='green').classes('text-xs').on_click(
                             lambda doc=document: download_signed_document(doc)
-                        )
-                
-                # Кнопка просмотра содержимого
-                # ui.button('Содержимое', icon='text_fields').classes('text-xs').on_click(
-                #     lambda doc=document: show_document_content(doc)
-                # )
-                
-                # Кнопка просмотра доступа
-                # ui.button('Доступ', icon='security').classes('text-xs').on_click(
-                #     lambda doc=document: show_document_access_info(doc)
-                # )
-                
+                        )                
                 # Кнопка предоставления доступа
                 current_user = get_current_user()
                 if current_user:
@@ -490,38 +488,6 @@ def show_grant_access_dialog(document: MayanDocument):
                 ui.label(f'Ошибка при загрузке ролей: {str(e)}').classes('text-red-500')
                 role_select = None
             
-            #Получаем список разрешений для документов
-            # try:
-            #     permissions = document_access_manager.get_available_permissions_for_documents()
-                
-            #     if permissions:
-            #         # Создаем список названий разрешений
-            #         permission_options = [perm['label'] for perm in permissions if perm.get('label')]
-            #         logger.info(f"Доступные разрешения для документов: {permission_options}")
-                    
-            #         if permission_options:
-            #             # Множественный выбор разрешений
-            #             permission_select = ui.select(
-            #                 options=permission_options,
-            #                 label='Выберите разрешения (можно несколько)',
-            #                 multiple=True,
-            #                 value=[]  # Начинаем с пустого списка
-            #             ).classes('w-full')
-                        
-            #             # Добавляем подсказку
-            #             ui.label('💡 Совет: Выберите несколько разрешений для более гибкого управления доступом').classes('text-xs text-blue-600')
-            #         else:
-            #             ui.label('Разрешения найдены, но без названий').classes('text-orange-500')
-            #             permission_select = None
-            #     else:
-            #         ui.label('Разрешения для документов не найдены').classes('text-orange-500')
-            #         permission_select = None
-                    
-            # except Exception as e:
-            #     logger.error(f"Ошибка при получении разрешений: {e}")
-            #     ui.label(f'Ошибка при загрузке разрешений: {str(e)}').classes('text-red-500')
-            #     permission_select = None
-
             #Получаем типы доступа вместо отдельных разрешений
             try:
                 access_types = AccessTypeManager.get_all_access_types()
@@ -760,47 +726,68 @@ def load_recent_documents():
         with _recent_documents_container:
             ui.label(f'Ошибка при загрузке документов: {str(e)}').classes('text-red-500 text-center py-8')
 
-def search_documents(query: str):
+def search_documents(query: str, tabs_widget=None, search_tab_widget=None):
     """Выполняет поиск документов"""
     global _search_results_container
     
-    if _search_results_container:
-        _search_results_container.clear()
+    # Переключаем на таб поиска, если он был передан
+    if tabs_widget and search_tab_widget:
+        tabs_widget.value = search_tab_widget
     
     if not query.strip():
-        with _search_results_container:
-            ui.label('Введите поисковый запрос').classes('text-gray-500 text-center py-8')
+        if _search_results_container:
+            _search_results_container.clear()
+            with _search_results_container:
+                ui.label('Введите поисковый запрос').classes('text-gray-500 text-center py-8')
         return
     
     # Проверяем подключение
     if not check_connection():
-        with _search_results_container:
-            ui.label('Нет подключения к серверу Mayan EDMS').classes('text-red-500 text-center py-8')
-            if _auth_error:
-                ui.label(f'Ошибка: {_auth_error}').classes('text-sm text-gray-500 text-center')
-            ui.label(f'Проверьте настройки подключения к серверу: {config.mayan_url}').classes('text-sm text-gray-500 text-center')
+        if _search_results_container:
+            _search_results_container.clear()
+            with _search_results_container:
+                ui.label('Нет подключения к серверу Mayan EDMS').classes('text-red-500 text-center py-8')
+                if _auth_error:
+                    ui.label(f'Ошибка: {_auth_error}').classes('text-sm text-gray-500 text-center')
+                ui.label(f'Проверьте настройки подключения к серверу: {config.mayan_url}').classes('text-sm text-gray-500 text-center')
         return
     
-    try:
-        logger.info(f"Выполняем поиск по запросу: {query}")
-        # Выполняем поиск
-        documents = get_mayan_client().search_documents(query, page=1, page_size=20)
-        logger.info(f"Найдено документов: {len(documents)}")
+    # Очищаем контейнер и показываем индикатор сразу
+    if _search_results_container:
+        _search_results_container.clear()
+        loading = LoadingIndicator(_search_results_container, 'Поиск документов...')
+        loading.show()
         
-        if not documents:
-            with _search_results_container:
-                ui.label(f'По запросу "{query}" ничего не найдено').classes('text-gray-500 text-center py-8')
-            return
-        
-        with _search_results_container:
-            ui.label(f'Найдено документов: {len(documents)}').classes('text-lg font-semibold mb-4')
-            for document in documents:
-                create_document_card(document)
+        def perform_search():
+            try:
+                logger.info(f"Выполняем поиск по запросу: {query}")
+                # Выполняем поиск
+                documents = get_mayan_client().search_documents(query, page=1, page_size=20)
+                logger.info(f"Найдено документов: {len(documents)}")
                 
-    except Exception as e:
-        logger.error(f"Ошибка при поиске документов: {e}")
-        with _search_results_container:
-            ui.label(f'Ошибка при поиске: {str(e)}').classes('text-red-500 text-center py-8')
+                # Скрываем индикатор и очищаем контейнер перед показом результатов
+                loading.hide()
+                _search_results_container.clear()
+                
+                if not documents:
+                    with _search_results_container:
+                        ui.label(f'По запросу "{query}" ничего не найдено').classes('text-gray-500 text-center py-8')
+                    return
+                
+                with _search_results_container:
+                    ui.label(f'Найдено документов: {len(documents)}').classes('text-lg font-semibold mb-4')
+                    for document in documents:
+                        create_document_card(document)
+                        
+            except Exception as e:
+                logger.error(f"Ошибка при поиске документов: {e}")
+                loading.hide()
+                _search_results_container.clear()
+                with _search_results_container:
+                    ui.label(f'Ошибка при поиске: {str(e)}').classes('text-red-500 text-center py-8')
+        
+        # Выполняем поиск с небольшой задержкой, чтобы UI успел обновиться и показать индикатор
+        ui.timer(0.05, perform_search, once=True)
 
 def upload_document():
     """Загружает документ на сервер"""
@@ -894,12 +881,20 @@ def upload_document():
                 cabinet_select = None
             
             # Загрузка файла
+            # Сохраняем cabinet_id_map в локальную переменную для правильного захвата в lambda
+            local_cabinet_id_map = None
+            if cabinet_select and hasattr(cabinet_select, 'cabinet_id_map'):
+                local_cabinet_id_map = cabinet_select.cabinet_id_map
+                logger.info(f"Подготовка формы: cabinet_id_map содержит {len(local_cabinet_id_map)} кабинетов")
+                logger.info(f"Подготовка формы: cabinet_id_map = {local_cabinet_id_map}")
+            
             upload_area = ui.upload(
                 on_upload=lambda e: handle_file_upload(
                     e, 
                     description_input.value,
                     document_type_select.value if document_type_select else None,
-                    cabinet_select.value if cabinet_select else None
+                    cabinet_select.value if cabinet_select else None,
+                    local_cabinet_id_map  # Используем локальную переменную вместо атрибута
                 ),
                 auto_upload=False
             ).classes('w-full')
@@ -910,7 +905,8 @@ def handle_file_upload(
     upload_event, 
     description: str, 
     document_type_name: Optional[str] = None, 
-    cabinet_name: Optional[str] = None
+    cabinet_name: Optional[str] = None,
+    cabinet_id_map: Optional[Dict[str, int]] = None
 ) -> None:
     """Обрабатывает загрузку файла с улучшенной архитектурой"""
     global _upload_form_container
@@ -927,6 +923,28 @@ def handle_file_upload(
         
         logger.info(f"Имя файла: {filename}")
         logger.info(f"Название документа (без расширения): {document_label}")
+        logger.info(f"Полученные параметры: cabinet_name={cabinet_name}, cabinet_id_map={cabinet_id_map}")
+        
+        # Получаем ID кабинета из карты, если она передана
+        cabinet_id = None
+        if cabinet_name and cabinet_id_map:
+            logger.info(f"Попытка найти кабинет '{cabinet_name}' в карте")
+            logger.info(f"Доступные ключи в карте: {list(cabinet_id_map.keys())}")
+            cabinet_id = cabinet_id_map.get(cabinet_name)
+            if cabinet_id:
+                logger.info(f"Кабинет '{cabinet_name}' найден в карте, ID: {cabinet_id}")
+            else:
+                logger.warning(f"Кабинет '{cabinet_name}' не найден в карте")
+                logger.warning(f"Сравнение ключей (строка): cabinet_name repr = {repr(cabinet_name)}")
+                for key in cabinet_id_map.keys():
+                    logger.warning(f"  Ключ в карте repr = {repr(key)}, совпадает: {key == cabinet_name}")
+        else:
+            if not cabinet_name:
+                logger.warning("cabinet_name не передан или пустой")
+            if not cabinet_id_map:
+                logger.warning("cabinet_id_map не передан или пустой")
+        
+        logger.info(f"Итоговый cabinet_id: {cabinet_id}")
         
         # Создаем параметры загрузки
         params = UploadParams(
@@ -934,9 +952,12 @@ def handle_file_upload(
             description=description,
             document_type_name=document_type_name,
             cabinet_name=cabinet_name,
+            cabinet_id=cabinet_id,  # Добавляем ID напрямую
             language_name=None,  # Убираем языки
             tag_names=None  # Убираем теги
         )
+        
+        logger.info(f"Создан UploadParams с cabinet_id={params.cabinet_id}")
         
         # Получаем клиент
         client = get_mayan_client()
@@ -946,7 +967,7 @@ def handle_file_upload(
         uploader.upload_document(upload_event, params, _upload_form_container)
         
     except Exception as e:
-        logger.error(f"Критическая ошибка при загрузке документа: {e}")
+        logger.error(f"Критическая ошибка при загрузке документа: {e}", exc_info=True)
         ui.notify(f'Критическая ошибка: {str(e)}', type='error')
 
 
