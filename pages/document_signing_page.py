@@ -136,6 +136,42 @@ def load_document_content(document_id: str, content_container: ui.html):
         logger.error(f"Ошибка при загрузке содержимого документа {document_id}: {e}")
         content_container.set_content(f'<p>Ошибка при загрузке документа: {str(e)}</p>')
 
+def sign_document(task, dialog):
+    """Выполняет подписание документа"""
+    try:
+        # Получаем информацию о задаче из Camunda
+        from services.camunda_connector import get_camunda_client
+        camunda_client = get_camunda_client()
+        
+        # Получаем переменные процесса для получения document_id
+        process_variables = camunda_client.get_process_instance_variables(task["process_instance_id"])
+        document_id = process_variables.get('documentId') or task.get("document_id")
+        
+        if not document_id:
+            ui.notify('Не удалось получить ID документа', type='error')
+            return
+        
+        # Используем существующую логику из task_completion_page
+        # Или реализуем упрощенную версию подписания
+        from pages.task_completion_page import complete_signing_task
+        
+        # Создаем объект задачи для передачи
+        from models import CamundaTask
+        camunda_task = CamundaTask(
+            id=task["task_id"],
+            name=task.get("name", "Подписать документ"),
+            assignee=get_current_user().username,
+            process_instance_id=task.get("process_instance_id"),
+            # ... другие поля
+        )
+        
+        complete_signing_task(camunda_task)
+        dialog.close()
+        
+    except Exception as e:
+        logger.error(f"Ошибка при подписании документа: {e}")
+        ui.notify(f'Ошибка: {str(e)}', type='error')
+
 def sign_document_with_certificate(task, certificate_index, dialog):
     """Выполняет подписание документа с выбранным сертификатом"""
     try:
@@ -361,17 +397,31 @@ def start_signing_process(document_id: str, signers: str, comment: str):
         return
     
     try:
+        # Получаем текущего пользователя для передачи creator_username
+        user = get_current_user()
+        creator_username = user.username if user else None
+        
+        # Получаем информацию о документе
+        mayan_client = get_mayan_client()
+        document_info = mayan_client.get_document_info_for_review(document_id)
+        if not document_info:
+            ui.notify('Ошибка при получении информации о документе', type='error')
+            return
+        
         # Парсим список пользователей
         signer_list = [user.strip() for user in signers.split(',') if user.strip()]
         
-        # Инициируем процесс подписания
-        user = get_current_user()
-        signature_manager = SignatureManager()
+        # Запускаем процесс подписания
+        from services.camunda_connector import get_camunda_client
+        camunda_client = get_camunda_client()
         
-        process_id = signature_manager.initiate_document_signing(
+        process_id = camunda_client.start_document_signing_process(
             document_id=document_id,
+            document_name=document_info["label"],
             signer_list=signer_list,
-            initiator=user.username
+            business_key=None,
+            role_names=None,
+            creator_username=creator_username
         )
         
         if process_id:

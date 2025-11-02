@@ -31,7 +31,7 @@ def login_page_handler():
 @ui.page('/')
 @require_auth
 def home_page_handler() -> None:
-    with theme.frame(''):
+    with theme.frame('Мои задачи'):
         ui.timer(0.1, lambda: home_page.content(), once=True)
 
 @ui.page('/my_processes')        
@@ -149,4 +149,4 @@ task_assignment = ClassExample()
 # Подключаем API роутер для обработки событий КриптоПро
 app.include_router(api_router.router)
 
-ui.run(title='Modularization Example')
+ui.run(title=config.app_name)

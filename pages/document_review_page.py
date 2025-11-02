@@ -378,6 +378,11 @@ def start_document_review(selected_document: Dict, assignee_list: str, business_
         return
     
     try:
+        # Получаем текущего пользователя для передачи creator_username
+        from auth.middleware import get_current_user
+        current_user = get_current_user()
+        creator_username = current_user.username if current_user else None
+        
         # Получаем информацию о документе
         mayan_client = get_mayan_client()
         document_info = mayan_client.get_document_info_for_review(selected_document['doc'].document_id)
@@ -394,7 +399,8 @@ def start_document_review(selected_document: Dict, assignee_list: str, business_
             document_name=document_info["label"],
             document_content=document_info.get("content", "Содержимое недоступно"),
             assignee_list=users,
-            business_key=business_key if business_key else None
+            business_key=business_key if business_key else None,
+            creator_username=creator_username
         )
         
         if process_id:

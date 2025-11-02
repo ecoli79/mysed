@@ -500,14 +500,25 @@ class ClassExample:
                                 'type': 'String'
                             }
                         
+                        # Получаем текущего пользователя один раз в начале функции
+                        from auth.middleware import get_current_user
+                        current_user = get_current_user()
+                        creator_username = current_user.username if current_user else None
+                        
                         # Выбираем метод запуска в зависимости от типа процесса
                         process_id = None
                         if process_key == 'DocumentReviewProcessMultiInstance':
+                            # Получаем текущего пользователя для передачи creator_username
+                            from auth.middleware import get_current_user
+                            current_user = get_current_user()
+                            creator_username = current_user.username if current_user else None
+                            
                             process_id = camunda_client.start_document_review_process_multi_instance(
                                 document_name=task_name.strip(),
                                 document_content=task_description.strip(),
                                 assignee_list=assignee_list,
-                                business_key=f"batch_{int(time.time())}"
+                                business_key=f"batch_{int(time.time())}",
+                                creator_username=creator_username  # Добавить эту строку
                             )
                         elif process_key == 'DocumentSigningProcess':
                             # Специальная обработка для процесса подписания документов
@@ -538,15 +549,22 @@ class ClassExample:
                                 document_name=document_name.strip(),
                                 signer_list=assignee_list,
                                 role_names=selected_roles,  # Передаем выбранные роли
-                                business_key=f"signing_{int(time.time())}"
+                                business_key=f"signing_{int(time.time())}",
+                                creator_username=creator_username  # Добавить эту строку
                             )
                         else:
                             # Для других процессов используем универсальный метод
+                            # Получаем текущего пользователя для передачи creator_username
+                            from auth.middleware import get_current_user
+                            current_user = get_current_user()
+                            creator_username = current_user.username if current_user else None
+                            
                             process_id = camunda_client.start_process(
                                 process_definition_key=process_key,
                                 assignee_list=assignee_list,
                                 additional_variables=process_variables,
-                                business_key=f"batch_{int(time.time())}"
+                                business_key=f"batch_{int(time.time())}",
+                                creator_username=creator_username  # Добавить эту строку
                             )
                         
                         print(f"Результат запуска процесса: {process_id}")

@@ -296,7 +296,9 @@ class CamundaClient:
         params = {'deserializeValues': 'true'}
         
         # Добавляем фильтр по именам переменных
+        # Camunda 7.22 поддерживает variableNames как строку с разделителем запятой
         if variable_names:
+            # Используем правильный формат для query параметра
             params['variableNames'] = ','.join(variable_names)
         
         try:
@@ -307,12 +309,28 @@ class CamundaClient:
             
             variables = {}
             
-            for var_name, var_data in variables_data.items():
-                if 'value' in var_data:
-                    variables[var_name] = var_data['value']
+            # Обрабатываем ответ - он может быть словарем
+            if isinstance(variables_data, dict):
+                for var_name, var_data in variables_data.items():
+                    if isinstance(var_data, dict) and 'value' in var_data:
+                        variables[var_name] = var_data['value']
+                    else:
+                        variables[var_name] = var_data
+            else:
+                # Если ответ - список (для исторических переменных)
+                for var_data in variables_data:
+                    if isinstance(var_data, dict):
+                        var_name = var_data.get('name')
+                        var_value = var_data.get('value')
+                        if var_name:
+                            variables[var_name] = var_value
+                            
             return variables
         except requests.RequestException as e:
             logger.error(f"Ошибка при получении переменных процесса {process_instance_id}: {e}")
+            # Добавим детальное логирование
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Детали ошибки: {e.response.text[:500]}")
             return {}
     
     def assign_task(self, task_id: str, assignee: str) -> bool:
@@ -740,6 +758,13 @@ class CamundaClient:
             
             if process_instance_id:
                 logger.info(f"Процесс {process_definition_key} успешно запущен. ID: {process_instance_id}")
+                logger.info(f"Создатель процесса: {creator_username or 'system'}")
+                # Проверяем, что переменная processCreator действительно установлена
+                try:
+                    check_vars = self.get_process_instance_variables_by_name(process_instance_id, ['processCreator'])
+                    logger.info(f"Проверка переменной processCreator: {check_vars.get('processCreator', 'не найдена')}")
+                except Exception as e:
+                    logger.warning(f"Не удалось проверить переменную processCreator: {e}")
                 
             return process_instance_id
             
@@ -1158,63 +1183,6 @@ class CamundaClient:
             logger.error(f"Ошибка при получении истории процесса {process_instance_id}: {e}")
             return []
 
-     # ===== УНИВЕРСАЛЬНЫЕ ФУНКЦИИ =====
-    def start_process_for_multiple_users(self, process_definition_key: str, 
-                                       user_list: List[str],
-                                       variables: Optional[Dict[str, Any]] = None,
-                                       business_key: Optional[str] = None) -> List[str]:
-        """
-        Универсальная функция для запуска процесса для нескольких пользователей
-        
-        Args:
-            process_definition_key: Ключ определения процесса
-            user_list: Список пользователей
-            variables: Базовые переменные для всех процессов
-            business_key: Базовый бизнес-ключ (будет дополнен именем пользователя)
-            
-        Returns:
-            Список ID экземпляров процессов
-        """
-        process_ids = []
-        
-        for user in user_list:
-            # Создаем копию переменных для каждого пользователя
-            user_variables = variables.copy() if variables else {}
-            
-            # Добавляем информацию о пользователе
-            user_variables['assignee'] = {
-                'value': user,
-                'type': 'String'
-            }
-            
-            # Для DocumentReviewProcess инициализируем счетчики
-            if process_definition_key == 'DocumentReviewProcess':
-                user_variables['completedReviews'] = {
-                    'value': 0,
-                    'type': 'Integer'
-                }
-                user_variables['totalReviews'] = {
-                    'value': len(user_list),
-                    'type': 'Integer'
-                }
-            
-            # Создаем уникальный business key для каждого процесса
-            user_business_key = f"{business_key}_{user}" if business_key else f"{process_definition_key}_{user}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
-            process_id = self.start_process(
-                process_definition_key=process_definition_key,
-                variables=user_variables,
-                business_key=user_business_key
-            )
-            
-            if process_id:
-                process_ids.append(process_id)
-                logger.info(f"Запущен процесс {process_definition_key} для пользователя {user}, ID: {process_id}")
-            else:
-                logger.error(f"Ошибка при запуске процесса {process_definition_key} для пользователя {user}")
-        
-        return process_ids
-
     def get_user_tasks_by_process_key(self, username: str, process_definition_key: str, 
                                     active_only: bool = True) -> List[Union[CamundaTask, CamundaHistoryTask]]:
         """
@@ -1258,19 +1226,6 @@ class CamundaClient:
         """
         return self.get_process_instance_variables_by_name(process_instance_id, variable_names)
 
-    def set_process_variables(self, process_instance_id: str, 
-                            variables: Dict[str, Any]) -> bool:
-        """
-        Универсальная функция для установки переменных процесса
-        
-        Args:
-            process_instance_id: ID экземпляра процесса
-            variables: Словарь переменных {имя: значение}
-            
-        Returns:
-            True если переменные установлены успешно, False иначе
-        """
-        return self.set_multiple_process_variables(process_instance_id, variables)
 
     def get_process_status(self, process_instance_id: str, 
                          status_variables: List[str] = None) -> Dict[str, Any]:
@@ -1422,26 +1377,6 @@ class CamundaClient:
             logger.error(f"Ошибка при активации процесса {process_instance_id}: {e}")
             return False
            
-    def get_task_completion_form_data(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Получает данные формы завершения задачи
-        
-        Args:
-            task_id: ID задачи
-            
-        Returns:
-            Словарь с данными формы или None
-        """
-        endpoint = f'task/{task_id}/form'
-        
-        try:
-            response = self._make_request('GET', endpoint)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            logger.error(f"Ошибка при получении данных формы задачи {task_id}: {e}")
-            return None
-
     def get_task_completion_variables(self, task_id: str) -> Dict[str, Any]:
         """
         Получает переменные для завершения задачи
@@ -1612,11 +1547,11 @@ class CamundaClient:
                 delete_reason=task_data.get('deleteReason'),
                 owner=task_data.get('owner'),
                 assignee=task_data.get('assignee'),
-                start_time=task_data.get('startTime'),
+                start_time=task_data['startTime'],
                 end_time=task_data.get('endTime'),
                 duration=task_data.get('duration'),
-                task_definition_key=task_data.get('taskDefinitionKey'),
-                priority=task_data.get('priority'),
+                task_definition_key=task_data['taskDefinitionKey'],
+                priority=task_data['priority'],
                 due_date=due_date,
                 parent_task_id=task_data.get('parentTaskId'),
                 follow_up_date=task_data.get('followUp'),
@@ -2072,9 +2007,11 @@ class CamundaClient:
             }
             
             # Запускаем процесс с Multi-Instance
+            # Исправляем вызов: используем assignee_list вместо variables
             process_id = self.start_process(
                 process_definition_key='DocumentReviewProcessMultiInstance',
-                variables=process_variables,
+                assignee_list=assignee_list,  # Исправить: вместо variables
+                additional_variables=process_variables,  # Передаем как additional_variables
                 business_key=business_key,
                 creator_username=creator_username
             )
@@ -2102,19 +2039,33 @@ class CamundaClient:
             Словарь с информацией о прогрессе
         """
         try:
+            # Получаем переменные Multi-Instance из задач (nrOfInstances, nrOfCompletedInstances)
+            multi_instance_vars = self._get_multi_instance_variables(process_instance_id)
+            nr_of_instances = multi_instance_vars.get('nrOfInstances', 0)
+            nr_of_completed_instances = multi_instance_vars.get('nrOfCompletedInstances', 0)
+            
+            # Получаем переменные процесса для assigneeList и userCompleted
             process_variables = self.get_process_instance_variables(process_instance_id)
             
-            # Получаем информацию о Multi-Instance
-            nr_of_instances = process_variables.get('nrOfInstances', 0)
-            nr_of_completed_instances = process_variables.get('nrOfCompletedInstances', 0)
-            
-            # Получаем список пользователей
+            # Получаем список пользователей из переменных процесса
             assignee_list = process_variables.get('assigneeList', [])
             if isinstance(assignee_list, str):
                 try:
                     assignee_list = json.loads(assignee_list)
                 except:
                     assignee_list = []
+            
+            # Если assigneeList не найден в переменных процесса, пробуем получить из активных задач
+            if not assignee_list or len(assignee_list) == 0:
+                try:
+                    endpoint = f'task?processInstanceId={process_instance_id}'
+                    response = self._make_request('GET', endpoint)
+                    response.raise_for_status()
+                    tasks = response.json()
+                    # Собираем уникальных пользователей из задач
+                    assignee_list = list(set([task.get('assignee') for task in tasks if task.get('assignee')]))
+                except Exception as e:
+                    logger.warning(f"Не удалось получить список пользователей из задач: {e}")
             
             # Получаем статус пользователей
             user_completed = process_variables.get('userCompleted', {})
@@ -2123,6 +2074,11 @@ class CamundaClient:
                     user_completed = json.loads(user_completed)
                 except:
                     user_completed = {}
+            
+            # Если userCompleted не найден, пробуем получить из истории
+            if not user_completed or len(user_completed) == 0:
+                if assignee_list:
+                    user_completed = self._get_user_completion_status_from_history(process_instance_id, assignee_list)
             
             # Создаем детальную информацию о пользователях
             user_status = []
@@ -2135,11 +2091,11 @@ class CamundaClient:
                 })
             
             return {
-                'nr_of_instances': nr_of_instances,
+                'nr_of_instances': nr_of_instances if nr_of_instances > 0 else len(assignee_list),
                 'nr_of_completed_instances': nr_of_completed_instances,
-                'progress_percent': (nr_of_completed_instances / nr_of_instances) * 100 if nr_of_instances > 0 else 0,
+                'progress_percent': (nr_of_completed_instances / (nr_of_instances if nr_of_instances > 0 else len(assignee_list))) * 100 if (nr_of_instances > 0 or len(assignee_list) > 0) else 0,
                 'user_status': user_status,
-                'is_complete': nr_of_completed_instances >= nr_of_instances,
+                'is_complete': nr_of_completed_instances >= (nr_of_instances if nr_of_instances > 0 else len(assignee_list)),
                 'assignee_list': assignee_list
             }
             
@@ -2219,93 +2175,6 @@ class CamundaClient:
             if hasattr(e, 'response') and e.response is not None:
                 logger.error(f"Детали ошибки: {e.response.text}")
             return None
-    
-    def diagnose_history_issue(self, task_id: str) -> Dict[str, Any]:
-        """
-        Диагностирует проблему с историей задач
-        
-        Args:
-            task_id: ID задачи для диагностики
-            
-        Returns:
-            Словарь с результатами диагностики
-        """
-        diagnosis = {
-            'task_id': task_id,
-            'active_task_found': False,
-            'history_task_found': False,
-            'process_instance_id': None,
-            'process_history_found': False,
-            'all_history_tasks': [],
-            'errors': []
-        }
-        
-        try:
-            # 1. Проверяем активную задачу
-            try:
-                active_task = self.get_task_by_id(task_id)
-                if active_task:
-                    diagnosis['active_task_found'] = True
-                    diagnosis['process_instance_id'] = active_task.process_instance_id
-                    logger.info(f"Активная задача {task_id} найдена, процесс: {active_task.process_instance_id}")
-            except Exception as e:
-                diagnosis['errors'].append(f"Ошибка при получении активной задачи: {e}")
-            
-            # 2. Проверяем историческую задачу
-            try:
-                history_task = self.get_history_task_by_id(task_id)
-                if history_task:
-                    diagnosis['history_task_found'] = True
-                    diagnosis['process_instance_id'] = history_task.process_instance_id
-                    logger.info(f"Историческая задача {task_id} найдена, процесс: {history_task.process_instance_id}")
-            except Exception as e:
-                diagnosis['errors'].append(f"Ошибка при получении исторической задачи: {e}")
-            
-            # 3. Если есть process_instance_id, проверяем историю процесса
-            if diagnosis['process_instance_id']:
-                try:
-                    process_history = self.get_history_process_instance_by_id(diagnosis['process_instance_id'])
-                    if process_history:
-                        diagnosis['process_history_found'] = True
-                        logger.info(f"История процесса {diagnosis['process_instance_id']} найдена")
-                    else:
-                        logger.warning(f"История процесса {diagnosis['process_instance_id']} не найдена")
-                except Exception as e:
-                    diagnosis['errors'].append(f"Ошибка при получении истории процесса: {e}")
-                
-                # 4. Получаем все исторические задачи для процесса
-                try:
-                    endpoint = f'history/task?processInstanceId={diagnosis["process_instance_id"]}'
-                    response = self._make_request('GET', endpoint)
-                    response.raise_for_status()
-                    diagnosis['all_history_tasks'] = response.json()
-                    logger.info(f"Найдено {len(diagnosis['all_history_tasks'])} исторических задач для процесса {diagnosis['process_instance_id']}")
-                except Exception as e:
-                    diagnosis['errors'].append(f"Ошибка при получении всех исторических задач: {e}")
-            
-            # 5. Проверяем общую историю задач
-            try:
-                endpoint = 'history/task'
-                response = self._make_request('GET', endpoint)
-                response.raise_for_status()
-                all_tasks = response.json()
-                logger.info(f"Всего исторических задач в системе: {len(all_tasks)}")
-                
-                # Ищем нашу задачу среди всех
-                for task in all_tasks:
-                    if task.get('id') == task_id:
-                        diagnosis['history_task_found'] = True
-                        diagnosis['process_instance_id'] = task.get('processInstanceId')
-                        logger.info(f"Задача {task_id} найдена в общей истории")
-                        break
-            except Exception as e:
-                diagnosis['errors'].append(f"Ошибка при получении общей истории задач: {e}")
-            
-            return diagnosis
-            
-        except Exception as e:
-            diagnosis['errors'].append(f"Общая ошибка диагностики: {e}")
-            return diagnosis
 
     def get_completed_tasks_grouped(self, assignee: str = None) -> List[Union[CamundaHistoryTask, 'GroupedHistoryTask']]:
         """
@@ -2555,6 +2424,8 @@ class CamundaClient:
         """
         Получает процессы, созданные конкретным пользователем
         
+        Использует оптимизированный подход с фильтрацией через Camunda REST API
+        
         Args:
             creator_username: Имя пользователя-создателя
             active_only: Получать только активные процессы
@@ -2563,29 +2434,117 @@ class CamundaClient:
             Список процессов
         """
         try:
-            # Получаем все процессы
-            endpoint = 'process-instance' if active_only else 'history/process-instance'
-            response = self._make_request('GET', endpoint)
-            response.raise_for_status()
+            logger.info(f"Поиск процессов создателя: {creator_username}, active_only: {active_only}")
             
-            all_processes = response.json()
-            
-            # Фильтруем по создателю
-            creator_processes = []
-            for process in all_processes:
-                process_id = process['id']
+            if active_only:
+                # Для активных процессов используем endpoint /process-instance
+                endpoint = 'process-instance'
                 
-                # Получаем переменные процесса
-                try:
-                    variables = self.get_process_instance_variables(process_id)
-                    process_creator = variables.get('processCreator', '')
+                # Получаем все активные процессы
+                response = self._make_request('GET', endpoint)
+                response.raise_for_status()
+                all_processes = response.json()
+                
+                logger.info(f"Найдено активных процессов всего: {len(all_processes)}")
+                
+                # Если процессов нет, возвращаем пустой список
+                if not all_processes:
+                    logger.info("Активных процессов не найдено")
+                    return []
+                
+                # Фильтруем по создателю, получая переменные только для нужных процессов
+                creator_processes = []
+                
+                # Оптимизация: проверяем переменные пакетами для уменьшения количества запросов
+                for process in all_processes:
+                    process_id = process['id']
                     
-                    if process_creator == creator_username:
-                        creator_processes.append(process)
-                except Exception as e:
-                    logger.warning(f"Не удалось получить переменные для процесса {process_id}: {e}")
-            
-            return creator_processes
+                    try:
+                        # Получаем только переменную processCreator, если она есть
+                        variables = self.get_process_instance_variables_by_name(
+                            process_id, 
+                            ['processCreator']
+                        )
+                        process_creator = variables.get('processCreator', '')
+                        
+                        logger.debug(f"Процесс {process_id}: processCreator = '{process_creator}', ищем '{creator_username}'")
+                        
+                        if process_creator == creator_username:
+                            logger.info(f"Найден процесс создателя: {process_id}")
+                            # Получаем расширенную информацию о процессе
+                            expanded_process = self.get_process_with_variables(process_id, is_active=True)
+                            if expanded_process:
+                                creator_processes.append(expanded_process)
+                            else:
+                                # Если не удалось получить расширенную информацию, добавляем базовую
+                                creator_processes.append(process)
+                        elif process_creator:
+                            logger.debug(f"Процесс {process_id} создан другим пользователем: '{process_creator}'")
+                        else:
+                            logger.debug(f"Процесс {process_id} не имеет переменной processCreator")
+                            
+                    except Exception as e:
+                        logger.warning(f"Не удалось получить переменные для процесса {process_id}: {e}")
+                
+                logger.info(f"Найдено процессов создателя '{creator_username}': {len(creator_processes)}")
+                return creator_processes
+                
+            else:
+                # Для исторических процессов используем более эффективный endpoint
+                # /history/variable-instance с фильтрацией по имени и значению переменной
+                endpoint = 'history/variable-instance'
+                params = {
+                    'variableName': 'processCreator',
+                    'variableValue': creator_username,
+                    'deserializeValues': 'true'
+                }
+                
+                try:
+                    response = self._make_request('GET', endpoint, params=params)
+                    response.raise_for_status()
+                    variable_instances = response.json()
+                    
+                    # Получаем уникальные ID процессов из переменных
+                    process_ids = set()
+                    for var_instance in variable_instances:
+                        process_instance_id = var_instance.get('processInstanceId')
+                        if process_instance_id:
+                            process_ids.add(process_instance_id)
+                    
+                    if not process_ids:
+                        logger.info("Завершенных процессов создателя не найдено")
+                        return []
+                    
+                    # Получаем информацию о процессах по их ID и ПРОВЕРЯЕМ, ЧТО ОНИ ЗАВЕРШЕНЫ
+                    creator_processes = []
+                    for process_id in process_ids:
+                        try:
+                            # Получаем информацию о процессе из истории
+                            history_endpoint = f'history/process-instance/{process_id}'
+                            process_response = self._make_request('GET', history_endpoint)
+                            process_response.raise_for_status()
+                            process_data = process_response.json()
+                            
+                            # ВАЖНО: Проверяем, что процесс действительно завершен (имеет endTime)
+                            if process_data and process_data.get('endTime'):
+                                # Получаем расширенную информацию о процессе
+                                expanded_process = self.get_process_with_variables(process_id, is_active=False)
+                                if expanded_process:
+                                    creator_processes.append(expanded_process)
+                                else:
+                                    creator_processes.append(process_data)
+                            else:
+                                # Процесс еще активен, пропускаем его (он будет в списке активных)
+                                logger.debug(f"Процесс {process_id} еще активен (нет endTime), пропускаем в завершенных")
+                        except Exception as e:
+                            logger.warning(f"Не удалось получить информацию о процессе {process_id}: {e}")
+                    
+                    logger.info(f"Найдено завершенных процессов создателя '{creator_username}': {len(creator_processes)}")
+                    return creator_processes
+                    
+                except requests.RequestException as e:
+                    logger.error(f"Ошибка при получении исторических процессов создателя {creator_username}: {e}")
+                    return []
             
         except requests.RequestException as e:
             logger.error(f"Ошибка при получении процессов создателя {creator_username}: {e}")
@@ -2593,7 +2552,8 @@ class CamundaClient:
 
     def start_document_signing_process(self, document_id: str, document_name: str, 
                                     signer_list: List[str], business_key: str = None,
-                                    role_names: List[str] = None) -> Optional[str]:
+                                    role_names: List[str] = None,
+                                    creator_username: Optional[str] = None) -> Optional[str]:
         """Запускает процесс подписания документа
         
         Args:
@@ -2629,7 +2589,16 @@ class CamundaClient:
                 'signatures': {
                     'value': '{}',
                     'type': 'String'
-                }
+                },
+                # Информация о создателе
+                'processCreator': {
+                    'value': creator_username or 'system',
+                    'type': 'String'
+                },
+                'creatorName': {
+                    'value': creator_username or 'Система',
+                    'type': 'String'
+                },
             }
             
             data = {
@@ -2701,6 +2670,64 @@ class CamundaClient:
         except Exception as e:
             logger.error(f"Ошибка при завершении задачи подписания: {e}")
             return False
+
+    def get_process_with_variables(self, process_id: str, is_active: bool = True) -> Dict[str, Any]:
+        """
+        Получает процесс вместе с его переменными для отображения
+        
+        Args:
+            process_id: ID процесса
+            is_active: Активен ли процесс
+            
+        Returns:
+            Словарь с информацией о процессе и его переменными
+        """
+        try:
+            # Получаем базовую информацию о процессе
+            if is_active:
+                endpoint = f'process-instance/{process_id}'
+                response = self._make_request('GET', endpoint)
+                response.raise_for_status()
+                process_data = response.json()
+                
+                # Получаем переменные процесса
+                process_variables = self.get_process_instance_variables_by_name(
+                    process_id,
+                    ['taskName', 'taskDescription', 'documentName', 'assigneeList', 
+                     'totalUsers', 'completedTasks', 'processNotes', 'dueDate',
+                     'processCreator', 'creatorName']
+                )
+            else:
+                # Для исторических процессов
+                endpoint = f'history/process-instance/{process_id}'
+                response = self._make_request('GET', endpoint)
+                response.raise_for_status()
+                process_data = response.json()
+                
+                # Получаем исторические переменные
+                process_variables = self.get_history_process_instance_variables_by_name(
+                    process_id,
+                    ['taskName', 'taskDescription', 'documentName', 'assigneeList',
+                     'totalUsers', 'completedTasks', 'processNotes', 'dueDate',
+                     'processCreator', 'creatorName']
+                )
+            
+            # Добавляем переменные к данным процесса
+            process_data['variables'] = process_variables
+            
+            # Для активных процессов получаем прогресс, если это Multi-Instance
+            if is_active:
+                try:
+                    progress_info = self.get_multi_instance_task_progress(process_id)
+                    process_data['progress'] = progress_info
+                except:
+                    process_data['progress'] = None
+            
+            return process_data
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении процесса {process_id} с переменными: {e}")
+            return {}
 
 
 def create_camunda_client() -> CamundaClient:
