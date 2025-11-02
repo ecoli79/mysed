@@ -249,7 +249,7 @@ def create_process_card(process, is_active=True, details_container=None):
                 
                 # Дедлайн (если есть) - теперь отформатирован
                 if due_date:
-                    ui.label(f'Срок выполнения: {due_date}').classes('text-sm text-orange-600')
+                    ui.label(f'Срок исполнения: {due_date}').classes('text-sm text-orange-600')
                 
                 # Бизнес-ключ
                 if process.get('businessKey'):
@@ -342,7 +342,7 @@ def show_process_details(process_id, details_container):
                 if due_date:
                     from utils.date_utils import format_date_russian
                     formatted_due = format_date_russian(due_date)
-                    ui.label(f'Дедлайн: {formatted_due}').classes('text-sm text-orange-600')
+                    ui.label(f'Срок исполнения: {formatted_due}').classes('text-sm text-orange-600')
                 
                 # Бизнес-ключ
                 if process_info.get('businessKey'):

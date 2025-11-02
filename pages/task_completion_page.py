@@ -26,6 +26,7 @@ from reportlab.lib.pagesizes import A4
 import io
 import os
 from services.signature_manager import SignatureManager
+import tempfile
 
 
 logger = logging.getLogger(__name__)
@@ -2216,86 +2217,6 @@ def add_additional_signature_to_pdf(existing_pdf_path, signature_base64, signer_
         logger.error(f"Ошибка обработки PDF: {e}")
         ui.notify(f'Ошибка обработки PDF: {str(e)}', type='error')
 
-
-# def save_signature_to_file(signature_base64, task_name):
-#     """Сохраняет подписанный PDF документ в файл"""
-#     try:
-#         import base64
-#         from datetime import datetime
-        
-#         # Получаем исходный документ из глобальной переменной
-#         global _document_for_signing
-#         if not _document_for_signing:
-#             ui.notify('Исходный документ не найден', type='error')
-#             return
-        
-#         original_document_base64 = _document_for_signing.get('base64', '')
-#         if not original_document_base64:
-#             ui.notify('Содержимое исходного документа не найдено', type='error')
-#             return
-        
-#         # Создаем имя файла для подписанного PDF
-#         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-#         filename = f"signed_{task_name}_{timestamp}.pdf"
-        
-#         # Используем JavaScript для создания подписанного PDF через CryptoPro
-#         ui.run_javascript(f'''
-#             console.log('=== СОЗДАНИЕ ПОДПИСАННОГО PDF ===');
-#             console.log('Размер исходного документа:', `{original_document_base64}`.length);
-#             console.log('Размер подписи:', `{signature_base64}`.length);
-            
-#             if (typeof window.cadesplugin !== 'undefined') {{
-#                 console.log('cadesplugin найден, создаем подписанный PDF...');
-                
-#                 window.cadesplugin.async_spawn(function*() {{
-#                     try {{
-#                         console.log('=== ШАГ 1: Создаем объект для подписанных данных ===');
-#                         const oSignedData = yield window.cadesplugin.CreateObjectAsync("CAdESCOM.CadesSignedData");
-#                         console.log('✅ Объект создан');
-                        
-#                         console.log('=== ШАГ 2: Устанавливаем исходный документ ===');
-#                         yield oSignedData.propset_ContentEncoding(window.cadesplugin.CADESCOM_BASE64_TO_BINARY);
-#                         yield oSignedData.propset_Content(`{original_document_base64}`);
-#                         console.log('✅ Исходный документ установлен');
-                        
-#                         console.log('=== ШАГ 3: Создаем подписанный документ ===');
-#                         // Создаем подписанный документ с встроенной подписью
-#                         const signedDocument = yield oSignedData.SignCades(null, window.cadesplugin.CADESCOM_CADES_BES, true);
-#                         console.log('✅ Подписанный документ создан');
-                        
-#                         console.log('=== ШАГ 4: Отправляем результат в Python ===');
-#                         window.nicegui_handle_event('signed_document_created', {{
-#                             signedDocument: signedDocument,
-#                             filename: `{filename}`,
-#                             timestamp: new Date().toISOString()
-#                         }});
-                        
-#                     }} catch (e) {{
-#                         console.error('=== ОШИБКА СОЗДАНИЯ ПОДПИСАННОГО PDF ===');
-#                         console.error('Ошибка:', e);
-                        
-#                         window.nicegui_handle_event('signed_document_error', {{
-#                             error: e.message || 'Ошибка при создании подписанного PDF',
-#                             timestamp: new Date().toISOString()
-#                         }});
-#                     }}
-#                 }});
-                
-#             }} else {{
-#                 console.error('❌ cadesplugin не найден');
-#                 window.nicegui_handle_event('signed_document_error', {{
-#                     error: 'cadesplugin не инициализирован',
-#                     timestamp: new Date().toISOString()
-#                 }});
-#             }}
-#         ''')
-        
-#         ui.notify('Создание подписанного PDF...', type='info')
-        
-#     except Exception as e:
-#         logger.error(f"Ошибка создания подписанного PDF: {e}")
-#         ui.notify(f'Ошибка создания подписанного PDF: {str(e)}', type='error')
-
 def save_signed_pdf_to_file():
     """Сохраняет подписанный PDF в файл"""
     try:
@@ -2386,7 +2307,7 @@ def load_and_display_document(document_id: str, container: ui.column):
                 ui.button(
                     'Открыть документ в Mayan EDMS',
                     icon='open_in_new',
-                    on_click=lambda: ui.open(document_url)
+                    on_click=lambda url=document_url: ui.run_javascript(f'window.open("{url}", "_blank")')
                 ).classes('mb-4 bg-blue-500 text-white')
                 
                 # Отображаем содержимое документа
@@ -2800,14 +2721,69 @@ def show_task_details(task):
                     with ui.card().classes('p-4 bg-yellow-50 mb-4'):
                         ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
                         
+                        # Проверяем наличие ID документа для открытия в Mayan EDMS
+                        document_id = None
+                        document_name = None
+                        
                         for var_name, var_value in process_variables.items():
+                            # Извлекаем значение в зависимости от формата
                             if isinstance(var_value, dict) and 'value' in var_value:
-                                display_value = var_value['value']
-                                if isinstance(display_value, str) and len(display_value) > 100:
-                                    display_value = display_value[:100] + '...'
-                                ui.label(f'{var_name}: {display_value}').classes('text-sm mb-1')
+                                actual_value = var_value['value']
                             else:
-                                ui.label(f'{var_name}: {var_value}').classes('text-sm mb-1')
+                                actual_value = var_value
+                            
+                            # Извлекаем documentId или mayanDocumentId
+                            if var_name in ['documentId', 'mayanDocumentId']:
+                                document_id = actual_value
+                            elif var_name == 'documentName':
+                                document_name = actual_value
+                            
+                            # Отображаем переменную
+                            display_value = actual_value
+                            if isinstance(display_value, str) and len(display_value) > 100:
+                                display_value = display_value[:100] + '...'
+                            ui.label(f'{var_name}: {display_value}').classes('text-sm mb-1')
+                        
+                        # Добавляем кнопку для открытия документа в Mayan EDMS, если documentId найден
+                        if document_id:
+                            try:
+                                from services.mayan_connector import MayanClient
+                                mayan_client = MayanClient.create_with_session_user()
+                                
+                                # Преобразуем document_id в строку, если нужно
+                                doc_id_str = str(document_id).strip()
+                                if not doc_id_str:
+                                    raise ValueError("Document ID пустой")
+                                
+                                # Получаем URL документа
+                                document_url = mayan_client.get_document_file_url(doc_id_str)
+                                
+                                if document_url:
+                                    with ui.row().classes('w-full mt-3 gap-2'):
+                                        ui.button(
+                                            'Скачать документ',
+                                            icon='open_in_new',
+                                            on_click=lambda doc_id=doc_id_str, doc_name=document_name: download_document_from_task(doc_id, doc_name)
+                                        ).classes('bg-green-500 text-white')
+                                        
+                                        # Добавляем кнопку для просмотра, если есть preview URL
+                                        preview_url = mayan_client.get_document_preview_url(doc_id_str)
+                                        if preview_url:
+                                            ui.button(
+                                                'Просмотр документа',
+                                                icon='visibility',
+                                                on_click=lambda doc_id=doc_id_str: open_document_preview(doc_id)
+                                            ).classes('bg-blue-500 text-white')
+                                    
+                                    if document_name:
+                                        ui.label(f'Документ: {document_name}').classes('text-xs text-gray-600 mt-1')
+                                else:
+                                    ui.label(f'Не удалось получить URL документа (ID: {doc_id_str})').classes('text-xs text-orange-600 mt-1')
+                                    
+                            except Exception as e:
+                                logger.error(f"Ошибка при получении URL документа {document_id}: {e}", exc_info=True)
+                                ui.label(f'Ошибка при открытии документа: {str(e)}').classes('text-xs text-red-600 mt-1')
+                        
             except Exception as e:
                 logger.warning(f"Не удалось получить переменные процесса {task_details.process_instance_id}: {e}")
                 ui.label('Переменные процесса недоступны').classes('text-sm text-gray-500')
@@ -2920,3 +2896,71 @@ def format_variable_value(value):
             return value
     else:
         return str(value)
+
+def download_document_from_task(document_id: str, document_name: str = None):
+    """Скачивает документ из Mayan EDMS через безопасный прокси-подход"""
+    try:
+        from services.mayan_connector import MayanClient
+        import tempfile
+        import os
+        
+        mayan_client = MayanClient.create_with_session_user()
+        
+        # Получаем содержимое файла
+        file_content = mayan_client.get_document_file_content(str(document_id))
+        if not file_content:
+            ui.notify('Не удалось получить содержимое файла', type='error')
+            return
+        
+        # Получаем имя файла
+        if not document_name:
+            document_info = mayan_client.get_document_info_for_review(str(document_id))
+            if document_info:
+                filename = document_info.get('filename', f'document_{document_id}')
+            else:
+                filename = f'document_{document_id}'
+        else:
+            # Извлекаем имя файла из названия документа, если нужно
+            filename = document_name
+            if not filename.endswith(('.pdf', '.doc', '.docx', '.xls', '.xlsx')):
+                # Пробуем получить реальное имя файла
+                document_info = mayan_client.get_document_info_for_review(str(document_id))
+                if document_info and document_info.get('filename'):
+                    filename = document_info['filename']
+                else:
+                    filename = f'{document_name}.pdf'
+        
+        # Создаем временный файл для скачивания
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as temp_file:
+            temp_file.write(file_content)
+            temp_path = temp_file.name
+        
+        # Используем ui.download для безопасного скачивания
+        ui.download(temp_path, filename)
+        
+        # Удаляем временный файл через некоторое время
+        ui.timer(5.0, lambda path=temp_path: os.unlink(path) if os.path.exists(path) else None, once=True)
+        
+        ui.notify(f'Файл "{filename}" подготовлен для скачивания', type='positive')
+        
+    except Exception as e:
+        logger.error(f"Ошибка при скачивании документа {document_id}: {e}", exc_info=True)
+        ui.notify(f'Ошибка при скачивании: {str(e)}', type='error')
+
+def open_document_preview(document_id: str):
+    """Открывает предварительный просмотр документа"""
+    try:
+        from services.mayan_connector import MayanClient
+        
+        mayan_client = MayanClient.create_with_session_user()
+        preview_url = mayan_client.get_document_preview_url(str(document_id))
+        
+        if preview_url:
+            # Для просмотра используем window.open, так как это просмотр, а не скачивание
+            ui.run_javascript(f'window.open("{preview_url}", "_blank")')
+        else:
+            ui.notify('Предварительный просмотр недоступен', type='warning')
+            
+    except Exception as e:
+        logger.error(f"Ошибка при открытии просмотра документа {document_id}: {e}", exc_info=True)
+        ui.notify(f'Ошибка при открытии просмотра: {str(e)}', type='error')

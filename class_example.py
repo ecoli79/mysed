@@ -288,6 +288,12 @@ class ClassExample:
                         # Переменные процесса
                         ui.label('Переменные процесса:').classes('text-lg font-bold mb-2')
                         
+                        # Инициализируем переменные для процессов с документами ДО использования в лямбде
+                        # Это нужно, чтобы лямбда на кнопке "Запустить процесс" могла безопасно обращаться к этим переменным
+                        document_id_input = None
+                        document_name_input = None
+                        roles_select = None  # Инициализируем как None, будет переопределено в блоке if для DocumentSigningProcess
+                        
                         # Основные переменные
                         with ui.column().classes('w-full mb-4'):
                             ui.label('Основные параметры:').classes('font-bold mb-2')
@@ -322,21 +328,65 @@ class ClassExample:
 
                             if process_template_select.value and 'DocumentSigningProcess' in process_template_select.value:
                                 # Поля для подписания документов
+                                # Теперь document_id_input, document_name_input, roles_select уже инициализированы как None
+                                # и будут переопределены в этом блоке реальными виджетами
                                 ui.label('Параметры подписания:').classes('font-bold mb-2')
                                 
+                                # Секция выбора документа из Mayan EDMS
+                                selected_doc_label = ui.label('Документ не выбран').classes('text-sm text-gray-500 mb-2')
+                                
+                                with ui.column().classes('w-full mb-4 p-3 bg-blue-50 rounded border'):
+                                    ui.label('Выбор документа из Mayan EDMS:').classes('font-semibold mb-2')
+                                    
+                                    # Поиск документа
+                                    document_search_input = ui.input(
+                                        label='Поиск документа',
+                                        placeholder='Введите название документа для поиска...',
+                                        value=''
+                                    ).classes('w-full mb-2')
+                                    
+                                    # Добавляем обработчик Enter для поиска
+                                    def on_search_enter(e):
+                                        if e.args and e.args.get('key') == 'Enter':
+                                            search_and_display_documents_for_task(document_search_input.value)
+                                    
+                                    # Кнопки поиска
+                                    with ui.row().classes('w-full mb-2 gap-2'):
+                                        search_btn = ui.button(
+                                            'Поиск документов',
+                                            icon='search',
+                                            on_click=lambda: None  # Будет обновлено ниже
+                                        ).classes('bg-blue-500 text-white')
+                                        
+                                        refresh_btn = ui.button(
+                                            'Показать последние',
+                                            icon='refresh',
+                                            on_click=lambda: None  # Будет обновлено ниже
+                                        ).classes('bg-gray-500 text-white')
+                                        
+                                        reset_btn = ui.button(
+                                            'Сбросить поиск',
+                                            icon='clear',
+                                            on_click=lambda: None  # Будет обновлено ниже
+                                        ).classes('bg-orange-500 text-white')
+                                    
+                                    # Контейнер для результатов поиска
+                                    document_results_container = ui.column().classes('w-full max-h-64 overflow-y-auto border rounded p-2 bg-white')
+                                
+                                # Объявляем поля для document_id и document_name до функций
                                 document_id_input = ui.input(
                                     label='ID документа в Mayan EDMS',
-                                    placeholder='Введите ID документа',
+                                    placeholder='Заполнится автоматически при выборе документа',
                                     value=''
                                 ).classes('w-full mb-2')
                                 
                                 document_name_input = ui.input(
                                     label='Название документа',
-                                    placeholder='Введите название документа',
+                                    placeholder='Заполнится автоматически при выборе документа',
                                     value=''
                                 ).classes('w-full mb-2')
                                 
-                                # Добавляем выбор ролей для предоставления доступа
+                                # Добавляем выбор ролей для предоставления доступа к документу
                                 ui.label('Роли для предоставления доступа к документу:').classes('font-bold mb-2')
                                 
                                 # Получаем доступные роли из Mayan EDMS
@@ -357,7 +407,7 @@ class ClassExample:
                                     
                                     roles_select = ui.select(
                                         options=role_options,
-                                        label='Выберите роли (множественный выбор)',
+                                        label='Выберите роли (можно выбрать несколько)',
                                         multiple=True,
                                         value=[],
                                         with_input=True
@@ -368,13 +418,159 @@ class ClassExample:
                                         roles_select = None
                                     
                                 except Exception as e:
-                                    logger.error(f'Ошибка при загрузке ролей: {e}')
+                                    logger.error(f'Ошибка при загрузке ролей: {e}', exc_info=True)
                                     ui.label(f'Ошибка загрузки ролей: {str(e)}').classes('text-sm text-red-500 mb-2')
                                     roles_select = None
                                 
-                                # Обновляем значения при изменении
-                                # task_name_input.on('change', lambda e: document_id_input.set_value(e.args))
-                                # task_description_input.on('change', lambda e: document_name_input.set_value(e.args))
+                                # Информационное сообщение
+                                ui.label('Выберите роли, которым будет предоставлен доступ к документу для подписания').classes('text-xs text-gray-600 mb-2')
+                                
+                                # Определяем функции после объявления всех переменных
+                                def search_and_display_documents_for_task(query: str = ''):
+                                    """Ищет и отображает документы из Mayan EDMS для выбора"""
+                                    try:
+                                        # Если query не передан, берем из поля ввода
+                                        if not query and hasattr(document_search_input, 'value'):
+                                            query = document_search_input.value or ''
+                                        
+                                        document_results_container.clear()
+                                        
+                                        # Показываем индикатор загрузки
+                                        with document_results_container:
+                                            ui.label('Поиск документов...').classes('text-sm text-gray-600 text-center py-4')
+                                        
+                                        # Импортируем необходимые модули
+                                        from services.mayan_connector import MayanClient
+                                        
+                                        # Получаем клиент Mayan EDMS
+                                        mayan_client = MayanClient.create_with_session_user()
+                                        
+                                        # Выполняем поиск
+                                        query = query.strip() if query else ''
+                                        
+                                        if query:
+                                            logger.info(f"Выполняем поиск документов по запросу: '{query}'")
+                                            documents = mayan_client.search_documents(query, page=1, page_size=20)
+                                            logger.info(f"Найдено документов: {len(documents)}")
+                                        else:
+                                            # Если запрос пустой, показываем последние документы
+                                            logger.info("Запрос пустой, показываем последние документы")
+                                            documents = mayan_client.get_documents(page=1, page_size=20)
+                                        
+                                        # Очищаем контейнер перед показом результатов
+                                        document_results_container.clear()
+                                        
+                                        if not documents:
+                                            with document_results_container:
+                                                ui.label('Документы не найдены').classes('text-sm text-gray-500 text-center py-4')
+                                            return
+                                        
+                                        # Отображаем найденные документы
+                                        with document_results_container:
+                                            ui.label(f'Найдено документов: {len(documents)}').classes('text-sm font-semibold mb-2')
+                                            
+                                            for doc in documents:
+                                                with ui.card().classes('mb-2 p-3 cursor-pointer hover:bg-blue-50 border-l-4 border-blue-200 transition-colors'):
+                                                    with ui.row().classes('items-center w-full'):
+                                                        ui.icon('description').classes('text-blue-500 mr-2 text-xl')
+                                                        
+                                                        with ui.column().classes('flex-1'):
+                                                            ui.label(doc.label).classes('text-sm font-semibold')
+                                                            if hasattr(doc, 'file_latest_filename') and doc.file_latest_filename:
+                                                                ui.label(f'Файл: {doc.file_latest_filename}').classes('text-xs text-gray-600')
+                                                            if hasattr(doc, 'file_latest_size') and doc.file_latest_size:
+                                                                size_kb = doc.file_latest_size / 1024
+                                                                size_mb = size_kb / 1024
+                                                                if size_mb >= 1:
+                                                                    ui.label(f'Размер: {size_mb:.1f} МБ').classes('text-xs text-gray-600')
+                                                                else:
+                                                                    ui.label(f'Размер: {size_kb:.1f} КБ').classes('text-xs text-gray-600')
+                                                        
+                                                        ui.label(f'ID: {doc.document_id}').classes('text-xs text-gray-500 font-mono mr-2')
+                                                        
+                                                        # Кнопка выбора документа
+                                                        ui.button(
+                                                            'Выбрать',
+                                                            icon='check',
+                                                            on_click=lambda d=doc: select_document_for_task(d)
+                                                        ).classes('bg-green-500 text-white')
+                                        
+                                    except Exception as e:
+                                        logger.error(f"Ошибка при поиске документов: {e}", exc_info=True)
+                                        document_results_container.clear()
+                                        with document_results_container:
+                                            ui.label(f'Ошибка при поиске: {str(e)}').classes('text-sm text-red-600 text-center py-4')
+                                
+                                # Добавляем обработчик Enter для поля поиска (после определения функции)
+                                document_search_input.on('keydown.enter', lambda: search_and_display_documents_for_task(document_search_input.value))
+                                
+                                def select_document_for_task(doc):
+                                    """Выбирает документ и автоматически заполняет поля формы"""
+                                    try:
+                                        # Заполняем поля формы автоматически
+                                        document_id_input.value = str(doc.document_id)
+                                        document_name_input.value = doc.label
+                                        
+                                        # Обновляем метку выбранного документа
+                                        selected_doc_label.text = f'✓ Выбран: {doc.label} (ID: {doc.document_id})'
+                                        selected_doc_label.classes('text-sm text-green-600 font-semibold mb-2')
+                                        
+                                        # Показываем уведомление
+                                        ui.notify(f'Выбран документ: {doc.label} (ID: {doc.document_id})', type='positive')
+                                        
+                                        # Сворачиваем результаты поиска и показываем подтверждение
+                                        document_results_container.clear()
+                                        with document_results_container:
+                                            with ui.card().classes('p-3 bg-green-50 border-l-4 border-green-500'):
+                                                with ui.row().classes('items-center'):
+                                                    ui.icon('check_circle').classes('text-green-500 mr-2 text-xl')
+                                                    with ui.column().classes('flex-1'):
+                                                        ui.label(f'Выбран документ: {doc.label}').classes('text-sm font-semibold')
+                                                        ui.label(f'ID: {doc.document_id}').classes('text-xs text-gray-600')
+                                                        if hasattr(doc, 'file_latest_filename') and doc.file_latest_filename:
+                                                            ui.label(f'Файл: {doc.file_latest_filename}').classes('text-xs text-gray-600')
+                                                
+                                                # Кнопка для изменения выбора
+                                                ui.button(
+                                                    'Выбрать другой документ',
+                                                    icon='refresh',
+                                                    on_click=lambda: search_and_display_documents_for_task(document_search_input.value)
+                                                ).classes('mt-2 bg-blue-500 text-white')
+                                    
+                                    except Exception as e:
+                                        logger.error(f"Ошибка при выборе документа: {e}", exc_info=True)
+                                        ui.notify(f'Ошибка при выборе документа: {str(e)}', type='negative')
+                                
+                                def reset_search():
+                                    """Сбрасывает поиск и очищает все поля"""
+                                    try:
+                                        # Очищаем поле поиска
+                                        document_search_input.value = ''
+                                        
+                                        # Очищаем контейнер результатов
+                                        document_results_container.clear()
+                                        
+                                        # Сбрасываем выбранный документ
+                                        selected_doc_label.text = 'Документ не выбран'
+                                        selected_doc_label.classes('text-sm text-gray-500 mb-2')
+                                        
+                                        # Очищаем поля документа
+                                        document_id_input.value = ''
+                                        document_name_input.value = ''
+                                        
+                                        ui.notify('Поиск сброшен', type='info')
+                                    
+                                    except Exception as e:
+                                        logger.error(f"Ошибка при сбросе поиска: {e}", exc_info=True)
+                                        ui.notify(f'Ошибка при сбросе: {str(e)}', type='negative')
+                                
+                                # Обновляем обработчики кнопок
+                                search_btn.on_click(lambda: search_and_display_documents_for_task(document_search_input.value))
+                                
+                                # Для кнопки "Показать последние" передаем пустой запрос явно
+                                refresh_btn.on_click(lambda: search_and_display_documents_for_task(''))
+                                
+                                reset_btn.on_click(lambda: reset_search())
                             else:
                                 # Если это не процесс подписания, создаем пустые значения
                                 document_id_input = None
@@ -589,3 +785,7 @@ class ClassExample:
                 
                 # Загружаем шаблоны процессов при инициализации страницы с задержкой
                 ui.timer(2.0, lambda: load_process_templates(), once=True)
+                
+                # УДАЛИТЬ все функции отсюда до конца (строки 692-817)
+                # Функции уже определены внутри блока if process_template_select.value
+                # и используют замыкания для доступа к переменным

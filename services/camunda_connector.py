@@ -2614,7 +2614,7 @@ class CamundaClient:
                 process_id = result['id']
                 logger.info(f"Процесс подписания запущен: {process_id}")
                 
-                # Предоставляем доступ к документу выбранным ролям
+                # Предоставляем доступ к документу выбранным ролям (если указаны)
                 if role_names:
                     try:                    
                         logger.info(f'Предоставляем доступ к документу {document_id} ролям: {role_names}')
@@ -2627,11 +2627,13 @@ class CamundaClient:
                         if access_granted:
                             logger.info(f'Доступ к документу {document_id} успешно предоставлен ролям {role_names}')
                         else:
-                            logger.warning(f'Не удалось предоставить доступ к документу {document_id}')
+                            logger.warning(f'Не удалось предоставить доступ к документу {document_id} ролям')
                             
                     except Exception as e:
-                        logger.error(f'Ошибка при предоставлении доступа к документу: {e}')
+                        logger.error(f'Ошибка при предоставлении доступа к документу: {e}', exc_info=True)
                         # Не прерываем выполнение, т.к. процесс уже запущен
+                else:
+                    logger.warning(f'Роли не выбраны - доступ к документу {document_id} не будет предоставлен автоматически')
                 
                 return process_id
             else:
