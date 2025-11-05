@@ -160,7 +160,6 @@ async def handle_cryptopro_event(request: Request):
             logger.info(f"Certificate info keys: {certificate_info.keys() if certificate_info else 'None'}")
             
             # Сохраняем результат подписания в глобальной переменной
-            global _signature_result
             _signature_result = {
                 'signature': signature,
                 'certificate_info': certificate_info,
@@ -241,6 +240,23 @@ async def handle_cryptopro_event(request: Request):
                 "action": "signed_document_error",
                 "message": f"Ошибка создания подписанного PDF: {error}"
             }
+        
+        elif event_name == 'check_signature_result':
+            # Проверяем наличие результата подписания
+            if _signature_result:
+                return {
+                    "status": "success",
+                    "action": "check_signature_result",
+                    "has_result": True,
+                    "message": "Результат подписания найден"
+                }
+            else:
+                return {
+                    "status": "pending",
+                    "action": "check_signature_result",
+                    "has_result": False,
+                    "message": "Результат подписания еще не готов"
+                }
             
         return {"status": "success"}
         

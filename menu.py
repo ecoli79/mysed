@@ -18,11 +18,11 @@ from models import UserSession
 def menu(user: UserSession) -> None:
     links: List[Tuple[str, str]] = [
         ('Мои задачи', '/'),
+        ('Запустить новый процесс', '/task-assignment'),
         ('Завершение задач', '/task_completion'),
         ('Документы Mayan EDMS', '/mayan_documents'),
         ('Запущенные мной процессы', '/my_processes'),
         ('Управление шаблонами процессов', '/process_templates'),
-        ('Назначение задач', '/task-assignment'),
         ('Подписание документов', '/document_signing'),
     ]
     with ui.column().classes('gap-1'):

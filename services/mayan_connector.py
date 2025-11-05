@@ -704,7 +704,12 @@ class MayanClient:
 
     def _get_main_document_file(self, document_id: str) -> Optional[Dict[str, Any]]:
         """
-        Получает основной файл документа, исключая файлы подписей и метаданных
+        Получает основной файл документа по активной версии
+        
+        Алгоритм:
+        1. Получаем информацию о документе и извлекаем ID активной версии
+        2. Пробуем получить файлы напрямую из активной версии через /documents/{id}/versions/{version_id}/files/
+        3. Если не работает - используем fallback с фильтрацией
         
         Args:
             document_id: ID документа
@@ -712,58 +717,77 @@ class MayanClient:
         Returns:
             Информация о файле или None
         """
-        # Получаем список всех файлов документа
-        files_data = self.get_document_files(document_id, page=1, page_size=10)
-        if not files_data or not files_data.get('results'):
-            return None
-        # Исключаем файлы подписей и метаданные
-        exclude_patterns = ['.p7s', 'signature_metadata_']
-        main_files = []
-        
-        for file_info in files_data.get('results', []):
-            filename = file_info.get('filename', '')
-            # Пропускаем файлы подписей и метаданных
-            if any(pattern in filename for pattern in exclude_patterns):
-                logger.debug(f"Пропускаем файл подписи/метаданных: {filename}")
-                continue
-            main_files.append(file_info)
-        
-        if not main_files:
-            logger.warning(f"Документ {document_id} не содержит основных файлов (только подписи/метаданные)")
-            return None
-        
-        # Сортируем файлы по приоритету: PDF > изображения > офисные документы > остальные
-        def get_sort_key(file_info):
-            # ИСПРАВЛЕНИЕ: Обрабатываем случай, когда mimetype может быть None
-            mimetype = file_info.get('mimetype') or ''
-            if mimetype:
-                mimetype = str(mimetype).lower()
-            else:
-                mimetype = ''
-            priority = 0
-            if 'pdf' in mimetype:
-                priority = 3
-            elif 'image' in mimetype:
-                priority = 2
-            elif 'office' in mimetype or 'word' in mimetype or 'excel' in mimetype:
-                priority = 2
-            else:
-                priority = 1
+        try:
+            # Шаг 1: Получаем информацию о документе и извлекаем ID активной версии
+            logger.info(f"Получаем информацию о документе {document_id} для определения активной версии")
+            document_response = self._make_request('GET', f'documents/{document_id}/')
+            document_response.raise_for_status()
+            document_data = document_response.json()
             
-            # Сортируем по приоритету (убывание), затем по ID (возрастание - старые файлы первыми)
-            file_id = file_info.get('id', 0)
-            if isinstance(file_id, str):
-                try:
-                    file_id = int(file_id)
-                except:
-                    file_id = 0
-            return (-priority, file_id)
-        
-        main_files_sorted = sorted(main_files, key=get_sort_key)
-        main_file = main_files_sorted[0]
-        
-        logger.debug(f"Выбран основной файл документа {document_id}: {main_file.get('filename')} (MIME: {main_file.get('mimetype')})")
-        return main_file
+            # Извлекаем ID активной версии
+            version_active = document_data.get('version_active', {})
+            if not version_active:
+                logger.warning(f"Документ {document_id} не имеет активной версии")
+                return self._get_main_document_file_fallback(document_id)
+            
+            active_version_id = version_active.get('id')
+            if not active_version_id:
+                logger.warning(f"Активная версия документа {document_id} не имеет ID")
+                return self._get_main_document_file_fallback(document_id)
+            
+            logger.info(f"ID активной версии документа {document_id}: {active_version_id}")
+            
+            # Шаг 2: Пробуем получить файлы напрямую из активной версии
+            try:
+                logger.info(f"Пробуем получить файлы напрямую из активной версии {active_version_id}")
+                version_files_response = self._make_request('GET', f'documents/{document_id}/versions/{active_version_id}/files/')
+                version_files_response.raise_for_status()
+                version_files_data = version_files_response.json()
+                
+                version_files = version_files_data.get('results', [])
+                if version_files:
+                    logger.info(f"Найдено {len(version_files)} файлов в активной версии {active_version_id}")
+                    
+                    # Фильтруем файлы: исключаем метаданные и подписи
+                    main_files = []
+                    for file_info in version_files:
+                        filename = file_info.get('filename', '').lower()
+                        mimetype = (file_info.get('mimetype') or '').lower()
+                        
+                        # Пропускаем метаданные и подписи
+                        if (filename.endswith('.p7s') or 
+                            filename.endswith('.json') or
+                            'signature' in filename or
+                            'metadata' in filename or
+                            'application/json' in mimetype):
+                            logger.debug(f"Пропускаем файл метаданных/подписи: {file_info.get('filename')}")
+                            continue
+                        
+                        main_files.append(file_info)
+                    
+                    if main_files:
+                        # Приоритет: PDF > другие
+                        pdf_files = [f for f in main_files if 'pdf' in (f.get('mimetype') or '').lower() or f.get('filename', '').lower().endswith('.pdf')]
+                        if pdf_files:
+                            selected_file = pdf_files[0]
+                            logger.info(f"Выбран PDF файл из активной версии: {selected_file.get('filename')} (file_id: {selected_file.get('id')})")
+                            return selected_file
+                        else:
+                            selected_file = main_files[0]
+                            logger.info(f"Выбран основной файл из активной версии: {selected_file.get('filename')} (file_id: {selected_file.get('id')})")
+                            return selected_file
+                    else:
+                        logger.warning(f"Все файлы активной версии {active_version_id} являются метаданными/подписями")
+            except Exception as e:
+                logger.warning(f"Не удалось получить файлы напрямую из версии {active_version_id}: {e}")
+            
+            # Шаг 3: Fallback - используем старый метод с фильтрацией
+            logger.info(f"Используем fallback метод для поиска файла активной версии")
+            return self._get_main_document_file_fallback(document_id)
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении файла документа {document_id}: {e}", exc_info=True)
+            return self._get_main_document_file_fallback(document_id)
 
     def get_document_file_content(self, document_id: str) -> Optional[bytes]:
         """
@@ -782,8 +806,11 @@ class MayanClient:
         if not file_info:
             logger.warning(f"Документ {document_id} не найден или не имеет основных файлов")
             return None
+        
         file_id = file_info['id']
-        logger.info(f"Выбран основной файл: file_id={file_id}, имя={file_info.get('filename', 'Неизвестно')}")
+        filename = file_info.get('filename', 'Неизвестно')
+        mimetype = file_info.get('mimetype', 'Неизвестно')
+        logger.info(f"Выбран основной файл: file_id={file_id}, имя={filename}, MIME={mimetype}")
         
         # Используем правильный endpoint для скачивания файла
         endpoint = f'documents/{document_id}/files/{file_id}/download/'
@@ -799,12 +826,140 @@ class MayanClient:
                 logger.warning(f"Endpoint {endpoint} вернул HTML вместо файла")
                 return None
             
-            logger.info(f"Файл успешно скачан, размер: {len(response.content)} байт")
-            return response.content
+            content = response.content
+            
+            # КРИТИЧЕСКАЯ ПРОВЕРКА: Проверяем магические байты файла более тщательно
+            if len(content) < 4:
+                logger.warning(f"Скачанный файл слишком мал ({len(content)} байт)")
+                return None
+            
+            # Проверяем магические байты PDF: PDF файлы начинаются с %PDF
+            is_pdf = content[:4] == b'%PDF'
+            logger.info(f"Проверка магических байтов: PDF={is_pdf}, первые 4 байта: {content[:4]}")
+            
+            # Дополнительная проверка: если файл начинается с %PDF, проверяем, что это действительно PDF
+            if is_pdf:
+                # Проверяем больше байтов - PDF должен содержать структуру PDF
+                # Обычно после %PDF идет версия, например %PDF-1.4
+                if len(content) > 8:
+                    try:
+                        # Пробуем декодировать первые 50 байт как текст для проверки
+                        first_bytes_text = content[:50].decode('utf-8', errors='ignore')
+                        logger.info(f"Первые 50 символов файла: {first_bytes_text[:50]}")
+                        
+                        # Проверяем, что это не JSON, маскирующийся под PDF
+                        if first_bytes_text.strip().startswith('{') or first_bytes_text.strip().startswith('['):
+                            logger.error(f"ОШИБКА: Файл начинается с %PDF, но содержит JSON! file_id={file_id}")
+                            # Ищем альтернативный файл
+                            return self._find_alternative_pdf_file(document_id, file_id, content)
+                        
+                        # Проверяем, что это действительно PDF структура
+                        if '%PDF-' not in first_bytes_text and '%PDF' in first_bytes_text:
+                            # Просто %PDF без версии - возможно, подозрительно
+                            logger.warning(f"Файл начинается с %PDF, но не содержит версию PDF")
+                    except Exception as e:
+                        logger.debug(f"Ошибка при проверке первых байтов: {e}")
+            else:
+                # Файл не является PDF - проверяем, не JSON ли это
+                logger.warning(f"Файл не является PDF (первые байты: {content[:20]})")
+                
+                # Пробуем декодировать как текст и проверить на JSON
+                try:
+                    import json
+                    text_content = content.decode('utf-8')
+                    
+                    # Проверяем, является ли это валидным JSON
+                    try:
+                        json_data = json.loads(text_content)
+                        logger.error(f"ОШИБКА: Скачанный файл является JSON! file_id={file_id}, filename={filename}")
+                        logger.error(f"Размер JSON: {len(content)} байт")
+                        logger.error(f"Первые 500 символов: {text_content[:500]}")
+                        
+                        # Ищем альтернативный PDF файл
+                        return self._find_alternative_pdf_file(document_id, file_id, content)
+                    except json.JSONDecodeError:
+                        # Это не JSON
+                        logger.warning(f"Файл не является ни PDF, ни JSON")
+                except UnicodeDecodeError:
+                    # Файл не является текстовым
+                    logger.warning(f"Файл не является текстовым (не удалось декодировать как UTF-8)")
+            
+            # Файл прошел проверки - возвращаем
+            logger.info(f"✓ Файл принят, размер: {len(content)} байт, Content-Type: {content_type}")
+            return content
             
         except requests.RequestException as e:
             logger.error(f"Ошибка при скачивании файла через {endpoint}: {e}")
             return None
+
+    def _find_alternative_pdf_file(self, document_id: str, excluded_file_id: int, original_content: bytes) -> Optional[bytes]:
+        """
+        Ищет альтернативный PDF файл среди всех файлов документа
+        
+        Args:
+            document_id: ID документа
+            excluded_file_id: ID файла, который нужно исключить из поиска
+            original_content: Содержимое оригинального файла (для логирования)
+            
+        Returns:
+            Содержимое альтернативного PDF файла или None
+        """
+        logger.info(f"Ищем альтернативный PDF файл среди всех файлов документа {document_id}...")
+        files_data = self.get_document_files(document_id, page=1, page_size=100)
+        if not files_data or not files_data.get('results'):
+            logger.error(f"Не удалось получить список файлов для поиска альтернативного PDF")
+            return None
+        
+        pdf_found = False
+        for alt_file in files_data.get('results', []):
+            alt_file_id = alt_file.get('id')
+            alt_filename = alt_file.get('filename', '').lower()
+            alt_mimetype = (alt_file.get('mimetype') or '').lower()
+            
+            # Пропускаем JSON и метаданные, а также исключаемый файл
+            if (alt_filename.endswith('.json') or 
+                'application/json' in alt_mimetype or
+                'signature' in alt_filename or
+                'metadata' in alt_filename or
+                alt_filename.endswith('.p7s') or
+                alt_file_id == excluded_file_id):
+                continue
+            
+            # Если имя файла содержит .pdf - пробуем скачать его
+            if alt_filename.endswith('.pdf'):
+                logger.info(f"Найден потенциальный PDF файл: {alt_file.get('filename')} (file_id={alt_file_id})")
+                
+                # Скачиваем альтернативный файл
+                alt_endpoint = f'documents/{document_id}/files/{alt_file_id}/download/'
+                try:
+                    alt_response = self._make_request('GET', alt_endpoint)
+                    alt_response.raise_for_status()
+                    alt_content = alt_response.content
+                    
+                    # Проверяем магические байты PDF
+                    if len(alt_content) >= 4 and alt_content[:4] == b'%PDF':
+                        # Проверяем, что это не JSON
+                        try:
+                            alt_text = alt_content.decode('utf-8', errors='ignore')
+                            if not (alt_text.strip().startswith('{') or alt_text.strip().startswith('[')):
+                                logger.info(f"✓ Альтернативный файл является PDF! {alt_file.get('filename')}, размер: {len(alt_content)} байт")
+                                return alt_content
+                            else:
+                                # Это JSON, маскирующийся под PDF
+                                logger.warning(f"✗ Альтернативный файл {alt_file.get('filename')} также является JSON")
+                                continue
+                        except:
+                            # Не удалось декодировать как текст - вероятно, это бинарный PDF
+                            logger.info(f"✓ Альтернативный файл является PDF! {alt_file.get('filename')}, размер: {len(alt_content)} байт")
+                            return alt_content
+                    else:
+                        logger.warning(f"✗ Альтернативный файл {alt_file.get('filename')} не является PDF (первые байты: {alt_content[:20]})")
+                except Exception as e:
+                    logger.warning(f"Ошибка при скачивании альтернативного файла {alt_file_id}: {e}")
+                    continue
+        
+        logger.error(f"Не удалось найти альтернативный PDF файл для документа {document_id}")
+        return None
 
     def get_document_file_url(self, document_id: str) -> Optional[str]:
         """
@@ -2766,6 +2921,95 @@ class MayanClient:
         except Exception as e:
             logger.error(f"❌ MayanClient.create_default: ошибка создания клиента: {e}")
             raise
+
+    def _get_main_document_file_fallback(self, document_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fallback метод для получения основного файла документа (старый способ)
+        Используется, если не удалось получить активную версию или найти файл по version_id
+        
+        Args:
+            document_id: ID документа
+            
+        Returns:
+            Информация о файле или None
+        """
+        # Получаем список всех файлов документа
+        files_data = self.get_document_files(document_id, page=1, page_size=100)
+        if not files_data or not files_data.get('results'):
+            logger.warning(f"Fallback: не найдено файлов для документа {document_id}")
+            return None
+        
+        # Исключаем файлы подписей и метаданные (более строгая фильтрация)
+        exclude_patterns = ['.p7s', 'signature_metadata_']
+        main_files = []
+        
+        logger.info(f"Fallback: фильтруем файлы документа {document_id}")
+        
+        for file_info in files_data.get('results', []):
+            filename = file_info.get('filename', '')
+            filename_lower = filename.lower()
+            mimetype = (file_info.get('mimetype') or '').lower()
+            file_size = file_info.get('size', 0)
+            
+            logger.debug(f"Проверяем файл: {filename} (MIME: {mimetype}, размер: {file_size})")
+            
+            # Пропускаем файлы подписей (.p7s)
+            if filename_lower.endswith('.p7s'):
+                logger.debug(f"Пропускаем файл подписи .p7s: {filename}")
+                continue
+            
+            # Пропускаем все файлы, содержащие "signature" в имени
+            if 'signature' in filename_lower:
+                logger.debug(f"Пропускаем файл с 'signature' в имени: {filename}")
+                continue
+            
+            # Пропускаем все JSON файлы
+            if filename_lower.endswith('.json') or 'application/json' in mimetype:
+                logger.debug(f"Пропускаем JSON файл (не может быть основным документом): {filename}")
+                continue
+            
+            # Пропускаем файлы с "metadata" в имени
+            if 'metadata' in filename_lower:
+                logger.debug(f"Пропускаем файл с 'metadata' в имени: {filename}")
+                continue
+            
+            main_files.append(file_info)
+            logger.debug(f"Файл принят: {filename} (MIME: {mimetype})")
+        
+        logger.info(f"Fallback: после фильтрации осталось {len(main_files)} основных файлов")
+        
+        if not main_files:
+            logger.warning(f"Документ {document_id} не содержит основных файлов (только подписи/метаданные)")
+            return None
+        
+        # Сортируем файлы по приоритету
+        def get_sort_key(file_info):
+            mimetype = (file_info.get('mimetype') or '').lower()
+            priority = 0
+            if 'pdf' in mimetype:
+                priority = 4
+            elif 'image' in mimetype:
+                priority = 3
+            elif any(x in mimetype for x in ['word', 'excel', 'powerpoint', 'office', 'document']):
+                priority = 3
+            elif 'text' in mimetype:
+                priority = 2
+            else:
+                priority = 1
+            
+            file_id = file_info.get('id', 0)
+            if isinstance(file_id, str):
+                try:
+                    file_id = int(file_id)
+                except:
+                    file_id = 999999
+            return (-priority, file_id)
+        
+        main_files_sorted = sorted(main_files, key=get_sort_key)
+        main_file = main_files_sorted[0]
+        
+        logger.info(f"Выбран основной файл документа {document_id} (fallback): {main_file.get('filename')} (MIME: {main_file.get('mimetype')}, file_id: {main_file.get('id')})")
+        return main_file
 
 def get_mayan_client() -> MayanClient:
     """Получает клиент Mayan EDMS с учетными данными текущего пользователя"""

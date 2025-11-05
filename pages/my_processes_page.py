@@ -236,12 +236,12 @@ def create_process_card(process, is_active=True, details_container=None):
                     completed = progress_info.get('nr_of_completed_instances', 0)
                     total = progress_info.get('nr_of_instances', len(assignee_list) if assignee_list else 0)
                     if total > 0:
-                        progress_percent = (completed / total) * 100
-                        ui.label(f'Выполнено: {completed}/{total} ({progress_percent:.1f}%)').classes('text-sm font-medium text-blue-600')
+                        progress_percent = round((completed / total) * 100)
                         
-                        # Прогресс-бар
-                        with ui.linear_progress().classes('w-full h-2 mt-1 mb-2'):
-                            ui.linear_progress().value = progress_percent / 100
+                        # Прогресс-бар с текстом в одной строке
+                        with ui.row().classes('w-full items-center gap-2 my-2 mb-4'):
+                            ui.linear_progress(value=progress_percent / 100, show_value=False).classes('flex-1 h-4')
+                            ui.label(f'{completed}/{total} ({progress_percent}%)').classes('text-xs text-gray-600 whitespace-nowrap')
                 
                 # Описание задачи (если есть)
                 if task_description:
@@ -302,14 +302,19 @@ def show_process_details(process_id, details_container):
                 if progress_info:
                     completed = progress_info.get('nr_of_completed_instances', 0)
                     total = progress_info.get('nr_of_instances', 0)
-                    progress_percent = progress_info.get('progress_percent', 0)
+                    
+                    # Пересчитываем процент для точного отображения
+                    if total > 0:
+                        progress_percent = round((completed / total) * 100)
+                    else:
+                        progress_percent = round(progress_info.get('progress_percent', 0))
                     
                     ui.label('Прогресс выполнения:').classes('text-sm font-semibold mb-2')
-                    ui.label(f'{completed}/{total} ({progress_percent:.1f}%)').classes('text-sm mb-2')
                     
-                    # Прогресс-бар
-                    with ui.linear_progress().classes('w-full h-3 mb-4'):
-                        ui.linear_progress().value = progress_percent / 100
+                    # Прогресс-бар с текстом в одной строке
+                    with ui.row().classes('w-full items-center gap-2 my-2 mb-4'):
+                        ui.linear_progress(value=progress_percent / 100, show_value=False).classes('flex-1 h-4')
+                        ui.label(f'{completed}/{total} ({progress_percent}%)').classes('text-xs text-gray-600 whitespace-nowrap')
                     
                     # Статус пользователей
                     ui.label('Статус пользователей:').classes('text-sm font-semibold mb-2')

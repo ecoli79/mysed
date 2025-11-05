@@ -473,7 +473,8 @@ def show_grouped_task_details_in_tab(task):
                         
                         with ui.row().classes('items-center gap-2 mb-2'):
                             ui.icon(status_icon).classes(status_color)
-                            ui.label(f'Пользователь: {user_task.assignee}').classes('text-sm font-semibold')
+                            user_display_name = get_user_display_name(user_task.assignee)
+                            ui.label(f'{user_display_name}').classes('text-sm font-semibold')
                         
                         ui.label(f'ID задачи: {user_task.task_id}').classes('text-xs text-gray-500 mb-1')
                         ui.label(f'Начата: {user_task.start_time}').classes('text-xs mb-1')
@@ -644,7 +645,8 @@ def show_completed_task_details_in_tab(task):
                 ui.label(f'Название: {task_details.name}').classes('text-sm mb-2')
                 ui.label(f'ID задачи: {task_details.id}').classes('text-sm mb-2')
                 ui.label(f'ID процесса: {task_details.process_instance_id}').classes('text-sm mb-2')
-                ui.label(f'Исполнитель: {task_details.assignee or "Не назначен"}').classes('text-sm mb-2')
+                executor_display_name = get_user_display_name(task_details.assignee)
+                ui.label(f'Исполнитель: {executor_display_name}').classes('text-sm mb-2')
                 ui.label(f'Создана: {task_details.start_time}').classes('text-sm mb-2')
                 
                 if hasattr(task_details, 'end_time') and task_details.end_time:
@@ -680,7 +682,8 @@ def show_completed_task_details_in_tab(task):
                     
                     with ui.row().classes('items-center gap-2 mb-2'):
                         ui.icon(status_icon).classes(status_color)
-                        ui.label(f'Пользователь: {task_details.assignee or "Не назначен"}').classes('text-sm font-semibold')
+                        user_display_name = get_user_display_name(task_details.assignee)
+                        ui.label(f'Пользователь: {user_display_name}').classes('text-sm font-semibold')
                     
                     ui.label(f'ID задачи: {task_details.id}').classes('text-xs text-gray-500 mb-1')
                     ui.label(f'Начата: {task_details.start_time}').classes('text-xs mb-1')
@@ -1124,71 +1127,33 @@ def complete_signing_task(task):
                         data_to_sign.value,
                         signing_fields_container,
                         certificate_info_display,
-                        result_container,
-                        signature_info,
-                        signed_data_display
+                        result_container
                     )
                 ).classes('mb-4 bg-green-500 text-white')
-                ui.button(
-                    'Проверить результат подписания',
-                    icon='refresh',
-                    on_click=lambda: check_and_display_signature_result(signature_info, signed_data_display, result_container)
-                ).classes('mb-4 bg-blue-500 text-white')
+                # ui.button(
+                #     'Проверить результат подписания',
+                #     icon='refresh',
+                #     on_click=lambda: check_and_display_signature_result(signature_info, signed_data_display, result_container)
+                # ).classes('mb-4 bg-blue-500 text-white')
 
-            
             # Результат подписания (изначально скрыт)
             result_container = ui.column().classes('w-full mb-4')
             result_container.visible = False
             
             with result_container:
-                ui.label('Результат подписания:').classes('text-lg font-semibold mb-2 text-green-600')
+                ui.label('Документ успешно подписан!').classes('text-lg font-semibold mb-4 text-green-600')
                 
-                signature_info = ui.html('').classes('w-full mb-4 p-4 bg-green-50 rounded border border-green-200')
-                
-                signed_data_display = ui.textarea(
-                    label='Подпись (Base64)',
-                    value='',
-                    placeholder='Здесь будет отображена подпись после подписания...'
-                ).classes('w-full mb-4')
-                
-                with ui.row().classes('w-full gap-2'):
-                    ui.button(
-                        'Копировать подпись',
-                        icon='content_copy',
-                        on_click=lambda: copy_signature_to_clipboard(signed_data_display)
-                    ).classes('bg-blue-500 text-white')
-                    
-                    ui.button(
-                        'Проверить подпись',
-                        icon='verified',
-                        on_click=lambda: verify_signature(signed_data_display.value, signature_info)
-                    ).classes('bg-purple-500 text-white')
-                    
-                    ui.button(
-                        'Сохранить подписанный PDF',
-                        icon='save',
-                        on_click=lambda: save_signature_to_file(signed_data_display.value, document_name or task.name)
-                    ).classes('bg-orange-500 text-white')
-
-                    ui.button(
-                        'Проверить созданный PDF',
-                        icon='refresh',
-                        on_click=lambda: check_and_save_signed_pdf()
-                    ).classes('mb-4 bg-blue-500 text-white')
-                    
-                    ui.button(
-                        'Завершить задачу',
-                        icon='check',
-                        on_click=lambda: complete_signing_task_with_result(
-                            task,
-                            signature_info,
-                            signed_data_display,
-                            result_container,
-                            document_id,
-                            document_name,
-                            dialog
-                        )
-                    ).classes('bg-green-600 text-white')
+                # Кнопка завершения задачи
+                ui.button(
+                    'Завершить задачу',
+                    icon='check',
+                    on_click=lambda: complete_signing_task_with_result(
+                        task,
+                        document_id,
+                        document_name,
+                        dialog
+                    )
+                ).classes('bg-green-600 text-white')
             
             ui.button('ОТМЕНА', on_click=dialog.close).classes('bg-gray-500 text-white')
     
@@ -1251,59 +1216,32 @@ def sign_document(certificate_value, data_to_sign, signing_fields_container, cer
         logger.error(f"Ошибка при подписании документа: {e}")
         ui.notify(f'Ошибка при подписании: {str(e)}', type='error')
 
-def complete_signing_task_with_result(task, signature_info, signed_data_display, result_container, document_id, document_name, dialog):
+def complete_signing_task_with_result(task, document_id, document_name, dialog):
     '''Завершает задачу подписания с проверкой результата'''
     try:
-        # ИСПРАВЛЕНИЕ: Проверяем наличие данных подписи в UI элементе
-        # Если данные уже отображаются в UI, используем их
-        if signed_data_display.value and len(signed_data_display.value) > 100:
-            logger.info('Данные подписи найдены в UI элементе, завершаем задачу')
-            
-            # ДОБАВЛЯЕМ ЛОГИРОВАНИЕ
-            signature_result = api_router.get_signature_result()
-            # logger.info(f'Signature result from api_router: {signature_result}')
-            
-            # Получаем информацию о сертификате из результата
-            certificate_info = {}
-            if signature_result:
-                certificate_info = signature_result.get('certificate_info', {})
-                logger.info(f'Certificate info from signature_result: {certificate_info}')
-                if not certificate_info or certificate_info == {}:
-                    logger.warning('Certificate info пуст! Проверяем что в signature_result')
-                    logger.info(f'Полный signature_result: {signature_result}')
-            else:
-                logger.warning('Signature result is None или пустой')
-            
-            # Завершаем задачу с данными подписи
-            submit_signing_task_completion(
-                task, 
-                True,
-                signed_data_display.value,
-                certificate_info,
-                'Документ подписан',
-                dialog
-            )
-            return
+        # Получаем результат подписания из api_router
+        signature_result = api_router.get_signature_result()
         
-        # Если данных в UI нет, пытаемся получить из api_router
-        if not check_and_display_signature_result(signature_info, signed_data_display, result_container):
+        if not signature_result:
             ui.notify('Результат подписания не найден. Сначала подпишите документ.', type='warning')
             return
         
-        # ИСПРАВЛЕНИЕ: Получаем certificate_info из результата подписания
-        signature_result = api_router.get_signature_result()
-        logger.info(f'Signature result after check_and_display: {signature_result}')
+        # Извлекаем данные подписи
+        signature_data = signature_result.get('signature', '')
+        certificate_info = signature_result.get('certificate_info', {})
         
-        certificate_info = {}
-        if signature_result:
-            certificate_info = signature_result.get('certificate_info', {})
-            logger.info(f'Certificate info after check_and_display: {certificate_info}')
+        if not signature_data:
+            ui.notify('Данные подписи отсутствуют. Сначала подпишите документ.', type='warning')
+            return
         
-        # Теперь завершаем задачу с данными подписи
+        logger.info('Данные подписи получены из api_router, завершаем задачу')
+        logger.info(f'Certificate info: {certificate_info}')
+        
+        # Завершаем задачу с данными подписи
         submit_signing_task_completion(
             task, 
             True,
-            signed_data_display.value,
+            signature_data,
             certificate_info,
             'Документ подписан',
             dialog
@@ -1561,7 +1499,7 @@ def show_certificate_info(certificate_index: str, info_container: ui.html):
         logger.error(f"Ошибка при отображении информации о сертификате: {e}")
         info_container.content = f'<div style="color: red;">Ошибка: {str(e)}</div>'
 
-def sign_document_with_certificate(task, data_to_sign, signing_fields_container, certificate_info_display, result_container, signature_info, signed_data_display):
+def sign_document_with_certificate(task, data_to_sign, signing_fields_container, certificate_info_display, result_container):
     """Подписывает документ с использованием выбранного сертификата - ПОДПИСАНИЕ РЕАЛЬНОГО ДОКУМЕНТА"""
     try:
         selected_cert = api_router.get_selected_certificate()
@@ -1730,6 +1668,29 @@ def sign_document_with_certificate(task, data_to_sign, signing_fields_container,
         
         # Показываем индикатор загрузки
         ui.notify('Подписание документа...', type='info')
+        
+        # НОВОЕ: Автоматически проверяем результат подписания через короткую задержку
+        check_attempts = [0]  # Используем список для модификации внутри вложенной функции
+        max_attempts = 20  # Максимум 20 попыток (10 секунд)
+        
+        def auto_check_result():
+            """Автоматически проверяет результат подписания и показывает кнопку завершения"""
+            check_attempts[0] += 1
+            signature_result = api_router.get_signature_result()
+            if signature_result and signature_result.get('signature'):
+                # Показываем контейнер с кнопкой завершения
+                result_container.visible = True
+                ui.notify('Документ успешно подписан!', type='positive')
+                logger.info('Результат подписания получен, показываем кнопку завершения задачи')
+            elif check_attempts[0] < max_attempts:
+                # Продолжаем проверять каждые 500мс до получения результата
+                ui.timer(0.5, auto_check_result, once=True)
+            else:
+                logger.warning('Превышено максимальное количество попыток проверки результата подписания')
+                ui.notify('Не удалось получить результат подписания автоматически.', type='warning')
+        
+        # Начинаем автоматическую проверку через 1 секунду после подписания
+        ui.timer(1.0, auto_check_result, once=True)
         
     except Exception as e:
         logger.error(f"Ошибка подписания документа: {e}")
@@ -2906,29 +2867,52 @@ def download_document_from_task(document_id: str, document_name: str = None):
         
         mayan_client = MayanClient.create_with_session_user()
         
-        # Получаем содержимое файла
+        # Получаем содержимое файла И информацию о выбранном файле
         file_content = mayan_client.get_document_file_content(str(document_id))
         if not file_content:
             ui.notify('Не удалось получить содержимое файла', type='error')
             return
         
-        # Получаем имя файла
-        if not document_name:
-            document_info = mayan_client.get_document_info_for_review(str(document_id))
-            if document_info:
-                filename = document_info.get('filename', f'document_{document_id}')
-            else:
-                filename = f'document_{document_id}'
-        else:
-            # Извлекаем имя файла из названия документа, если нужно
+        # Получаем имя файла из выбранного файла (не из метаданных документа)
+        # Используем внутренний метод для получения информации о выбранном файле
+        file_info = mayan_client._get_main_document_file(str(document_id))
+        
+        if file_info and file_info.get('filename'):
+            # Используем имя файла из выбранного файла
+            filename = file_info.get('filename')
+            logger.info(f"Используем имя файла из выбранного файла: {filename}")
+        elif document_name:
+            # Если имя файла не найдено, используем document_name
             filename = document_name
-            if not filename.endswith(('.pdf', '.doc', '.docx', '.xls', '.xlsx')):
-                # Пробуем получить реальное имя файла
-                document_info = mayan_client.get_document_info_for_review(str(document_id))
-                if document_info and document_info.get('filename'):
-                    filename = document_info['filename']
+            # Убеждаемся, что есть правильное расширение
+            if not filename.endswith(('.pdf', '.doc', '.docx', '.xls', '.xlsx', '.txt')):
+                # Проверяем содержимое для определения типа
+                if file_content[:4] == b'%PDF':
+                    filename = f'{filename}.pdf' if not filename.endswith('.pdf') else filename
                 else:
-                    filename = f'{document_name}.pdf'
+                    filename = f'{filename}.pdf'  # По умолчанию PDF
+            logger.info(f"Используем document_name с расширением: {filename}")
+        else:
+            # Пробуем получить из document_info
+            document_info = mayan_client.get_document_info_for_review(str(document_id))
+            if document_info and document_info.get('filename'):
+                filename = document_info.get('filename')
+                # КРИТИЧЕСКАЯ ПРОВЕРКА: Если имя файла заканчивается на .json, но содержимое PDF
+                if filename.lower().endswith('.json') and file_content[:4] == b'%PDF':
+                    # Заменяем расширение на .pdf
+                    filename = filename.rsplit('.', 1)[0] + '.pdf'
+                    logger.warning(f"Исправлено расширение файла: {filename}")
+                logger.info(f"Используем имя файла из document_info: {filename}")
+            else:
+                filename = f'document_{document_id}.pdf'
+                logger.info(f"Используем имя файла по умолчанию: {filename}")
+        
+        # ФИНАЛЬНАЯ ПРОВЕРКА: Убеждаемся, что расширение соответствует содержимому
+        if file_content[:4] == b'%PDF' and not filename.lower().endswith('.pdf'):
+            filename = filename.rsplit('.', 1)[0] + '.pdf' if '.' in filename else filename + '.pdf'
+            logger.info(f"Исправлено расширение файла на .pdf: {filename}")
+        elif not file_content[:4] == b'%PDF' and filename.lower().endswith('.pdf'):
+            logger.warning(f"Файл имеет расширение .pdf, но содержимое не является PDF")
         
         # Создаем временный файл для скачивания
         with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as temp_file:
@@ -2964,3 +2948,31 @@ def open_document_preview(document_id: str):
     except Exception as e:
         logger.error(f"Ошибка при открытии просмотра документа {document_id}: {e}", exc_info=True)
         ui.notify(f'Ошибка при открытии просмотра: {str(e)}', type='error')
+
+def get_user_display_name(username: str) -> str:
+    """
+    Получает отформатированное имя пользователя из логина
+    
+    Args:
+        username: Логин пользователя
+        
+    Returns:
+        Строка с именем, фамилией и должностью или логин, если не найдено
+    """
+    if not username:
+        return "Не назначен"
+    
+    try:
+        ldap_auth = LDAPAuthenticator()
+        user_info = ldap_auth.get_user_by_login(username)
+        
+        if user_info:
+            display_parts = [user_info.givenName, user_info.sn]
+            if user_info.destription:
+                return ' '.join(filter(None, display_parts[:2])) + f' - {user_info.destription}'
+            return ' '.join(filter(None, display_parts[:2]))
+        else:
+            return username
+    except Exception as e:
+        logger.warning(f"Не удалось получить данные пользователя {username} из LDAP: {e}")
+        return username

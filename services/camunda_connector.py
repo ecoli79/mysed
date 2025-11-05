@@ -392,9 +392,20 @@ class CamundaClient:
             
             if active_only:
                 tasks = []
+                seen_task_ids = set()  # Дедупликация на уровне исходных данных из API
+                
                 for task_data in tasks_data:
+                    task_id = task_data['id']
+                    
+                    # Проверяем, не обрабатывали ли мы уже эту задачу
+                    if task_id in seen_task_ids:
+                        logger.warning(f"Обнаружен дубликат задачи с ID {task_id} в ответе API Camunda, пропускаем")
+                        continue
+                    
+                    seen_task_ids.add(task_id)
+                    
                     # Логируем полный ответ API для отладки
-                    logger.debug(f"Полный ответ API для задачи {task_data['id']}: {task_data}")
+                    logger.debug(f"Полный ответ API для задачи {task_id}: {task_data}")
                     
                     # Инициализируем значения по умолчанию
                     due_date = task_data.get('due')
@@ -404,7 +415,7 @@ class CamundaClient:
                     if fetch_variables:
                         try:
                             # Получаем переменные задачи
-                            task_variables = self.get_task_variables(task_data['id'])                        
+                            task_variables = self.get_task_variables(task_id)                        
                             # Также пытаемся получить переменные процесса
                             process_variables = self.get_process_instance_variables_by_name(
                                 task_data['processInstanceId'], 
@@ -423,14 +434,14 @@ class CamundaClient:
                                 description = task_variables['description']
                         except Exception as e:
                             # Логируем ошибку, но продолжаем обработку задачи
-                            logger.warning(f"Не удалось получить переменные для задачи {task_data['id']}: {e}")
+                            logger.warning(f"Не удалось получить переменные для задачи {task_id}: {e}")
                             # Используем значения по умолчанию из task_data
                             pass
                        
                     
                     # Создаем объект задачи
                     task = CamundaTask(
-                        id=task_data['id'],
+                        id=task_id,
                         name=task_data['name'],
                         assignee=task_data.get('assignee'),
                         start_time=task_data['created'],
@@ -454,6 +465,7 @@ class CamundaClient:
                     )
                     tasks.append(task)
                 
+                logger.info(f"Получено {len(tasks)} уникальных активных задач для пользователя {assignee} (из {len(tasks_data)} в ответе API)")
                 return tasks
             else:
                 history_tasks = []
@@ -1629,12 +1641,30 @@ class CamundaClient:
         # Получаем все задачи пользователя
         all_tasks = self.get_user_tasks(assignee, active_only, fetch_variables=True)
         
+        logger.info(f"Получено {len(all_tasks)} задач из get_user_tasks для пользователя {assignee}")
+        
         if not filter_completed:
-            return all_tasks
+            # Дедупликация по ID задачи даже без фильтрации
+            seen_task_ids = set()
+            unique_tasks = []
+            for task in all_tasks:
+                if task.id not in seen_task_ids:
+                    seen_task_ids.add(task.id)
+                    unique_tasks.append(task)
+                else:
+                    logger.warning(f"Обнаружен дубликат задачи с ID {task.id} в get_user_tasks_filtered, пропускаем")
+            logger.info(f"После дедупликации осталось {len(unique_tasks)} уникальных задач")
+            return unique_tasks
         
         filtered_tasks = []
+        seen_task_ids = set()  # Добавляем множество для отслеживания уже добавленных задач
         
         for task in all_tasks:
+            # Проверяем, не добавлена ли уже задача с таким ID
+            if task.id in seen_task_ids:
+                logger.warning(f"Обнаружен дубликат задачи с ID {task.id} в get_user_tasks_filtered, пропускаем")
+                continue
+            
             # Получаем переменные процесса для проверки статуса пользователя
             try:
                 process_variables = self.get_process_instance_variables(task.process_instance_id)
@@ -1644,16 +1674,21 @@ class CamundaClient:
                 if isinstance(user_completed, dict):
                     if user_completed.get(assignee, False):
                         # Пользователь уже завершил эту задачу, пропускаем
+                        logger.debug(f"Пользователь {assignee} уже завершил задачу {task.id}, пропускаем")
                         continue
                 
                 # Если пользователь не завершил задачу, добавляем её в результат
                 filtered_tasks.append(task)
+                seen_task_ids.add(task.id)  # Отмечаем, что задача уже добавлена
                 
             except Exception as e:
                 logger.warning(f"Не удалось проверить статус пользователя {assignee} для задачи {task.id}: {e}")
-                # В случае ошибки добавляем задачу (лучше показать лишнюю, чем скрыть нужную)
-                filtered_tasks.append(task)
+                # В случае ошибки добавляем задачу только если она еще не была добавлена
+                if task.id not in seen_task_ids:
+                    filtered_tasks.append(task)
+                    seen_task_ids.add(task.id)
         
+        logger.info(f"После фильтрации осталось {len(filtered_tasks)} задач для пользователя {assignee}")
         return filtered_tasks
 
     def get_task_progress(self, process_instance_id: str) -> Dict[str, Any]:
@@ -2055,17 +2090,18 @@ class CamundaClient:
                 except:
                     assignee_list = []
             
-            # Если assigneeList не найден в переменных процесса, пробуем получить из активных задач
+            # Если assigneeList не найден в переменных процесса, пробуем получить из истории задач
             if not assignee_list or len(assignee_list) == 0:
                 try:
-                    endpoint = f'task?processInstanceId={process_instance_id}'
+                    # Получаем все задачи из истории (включая завершенные)
+                    endpoint = f'history/task?processInstanceId={process_instance_id}'
                     response = self._make_request('GET', endpoint)
                     response.raise_for_status()
                     tasks = response.json()
-                    # Собираем уникальных пользователей из задач
+                    # Собираем уникальных пользователей из всех задач (включая завершенные)
                     assignee_list = list(set([task.get('assignee') for task in tasks if task.get('assignee')]))
                 except Exception as e:
-                    logger.warning(f"Не удалось получить список пользователей из задач: {e}")
+                    logger.warning(f"Не удалось получить список пользователей из истории задач: {e}")
             
             # Получаем статус пользователей
             user_completed = process_variables.get('userCompleted', {})
