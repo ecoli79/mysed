@@ -39,9 +39,14 @@ async def create_tasks_page(login: str):
     current_login = login
     tasks_grid = None
     tasks_details_grid = None
+    period_select = None  # Объявляем заранее
     
     async def refresh_tasks(show_finished: bool = False):
         """Обновляет список задач в зависимости от состояния checkbox"""
+        # Показываем/скрываем выбор периода
+        if period_select:
+            period_select.set_visibility(show_finished)
+        
         try:
             logger.info(f"Начинаем обновление задач для пользователя {current_login}, show_finished={show_finished}")
             
@@ -65,8 +70,27 @@ async def create_tasks_page(login: str):
             active_only = not show_finished
             logger.info(f"Получаем задачи для пользователя {current_login}: active_only={active_only}")
             
+            # Для завершенных задач добавляем ограничение по дате (последние 7 дней)
+            finished_after = None
+            max_results = 500  # Ограничение по количеству
+            
+            if show_finished:
+                from datetime import timedelta
+                # Используем выбранный период или 7 дней по умолчанию
+                days = period_select.value if period_select and period_select.value else 7
+                # Вычисляем дату N дней назад
+                days_ago = datetime.now(timezone.utc) - timedelta(days=days)
+                # Форматируем в ISO формат для Camunda API
+                finished_after = days_ago.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0000'
+                logger.info(f"Ограничение завершенных задач: после {finished_after}, максимум {max_results} задач")
+            
             # Получаем задачи
-            user_tasks = camunda_client.get_user_tasks(current_login, active_only=active_only)
+            user_tasks = camunda_client.get_user_tasks(
+                current_login, 
+                active_only=active_only,
+                finished_after=finished_after if show_finished else None,
+                max_results=max_results if show_finished else None
+            )
             logger.info(f"Получено {len(user_tasks)} задач от Camunda API")
             
             for task in user_tasks:
@@ -158,7 +182,25 @@ async def create_tasks_page(login: str):
         # Счетчик задач
         with ui.row().classes('w-full items-center justify-between'):
             tasks_count_label = ui.label('Загружаем задачи...').classes('text-lg mb-2')
-            ui.checkbox('Показать завершенные задачи', value=False, on_change=lambda e: refresh_tasks(e.value)).classes('mr-4')
+            finished_checkbox = ui.checkbox(
+                'Показать завершенные задачи', 
+                value=False,
+                on_change=lambda e: refresh_tasks(e.value)  # ВАЖНО: добавляем обработчик!
+            ).classes('mr-4')
+
+            # Добавляем выбор периода для завершенных задач (скрыт по умолчанию)
+            period_select = ui.select(
+                {
+                    7: 'Последние 7 дней',
+                    30: 'Последние 30 дней',
+                    90: 'Последние 90 дней',
+                    180: 'Последние 180 дней'
+                },
+                value=7,
+                label='Период',
+                on_change=lambda: refresh_tasks(finished_checkbox.value)  # Обновляем при изменении периода
+            ).classes('mr-4')
+            period_select.set_visibility(False)
 
         
         # Основная таблица задач

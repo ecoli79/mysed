@@ -91,6 +91,32 @@ def mayan_documents_page_handler() -> None:
     with theme.frame('Документы Mayan EDMS'):
         mayan_documents.content()
 
+# Страница поиска документов Mayan EDMS
+@ui.page('/mayan_documents_search')
+@require_auth
+def mayan_documents_search_page_handler() -> None:
+    user = get_current_user()
+    logger.info('Открыли страницу поиска документов Mayan EDMS', extra={
+        'component': 'mayan_documents_search',
+        'version': '1.0.0',
+        'user': user.username
+    })
+    with theme.frame('Поиск документов'):
+        mayan_documents.search_content()
+
+# Страница загрузки документов Mayan EDMS
+@ui.page('/mayan_documents_upload')
+@require_auth
+def mayan_documents_upload_page_handler() -> None:
+    user = get_current_user()
+    logger.info('Открыли страницу загрузки документов Mayan EDMS', extra={
+        'component': 'mayan_documents_upload',
+        'version': '1.0.0',
+        'user': user.username
+    })
+    with theme.frame('Загрузка документов'):
+        mayan_documents.upload_content()
+
 # Страница только для администраторов
 @ui.page('/admin')
 @require_auth

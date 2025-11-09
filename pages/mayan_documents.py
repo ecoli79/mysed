@@ -4,8 +4,7 @@ from services.access_types import AccessTypeManager, AccessType
 from services.document_access_manager import document_access_manager
 from auth.middleware import get_current_user
 from config.settings import config
-from datetime import datetime
-import logging
+from datetime import datetime, date
 from typing import Optional, List, Dict, Any, Protocol
 from dataclasses import dataclass
 from enum import Enum
@@ -19,6 +18,7 @@ import tempfile
 import os
 import base64
 from components.loading_indicator import LoadingIndicator, with_loading
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -726,13 +726,13 @@ def load_recent_documents():
         with _recent_documents_container:
             ui.label(f'Ошибка при загрузке документов: {str(e)}').classes('text-red-500 text-center py-8')
 
-def search_documents(query: str, tabs_widget=None, search_tab_widget=None):
+def search_documents(query: str):
     """Выполняет поиск документов"""
     global _search_results_container
     
-    # Переключаем на таб поиска, если он был передан
-    if tabs_widget and search_tab_widget:
-        tabs_widget.value = search_tab_widget
+    # Убираем логику переключения табов, так как теперь это отдельная страница
+    # if tabs_widget and search_tab_widget:
+    #     tabs_widget.value = search_tab_widget
     
     if not query.strip():
         if _search_results_container:
@@ -1277,60 +1277,251 @@ def show_document_access_info(document: MayanDocument):
     dialog.open()
 
 def content() -> None:
-    """Основная страница работы с документами Mayan EDMS"""
-    global _recent_documents_container, _search_results_container, _upload_form_container
+    """Основная страница работы с документами Mayan EDMS - кабинеты с документами"""
+    global _recent_documents_container
     
     logger.info("Открыта страница работы с документами Mayan EDMS")
     
-    # # Заголовок страницы
-    # ui.label('Документы Mayan EDMS').classes('text-2xl font-bold mb-6')
+    # Секция с документами
+    with ui.row().classes('w-full mb-4'):
+        ui.label('Документы по кабинетам').classes('text-lg font-semibold')
+        ui.button('Обновить', icon='refresh', on_click=load_documents_by_cabinets).classes('ml-auto')
     
-    # # Статус подключения
-    # connection_status_label = ui.label('Проверка подключения...').classes('text-sm mb-4')
+    _recent_documents_container = ui.column().classes('w-full')
+    # Загружаем документы только после создания контейнера
+    ui.timer(0.1, load_documents_by_cabinets, once=True)
+
+def load_documents_by_cabinets():
+    """Загружает документы, сгруппированные по кабинетам"""
+    global _recent_documents_container
     
-    # # Проверяем подключение при загрузке страницы
-    # if check_connection():
-    #     connection_status_label.text = 'Подключение к серверу установлено'
-    #     connection_status_label.classes('text-green-600')
-    # else:
-    #     connection_status_label.text = f'Нет подключения к серверу {config.mayan_url}'
-    #     connection_status_label.classes('text-red-600')
-    #     if _auth_error:
-    #         ui.label(f'Ошибка авторизации: {_auth_error}').classes('text-sm text-red-500 mb-2')
+    if _recent_documents_container:
+        _recent_documents_container.clear()
     
-    # Создаем табы
-    with ui.tabs().classes('w-full') as tabs:
-        recent_tab = ui.tab('Последние документы')
-        search_tab = ui.tab('Поиск документов')
-        upload_tab = ui.tab('Загрузка документов')
+    # Проверяем подключение
+    if not check_connection():
+        with _recent_documents_container:
+            ui.label('Нет подключения к серверу Mayan EDMS').classes('text-red-500 text-center py-8')
+            if _auth_error:
+                ui.label(f'Ошибка: {_auth_error}').classes('text-sm text-gray-500 text-center')
+            ui.label(f'Проверьте настройки подключения к серверу: {config.mayan_url}').classes('text-sm text-gray-500 text-center')
+        return
     
-    with ui.tab_panels(tabs, value=recent_tab).classes('w-full'):
-        # Таб с последними документами
-        with ui.tab_panel(recent_tab):
-            with ui.row().classes('w-full mb-4'):
-                ui.label('Последние 10 документов').classes('text-lg font-semibold')
-                ui.button('Обновить', icon='refresh', on_click=load_recent_documents).classes('ml-auto')
-            
-            _recent_documents_container = ui.column().classes('w-full')
-            # Загружаем документы только после создания контейнера
-            ui.timer(0.1, load_recent_documents, once=True)
+    try:
+        client = get_mayan_client()
         
-        # Таб поиска документов
-        with ui.tab_panel(search_tab):
-            ui.label('Поиск документов').classes('text-lg font-semibold mb-4')
-            
-            with ui.row().classes('w-full mb-4'):
-                search_input = ui.input('Поисковый запрос', placeholder='Введите название документа для поиска').classes('flex-1')
-                ui.button('Поиск', icon='search', on_click=lambda: search_documents(search_input.value)).classes('ml-2')
-            
-            _search_results_container = ui.column().classes('w-full')
-            with _search_results_container:
-                ui.label('Введите поисковый запрос для начала поиска').classes('text-gray-500 text-center py-8')
+        # Получаем список кабинетов
+        logger.info("Загружаем список кабинетов...")
+        cabinets = client.get_cabinets()
+        logger.info(f"Получено кабинетов: {len(cabinets)}")
         
-        # Таб загрузки документов
-        with ui.tab_panel(upload_tab):
-            _upload_form_container = ui.column().classes('w-full')
-            upload_document()
+        if not cabinets:
+            with _recent_documents_container:
+                ui.label('Кабинеты не найдены').classes('text-gray-500 text-center py-8')
+            return
+        
+        # Создаем словарь кабинетов по ID для быстрого доступа
+        cabinets_dict = {cab.get('id'): cab for cab in cabinets}
+        
+        # Находим корневые кабинеты (без parent_id)
+        root_cabinets = [cab for cab in cabinets if not cab.get('parent_id')]
+        
+        def create_cabinet_tree(cabinet, level=0):
+            """Рекурсивно создает дерево кабинетов"""
+            cabinet_id = cabinet.get('id')
+            cabinet_label = cabinet.get('label', f'Кабинет {cabinet_id}')
+            cabinet_full_path = cabinet.get('full_path', cabinet_label)
+            
+            # Отступ для вложенных кабинетов
+            indent_class = f'ml-{level * 4}' if level > 0 else ''
+            
+            # Создаем заголовок с плейсхолдером для количества
+            cabinet_title = f"{cabinet_full_path} (…)"
+            
+            # Создаем разворачиваемую секцию для кабинета
+            with ui.expansion(cabinet_title, icon='folder').classes(f'w-full mb-2 {indent_class} bg-blue-50 text-lg font-medium') as expansion:
+                # Делаем иконку папки синей
+                expansion.props('icon-color="primary"')
+                # Если props не работает, используем CSS
+                expansion.style('--q-primary: #1976D2; color: #1976D2;')
+                
+                # Функция для обновления заголовка с количеством документов
+                def update_cabinet_title(count: int):
+                    """Обновляет заголовок кабинета с количеством документов"""
+                    try:
+                        new_title = f"{cabinet_full_path} ({count})"
+                        # Обновляем заголовок через JavaScript
+                        expansion.run_javascript(f'''
+                            const element = document.querySelector('[data-id="{expansion.id}"]');
+                            if (element) {{
+                                const header = element.querySelector('.q-expansion-item__header');
+                                if (header) {{
+                                    const label = header.querySelector('.q-expansion-item__header-content');
+                                    if (label) {{
+                                        label.textContent = "{new_title}";
+                                    }}
+                                }}
+                            }}
+                        ''')
+                    except Exception as e:
+                        logger.error(f"Ошибка при обновлении заголовка кабинета {cabinet_id}: {e}")
+                        # Альтернативный способ - через прямое обновление свойства
+                        try:
+                            expansion.props(f'label="{new_title}"')
+                        except:
+                            pass
+                
+                # Асинхронно загружаем количество документов
+                def load_documents_count():
+                    """Загружает количество документов в кабинете"""
+                    try:
+                        count = client.get_cabinet_documents_count(cabinet_id)
+                        update_cabinet_title(count)
+                    except Exception as e:
+                        logger.error(f"Ошибка при загрузке количества документов кабинета {cabinet_id}: {e}")
+                        # В случае ошибки показываем заголовок без количества
+                        update_cabinet_title(0)
+                
+                # Загружаем количество документов с небольшой задержкой, чтобы не блокировать UI
+                ui.timer(0.1, load_documents_count, once=True)
+                
+                # Функция для обновления стилей при разворачивании
+                def update_expansion_style(is_expanded):
+                    """Обновляет стили заголовка при разворачивании"""
+                    if is_expanded:
+                        expansion.style('--q-primary: #1565C0; color: #1565C0; font-weight: 600;')
+                    else:
+                        expansion.style('--q-primary: #1976D2; color: #1976D2; font-weight: 500;')
+                
+                # Контейнер для документов и подкабинетов
+                content_container = ui.column().classes('w-full mt-2')
+                
+                # Флаг для отслеживания, загружены ли уже документы
+                documents_loaded = False
+                
+                # Загружаем документы асинхронно при разворачивании
+                def load_cabinet_content():
+                    """Загружает документы и подкабинеты для конкретного кабинета"""
+                    nonlocal documents_loaded
+                    
+                    # Если документы уже загружены, не загружаем повторно
+                    if documents_loaded:
+                        return
+                    
+                    documents_loaded = True
+                    
+                    # Обновляем стиль заголовка при разворачивании
+                    update_expansion_style(True)
+                    
+                    try:
+                        content_container.clear()
+                        
+                        # Показываем индикатор загрузки
+                        with content_container:
+                            loading_label = ui.label('Загрузка...').classes('text-sm text-gray-500')
+                        
+                        # Получаем документы кабинета через специальный endpoint
+                        logger.info(f"Загружаем документы кабинета {cabinet_id} ({cabinet_label})...")
+                        documents = client.get_cabinet_documents(cabinet_id, page=1, page_size=100)
+                        logger.info(f"Получено документов для кабинета {cabinet_id}: {len(documents)}")
+                        
+                        # Находим подкабинеты
+                        child_cabinets = [cab for cab in cabinets if cab.get('parent_id') == cabinet_id]
+                        
+                        content_container.clear()
+                        
+                        # Показываем подкабинеты
+                        if child_cabinets:
+                            with content_container:
+                                ui.label('Подкабинеты:').classes('text-sm font-semibold mb-2')
+                                for child_cab in child_cabinets:
+                                    create_cabinet_tree(child_cab, level + 1)
+                        
+                        # Показываем документы
+                        if documents:
+                            with content_container:
+                                if child_cabinets:
+                                    ui.label('Документы:').classes('text-sm font-semibold mb-2 mt-4')
+                                ui.label(f'Найдено документов: {len(documents)}').classes('text-sm text-gray-600 mb-2')
+                                for document in documents:
+                                    create_document_card(document)
+                        elif not child_cabinets:
+                            with content_container:
+                                ui.label('Документы не найдены').classes('text-sm text-gray-500 text-center py-4')
+                                
+                    except Exception as e:
+                        logger.error(f"Ошибка при загрузке содержимого кабинета {cabinet_id}: {e}", exc_info=True)
+                        content_container.clear()
+                        with content_container:
+                            ui.label(f'Ошибка при загрузке: {str(e)}').classes('text-sm text-red-500')
+                
+                # Используем правильный способ отслеживания разворачивания
+                def on_expansion_change(e):
+                    """Обработчик изменения состояния expansion"""
+                    try:
+                        is_expanded = False
+                        # В NiceGUI событие может передавать значение напрямую
+                        if hasattr(e, 'value'):
+                            is_expanded = e.value
+                        elif hasattr(e, 'args'):
+                            # Если args - это bool
+                            if isinstance(e.args, bool):
+                                is_expanded = e.args
+                            elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
+                                is_expanded = e.args[0]
+                        
+                        # Обновляем стили при изменении состояния
+                        update_expansion_style(is_expanded)
+                        
+                        # Загружаем содержимое при разворачивании
+                        if is_expanded:
+                            load_cabinet_content()
+                    except Exception as ex:
+                        logger.error(f"Ошибка при обработке события expansion: {ex}")
+                        # В случае ошибки пробуем загрузить
+                        load_cabinet_content()
+                
+                expansion.on('update:model-value', on_expansion_change)
+        
+        # Создаем дерево кабинетов
+        with _recent_documents_container:
+            if root_cabinets:
+                for root_cabinet in root_cabinets:
+                    create_cabinet_tree(root_cabinet)
+            else:
+                # Если нет корневых кабинетов, показываем все кабинеты
+                for cabinet in cabinets:
+                    create_cabinet_tree(cabinet)
+                
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке кабинетов: {e}", exc_info=True)
+        with _recent_documents_container:
+            ui.label(f'Ошибка при загрузке кабинетов: {str(e)}').classes('text-red-500 text-center py-8')
+
+def search_content() -> None:
+    """Страница поиска документов"""
+    global _search_results_container
+    
+    logger.info("Открыта страница поиска документов")
+    
+    ui.label('Поиск документов').classes('text-lg font-semibold mb-4')
+    
+    with ui.row().classes('w-full mb-4'):
+        search_input = ui.input('Поисковый запрос', placeholder='Введите название документа для поиска').classes('flex-1')
+        ui.button('Поиск', icon='search', on_click=lambda: search_documents(search_input.value)).classes('ml-2')
+    
+    _search_results_container = ui.column().classes('w-full')
+    with _search_results_container:
+        ui.label('Введите поисковый запрос для начала поиска').classes('text-gray-500 text-center py-8')
+
+def upload_content() -> None:
+    """Страница загрузки документов"""
+    global _upload_form_container
+    
+    logger.info("Открыта страница загрузки документов")
+    
+    _upload_form_container = ui.column().classes('w-full')
+    upload_document()
 
 def download_signed_document(document: MayanDocument):
     '''Скачивает документ с информацией о подписях'''

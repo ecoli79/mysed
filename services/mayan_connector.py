@@ -415,7 +415,11 @@ class MayanClient:
             return False
     
     def get_documents(self, page: int = 1, page_size: int = 20, 
-                    search: str = "", label: str = "") -> List[MayanDocument]:
+                    search: str = "", label: str = "",
+                    datetime_created__gte: Optional[str] = None,
+                    datetime_created__lte: Optional[str] = None,
+                    cabinet_id: Optional[int] = None,
+                    user__id: Optional[int] = None) -> List[MayanDocument]:
         """
         Получает список документов из Mayan EDMS
         
@@ -424,6 +428,10 @@ class MayanClient:
             page_size: Размер страницы
             search: Поисковый запрос
             label: Фильтр по метке документа
+            datetime_created__gte: Дата создания >= (формат: YYYY-MM-DD или YYYY-MM-DDTHH:MM:SS)
+            datetime_created__lte: Дата создания <= (формат: YYYY-MM-DD или YYYY-MM-DDTHH:MM:SS)
+            cabinet_id: ID кабинета для фильтрации
+            user__id: ID пользователя для фильтрации
             
         Returns:
             Список документов
@@ -440,7 +448,23 @@ class MayanClient:
         if label:
             params['label__icontains'] = label
         
-        logger.info(f"Получаем документы: страница {page}, размер {page_size}, поиск: '{search}'")
+        # Добавляем фильтры по дате создания
+        if datetime_created__gte:
+            # Проверяем, нужно ли преобразовать формат даты
+            # Mayan EDMS может ожидать формат ISO 8601 с timezone
+            params['datetime_created__gte'] = datetime_created__gte
+        if datetime_created__lte:
+            params['datetime_created__lte'] = datetime_created__lte
+        
+        # Фильтр по кабинету
+        if cabinet_id:
+            params['cabinets__id'] = cabinet_id
+        
+        # Фильтр по пользователю (если поддерживается API)
+        if user__id:
+            params['user__id'] = user__id
+        
+        logger.info(f"Получаем документы: страница {page}, размер {page_size}, поиск: '{search}', фильтры: {params}")
         
         try:
             response = self._make_request('GET', endpoint, params=params)
@@ -704,12 +728,11 @@ class MayanClient:
 
     def _get_main_document_file(self, document_id: str) -> Optional[Dict[str, Any]]:
         """
-        Получает основной файл документа по активной версии
+        Получает основной файл документа используя fallback метод
         
-        Алгоритм:
-        1. Получаем информацию о документе и извлекаем ID активной версии
-        2. Пробуем получить файлы напрямую из активной версии через /documents/{id}/versions/{version_id}/files/
-        3. Если не работает - используем fallback с фильтрацией
+        Примечание: Endpoint /documents/{id}/versions/{version_id}/files/ 
+        не поддерживается в Mayan EDMS API v4, поэтому сразу используем 
+        проверенный метод через /documents/{id}/files/
         
         Args:
             document_id: ID документа
@@ -718,76 +741,13 @@ class MayanClient:
             Информация о файле или None
         """
         try:
-            # Шаг 1: Получаем информацию о документе и извлекаем ID активной версии
-            logger.info(f"Получаем информацию о документе {document_id} для определения активной версии")
-            document_response = self._make_request('GET', f'documents/{document_id}/')
-            document_response.raise_for_status()
-            document_data = document_response.json()
-            
-            # Извлекаем ID активной версии
-            version_active = document_data.get('version_active', {})
-            if not version_active:
-                logger.warning(f"Документ {document_id} не имеет активной версии")
-                return self._get_main_document_file_fallback(document_id)
-            
-            active_version_id = version_active.get('id')
-            if not active_version_id:
-                logger.warning(f"Активная версия документа {document_id} не имеет ID")
-                return self._get_main_document_file_fallback(document_id)
-            
-            logger.info(f"ID активной версии документа {document_id}: {active_version_id}")
-            
-            # Шаг 2: Пробуем получить файлы напрямую из активной версии
-            try:
-                logger.info(f"Пробуем получить файлы напрямую из активной версии {active_version_id}")
-                version_files_response = self._make_request('GET', f'documents/{document_id}/versions/{active_version_id}/files/')
-                version_files_response.raise_for_status()
-                version_files_data = version_files_response.json()
-                
-                version_files = version_files_data.get('results', [])
-                if version_files:
-                    logger.info(f"Найдено {len(version_files)} файлов в активной версии {active_version_id}")
-                    
-                    # Фильтруем файлы: исключаем метаданные и подписи
-                    main_files = []
-                    for file_info in version_files:
-                        filename = file_info.get('filename', '').lower()
-                        mimetype = (file_info.get('mimetype') or '').lower()
-                        
-                        # Пропускаем метаданные и подписи
-                        if (filename.endswith('.p7s') or 
-                            filename.endswith('.json') or
-                            'signature' in filename or
-                            'metadata' in filename or
-                            'application/json' in mimetype):
-                            logger.debug(f"Пропускаем файл метаданных/подписи: {file_info.get('filename')}")
-                            continue
-                        
-                        main_files.append(file_info)
-                    
-                    if main_files:
-                        # Приоритет: PDF > другие
-                        pdf_files = [f for f in main_files if 'pdf' in (f.get('mimetype') or '').lower() or f.get('filename', '').lower().endswith('.pdf')]
-                        if pdf_files:
-                            selected_file = pdf_files[0]
-                            logger.info(f"Выбран PDF файл из активной версии: {selected_file.get('filename')} (file_id: {selected_file.get('id')})")
-                            return selected_file
-                        else:
-                            selected_file = main_files[0]
-                            logger.info(f"Выбран основной файл из активной версии: {selected_file.get('filename')} (file_id: {selected_file.get('id')})")
-                            return selected_file
-                    else:
-                        logger.warning(f"Все файлы активной версии {active_version_id} являются метаданными/подписями")
-            except Exception as e:
-                logger.warning(f"Не удалось получить файлы напрямую из версии {active_version_id}: {e}")
-            
-            # Шаг 3: Fallback - используем старый метод с фильтрацией
-            logger.info(f"Используем fallback метод для поиска файла активной версии")
+            # Сразу используем fallback метод, так как endpoint версий недоступен
+            logger.debug(f"Получаем основной файл документа {document_id} через fallback метод")
             return self._get_main_document_file_fallback(document_id)
             
         except Exception as e:
             logger.error(f"Ошибка при получении файла документа {document_id}: {e}", exc_info=True)
-            return self._get_main_document_file_fallback(document_id)
+            return None
 
     def get_document_file_content(self, document_id: str) -> Optional[bytes]:
         """
@@ -2692,23 +2652,25 @@ class MayanClient:
             logger.error(f"Ошибка при получении ID разрешения {permission_pk}: {e}")
             return permission_pk  # Возвращаем pk как fallback
 
-    def _get_page_count_from_pages_api(self, document_id: str) -> Optional[int]:
+    def _get_page_count_from_pages_api(self, document_id: str, file_info: Optional[Dict[str, Any]] = None) -> Optional[int]:
         """
         Получает количество страниц документа через API страниц
         Использует основной файл документа (исключая подписи и метаданные)
         
         Args:
             document_id: ID документа
+            file_info: Информация о файле (если уже получена, чтобы избежать повторного запроса)
             
         Returns:
             Количество страниц или None
         """
         try:
-            # Получаем основной файл документа
-            file_info = self._get_main_document_file(document_id)
+            # Получаем основной файл документа, если не передан
             if not file_info:
-                logger.warning(f"Документ {document_id} не найден или не имеет основных файлов")
-                return None
+                file_info = self._get_main_document_file(document_id)
+                if not file_info:
+                    logger.warning(f"Документ {document_id} не найден или не имеет основных файлов")
+                    return None
             
             file_id = file_info.get('id')
             
@@ -2720,7 +2682,7 @@ class MayanClient:
             endpoint = f'documents/{document_id}/files/{file_id}/pages/'
             params = {'page': 1, 'page_size': 1}  # Нам нужен только count
             
-            logger.info(f"Запрашиваем страницы файла через endpoint: {endpoint}")
+            logger.debug(f"Запрашиваем страницы файла через endpoint: {endpoint}")
             
             response = self._make_request('GET', endpoint, params=params)
             
@@ -2734,17 +2696,17 @@ class MayanClient:
             data = response.json()
             
             # ОТЛАДКА: Выводим ответ API
-            logger.info(f"=== ОТЛАДКА: Ответ API страниц для документа {document_id} ===")
-            logger.info(f"  count: {data.get('count')}")
-            logger.info(f"  next: {data.get('next')}")
-            logger.info(f"  previous: {data.get('previous')}")
-            logger.info(f"  results count: {len(data.get('results', []))}")
-            logger.info("=== КОНЕЦ ОТЛАДКИ ===")
+            logger.debug(f"=== ОТЛАДКА: Ответ API страниц для документа {document_id} ===")
+            logger.debug(f"  count: {data.get('count')}")
+            logger.debug(f"  next: {data.get('next')}")
+            logger.debug(f"  previous: {data.get('previous')}")
+            logger.debug(f"  results count: {len(data.get('results', []))}")
+            logger.debug("=== КОНЕЦ ОТЛАДКИ ===")
             
             # Получаем общее количество страниц из поля count
             if 'count' in data:
                 page_count = data['count']
-                logger.info(f"Получено количество страниц через API страниц: {page_count}")
+                logger.debug(f"Получено количество страниц через API страниц: {page_count}")
                 return page_count
             
             logger.warning(f"Поле 'count' не найдено в ответе API страниц для документа {document_id}")
@@ -2765,7 +2727,7 @@ class MayanClient:
         Returns:
             Количество страниц или None
         """
-        logger.info(f"Получаем количество страниц документа {document_id}")
+        logger.debug(f"Получаем количество страниц документа {document_id}")
         
         try:
             # Получаем основной файл документа
@@ -2775,22 +2737,23 @@ class MayanClient:
                 return None
             
             # ОТЛАДКА: Выводим все поля файла
-            logger.info(f"=== ОТЛАДКА: Поля файла документа {document_id} ===")
-            logger.info(f"  id: {file_info.get('id')}")
-            logger.info(f"  filename: {file_info.get('filename')}")
-            logger.info(f"  mimetype: {file_info.get('mimetype')}")
-            logger.info(f"  size: {file_info.get('size')}")
-            logger.info(f"  timestamp: {file_info.get('timestamp')}")
-            logger.info(f"  url: {file_info.get('url')}")
-            logger.info("=== КОНЕЦ ОТЛАДКИ ===")
+            logger.debug(f"=== ОТЛАДКА: Поля файла документа {document_id} ===")
+            logger.debug(f"  id: {file_info.get('id')}")
+            logger.debug(f"  filename: {file_info.get('filename')}")
+            logger.debug(f"  mimetype: {file_info.get('mimetype')}")
+            logger.debug(f"  size: {file_info.get('size')}")
+            logger.debug(f"  timestamp: {file_info.get('timestamp')}")
+            logger.debug(f"  url: {file_info.get('url')}")
+            logger.debug("=== КОНЕЦ ОТЛАДКИ ===")
 
             # ВСЕГДА обращаемся к API страниц для получения правильного количества
             # Поле count в ответе API страниц содержит точное количество страниц
-            logger.info("Получаем количество страниц через API страниц...")
-            page_count = self._get_page_count_from_pages_api(document_id)
+            # Передаем file_info, чтобы избежать повторного запроса
+            logger.debug("Получаем количество страниц через API страниц...")
+            page_count = self._get_page_count_from_pages_api(document_id, file_info=file_info)
             
             if page_count is not None:
-                logger.info(f"Получено количество страниц через API страниц: {page_count}")
+                logger.debug(f"Получено количество страниц через API страниц: {page_count}")
                 return page_count
             else:
                 logger.warning(f"Не удалось получить количество страниц через API страниц для документа {document_id}")
@@ -2924,7 +2887,7 @@ class MayanClient:
 
     def _get_main_document_file_fallback(self, document_id: str) -> Optional[Dict[str, Any]]:
         """
-        Fallback метод для получения основного файла документа (старый способ)
+        Fallback метод для получения основного файла документа
         Используется, если не удалось получить активную версию или найти файл по version_id
         
         Args:
@@ -2943,7 +2906,7 @@ class MayanClient:
         exclude_patterns = ['.p7s', 'signature_metadata_']
         main_files = []
         
-        logger.info(f"Fallback: фильтруем файлы документа {document_id}")
+        logger.debug(f"Fallback: фильтруем файлы документа {document_id}")
         
         for file_info in files_data.get('results', []):
             filename = file_info.get('filename', '')
@@ -2976,7 +2939,7 @@ class MayanClient:
             main_files.append(file_info)
             logger.debug(f"Файл принят: {filename} (MIME: {mimetype})")
         
-        logger.info(f"Fallback: после фильтрации осталось {len(main_files)} основных файлов")
+        logger.debug(f"Fallback: после фильтрации осталось {len(main_files)} основных файлов")
         
         if not main_files:
             logger.warning(f"Документ {document_id} не содержит основных файлов (только подписи/метаданные)")
@@ -3008,8 +2971,345 @@ class MayanClient:
         main_files_sorted = sorted(main_files, key=get_sort_key)
         main_file = main_files_sorted[0]
         
-        logger.info(f"Выбран основной файл документа {document_id} (fallback): {main_file.get('filename')} (MIME: {main_file.get('mimetype')}, file_id: {main_file.get('id')})")
+        logger.debug(f"Выбран основной файл документа {document_id} (fallback): {main_file.get('filename')} (MIME: {main_file.get('mimetype')}, file_id: {main_file.get('id')})")
         return main_file
+
+    def search_documents_with_filters(
+        self, 
+        page: int = 1, 
+        page_size: int = 20,
+        datetime_created__gte: Optional[str] = None,
+        datetime_created__lte: Optional[str] = None,
+        cabinet_id: Optional[int] = None,
+        user__id: Optional[int] = None
+    ) -> List[MayanDocument]:
+        """
+        Поиск документов с фильтрами через search_models endpoint
+        
+        Args:
+            page: Номер страницы
+            page_size: Размер страницы
+            datetime_created__gte: Дата создания >= (формат: YYYY-MM-DDTHH:MM:SSZ)
+            datetime_created__lte: Дата создания <= (формат: YYYY-MM-DDTHH:MM:SSZ)
+            cabinet_id: ID кабинета для фильтрации
+            user__id: ID пользователя для фильтрации
+            
+        Returns:
+            Список документов
+        """
+        params = {
+            'page': page,
+            'page_size': page_size
+        }
+        
+        # Добавляем фильтры
+        if datetime_created__gte:
+            params['datetime_created__gte'] = datetime_created__gte
+        if datetime_created__lte:
+            params['datetime_created__lte'] = datetime_created__lte
+        if cabinet_id:
+            params['cabinets__id'] = cabinet_id
+        if user__id:
+            params['user__id'] = user__id
+        
+        logger.info(f"Поиск документов через search_models с фильтрами: {params}")
+        
+        # Пробуем короткий путь search/documents.documentsearchresult
+        candidates = [
+            'search/documents.documentsearchresult',
+            'search/documents.documentsearchresult/',
+        ]
+        
+        import re
+        last_exc = None
+        
+        for ep in candidates:
+            try:
+                resp = self._make_request('GET', ep, params=params)
+                if resp.status_code == 404:
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                items = data.get('results', data if isinstance(data, list) else [])
+                
+                logger.info(f"Получено {len(items)} результатов из search_models")
+                
+                # Извлекаем ID документов из результатов
+                doc_ids = []
+                for it in items:
+                    did = (
+                        it.get('id')
+                        or it.get('object_id')
+                        or it.get('document_id')
+                        or it.get('document__id')
+                    )
+                    if not did:
+                        url = it.get('url') or it.get('object_url')
+                        if url:
+                            m = re.search(r'/documents/(\d+)/', url)
+                            if m:
+                                did = m.group(1)
+                    if did:
+                        doc_ids.append(str(did))
+                
+                if not doc_ids:
+                    logger.warning("Не удалось извлечь ID документов из результатов search_models")
+                    return []
+                
+                # Получаем полную информацию о документах
+                documents = []
+                for doc_id in doc_ids:
+                    doc = self.get_document(doc_id)
+                    if doc:
+                        documents.append(doc)
+                
+                logger.info(f"Успешно получено {len(documents)} документов")
+                return documents
+                
+            except Exception as e:
+                last_exc = e
+                logger.debug(f"Ошибка при попытке использовать endpoint {ep}: {e}")
+                continue
+        
+        # Если короткий путь не сработал, пробуем через search_models с /results/
+        if not self._ensure_document_search_model():
+            logger.warning("Модель поиска documents.documentsearchresult не найдена, используем fallback")
+        else:
+            base = self.documentSearchModelUrl.rstrip('/')
+            try:
+                resp = self._make_request('GET', f'{base}/results/', params=params)
+                if resp.status_code == 404:
+                    # Пробуем без /results/
+                    resp = self._make_request('GET', base, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+                items = data.get('results', data if isinstance(data, list) else [])
+                
+                logger.info(f"Получено {len(items)} результатов из search_models")
+                
+                # Извлекаем ID документов из результатов
+                doc_ids = []
+                for it in items:
+                    did = (
+                        it.get('document_id')
+                        or it.get('document__id')
+                        or it.get('object_id')
+                        or it.get('id')
+                        or it.get('pk')
+                    )
+                    if not did:
+                        url = it.get('url') or it.get('object_url')
+                        if url:
+                            m = re.search(r'/documents/(\d+)/', url)
+                            if m:
+                                did = m.group(1)
+                    
+                    if did:
+                        doc_ids.append(str(did))
+                
+                if not doc_ids:
+                    logger.warning("Не удалось извлечь ID документов из результатов search_models")
+                    return []
+                
+                # Получаем полную информацию о документах
+                documents = []
+                for doc_id in doc_ids:
+                    doc = self.get_document(doc_id)
+                    if doc:
+                        documents.append(doc)
+                
+                logger.info(f"Успешно получено {len(documents)} документов")
+                return documents
+                
+            except Exception as e:
+                logger.debug(f"Ошибка при попытке использовать search_models URL: {e}")
+        
+        # Fallback на обычный get_documents
+        logger.warning("Используем fallback на get_documents")
+        return self.get_documents(
+            page=page,
+            page_size=page_size,
+            datetime_created__gte=datetime_created__gte,
+            datetime_created__lte=datetime_created__lte,
+            cabinet_id=cabinet_id,
+            user__id=user__id
+        )
+
+    def get_cabinet_documents(self, cabinet_id: int, page: int = 1, page_size: int = 100) -> List[MayanDocument]:
+        """
+        Получает документы конкретного кабинета через endpoint /cabinets/{cabinet_id}/documents/
+        
+        Args:
+            cabinet_id: ID кабинета
+            page: Номер страницы
+            page_size: Размер страницы
+            
+        Returns:
+            Список документов кабинета
+        """
+        endpoint = f'cabinets/{cabinet_id}/documents/'
+        params = {
+            'page': page,
+            'page_size': page_size,
+            'ordering': '-datetime_created'
+        }
+        
+        logger.info(f"Получаем документы кабинета {cabinet_id}: страница {page}, размер {page_size}")
+        
+        try:
+            response = self._make_request('GET', endpoint, params=params)
+            response.raise_for_status()
+            
+            data = response.json()
+            documents = []
+            
+            logger.info(f"Получено {len(data.get('results', []))} документов из кабинета {cabinet_id}")
+            
+            for i, doc_data in enumerate(data.get('results', [])):
+                try:
+                    # Получаем file_latest из API
+                    file_latest_data = doc_data.get('file_latest', {})
+                    file_latest_filename = file_latest_data.get('filename', '')
+                    
+                    # Проверяем, не является ли это файлом подписи или метаданных
+                    is_signature_file = (file_latest_filename.endswith('.p7s') or 
+                                       'signature_metadata_' in file_latest_filename)
+                    
+                    # Если это файл подписи/метаданных, получаем основной файл из всех файлов документа
+                    if is_signature_file:
+                        logger.debug(f"Документ {doc_data['id']}: file_latest является файлом подписи/метаданных, ищем основной файл")
+                        
+                        try:
+                            # Получаем все файлы документа напрямую
+                            files_response = self._make_request('GET', f'documents/{doc_data["id"]}/files/', params={'page': 1, 'page_size': 100})
+                            files_response.raise_for_status()
+                            files_data = files_response.json()
+                            all_files = files_data.get('results', [])
+                            
+                            logger.debug(f"Получено {len(all_files)} файлов для документа {doc_data['id']}")
+                            
+                            # Фильтруем файлы: исключаем подписи и метаданные
+                            main_files = []
+                            for file_info in all_files:
+                                filename = file_info.get('filename', '')
+                                # Пропускаем файлы подписей и метаданных
+                                if filename.endswith('.p7s') or 'signature_metadata_' in filename:
+                                    logger.debug(f"Пропускаем файл подписи/метаданных: {filename}")
+                                    continue
+                                main_files.append(file_info)
+                            
+                            # Если нашли основные файлы, берем самый старый (первый созданный)
+                            if main_files:
+                                # Сортируем по приоритету
+                                def get_sort_key(file_info):
+                                    mimetype = file_info.get('mimetype') or ''
+                                    if mimetype:
+                                        mimetype = str(mimetype).lower()
+                                    else:
+                                        mimetype = ''
+                                    
+                                    priority = 0
+                                    if 'pdf' in mimetype:
+                                        priority = 3
+                                    elif 'image' in mimetype:
+                                        priority = 2
+                                    elif 'office' in mimetype or 'word' in mimetype or 'excel' in mimetype:
+                                        priority = 2
+                                    else:
+                                        priority = 1
+                                    
+                                    file_id = file_info.get('id', 0)
+                                    if isinstance(file_id, str):
+                                        try:
+                                            file_id = int(file_id)
+                                        except:
+                                            file_id = 0
+                                    return (-priority, file_id)
+                                
+                                main_files_sorted = sorted(main_files, key=get_sort_key)
+                                main_file = main_files_sorted[0]
+                                
+                                logger.debug(f"Выбран основной файл: {main_file.get('filename')} (MIME: {main_file.get('mimetype')})")
+                                file_latest_id = str(main_file.get('id', ''))
+                                file_latest_filename = main_file.get('filename', '')
+                                file_latest_mimetype = main_file.get('mimetype', '')
+                                file_latest_size = main_file.get('size', 0)
+                            else:
+                                # Если не нашли основные файлы, оставляем file_latest как есть
+                                logger.warning(f"Не найден основной файл в документе {doc_data['id']}, только подписи/метаданные")
+                                file_latest_id = file_latest_data.get('id', '')
+                                file_latest_mimetype = file_latest_data.get('mimetype', '')
+                                file_latest_size = file_latest_data.get('size', 0)
+                        except Exception as e:
+                            logger.warning(f"Ошибка при получении основных файлов документа {doc_data['id']}: {e}")
+                            # В случае ошибки используем file_latest как есть
+                            file_latest_id = file_latest_data.get('id', '')
+                            file_latest_filename = file_latest_data.get('filename', '')
+                            file_latest_mimetype = file_latest_data.get('mimetype', '')
+                            file_latest_size = file_latest_data.get('size', 0)
+                    else:
+                        # Если это не файл подписи/метаданных, используем file_latest как есть
+                        file_latest_id = file_latest_data.get('id', '')
+                        file_latest_mimetype = file_latest_data.get('mimetype', '')
+                        file_latest_size = file_latest_data.get('size', 0)
+                    
+                    document = MayanDocument(
+                        document_id=doc_data['id'],
+                        label=doc_data['label'],
+                        description=doc_data.get('description', ''),
+                        file_latest_id=file_latest_id,
+                        file_latest_filename=file_latest_filename,
+                        file_latest_mimetype=file_latest_mimetype,
+                        file_latest_size=file_latest_size,
+                        datetime_created=doc_data.get('datetime_created', ''),
+                        datetime_modified=doc_data.get('datetime_modified', '')
+                    )
+                    documents.append(document)
+                    logger.debug(f"Документ {i+1} создан успешно: {document}")
+                except Exception as e:
+                    logger.error(f"Ошибка при создании документа {i+1}: {e}")
+                    logger.error(f"Данные документа: {doc_data}")
+                    # Пропускаем проблемный документ, но продолжаем обработку остальных
+                    continue
+            
+            logger.info(f"Успешно создано {len(documents)} документов из {len(data.get('results', []))}")
+            return documents
+            
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении документов кабинета {cabinet_id}: {e}")
+            return []
+
+    def get_cabinet_documents_count(self, cabinet_id: int) -> int:
+        """
+        Получает количество документов в кабинете через endpoint /cabinets/{cabinet_id}/documents/
+        
+        Args:
+            cabinet_id: ID кабинета
+            
+        Returns:
+            Количество документов в кабинете
+        """
+        endpoint = f'cabinets/{cabinet_id}/documents/'
+        params = {
+            'page': 1,
+            'page_size': 1  # Минимальный размер страницы, нам нужен только count
+        }
+        
+        logger.info(f"Получаем количество документов кабинета {cabinet_id}")
+        
+        try:
+            response = self._make_request('GET', endpoint, params=params)
+            response.raise_for_status()
+            
+            data = response.json()
+            count = data.get('count', 0)
+            
+            logger.info(f"Кабинет {cabinet_id} содержит {count} документов")
+            return count
+            
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении количества документов кабинета {cabinet_id}: {e}")
+            return 0
 
 def get_mayan_client() -> MayanClient:
     """Получает клиент Mayan EDMS с учетными данными текущего пользователя"""

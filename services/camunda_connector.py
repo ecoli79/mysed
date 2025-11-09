@@ -356,7 +356,8 @@ class CamundaClient:
             logger.error(f"Ошибка при назначении задачи {task_id} пользователю {assignee}: {e}")
             return False
     
-    def get_user_tasks(self, assignee: str, active_only: bool = True, fetch_variables: bool = True) -> List[Union[CamundaTask, CamundaHistoryTask]]:
+    def get_user_tasks(self, assignee: str, active_only: bool = True, fetch_variables: bool = True,
+                       finished_after: str = None, max_results: int = None) -> List[Union[CamundaTask, CamundaHistoryTask]]:
         """
         Получает список задач назначенных пользователю
         
@@ -364,6 +365,9 @@ class CamundaClient:
             assignee: Имя пользователя
             active_only: Получать только активные задачи
             fetch_variables: Получать переменные задач и процессов для description и dueDate
+            finished_after: Фильтр по дате завершения (ISO формат, например '2024-01-01T00:00:00.000+0000')
+                           Показывать только задачи, завершенные после этой даты
+            max_results: Максимальное количество результатов (для завершенных задач)
             
         Returns:
             Список задач пользователя
@@ -380,9 +384,16 @@ class CamundaClient:
             endpoint = 'history/task'
             params = {
                 'assignee': assignee,
-                'sortBy': 'startTime',
+                'sortBy': 'endTime',
                 'sortOrder': 'desc'
             }
+            
+            # Добавляем ограничения для завершенных задач
+            if finished_after:
+                params['finishedAfter'] = finished_after
+            
+            if max_results:
+                params['maxResults'] = max_results
         
         try:
             response = self._make_request('GET', endpoint, params=params)

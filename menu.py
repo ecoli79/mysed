@@ -16,18 +16,27 @@ from nicegui import ui
 from models import UserSession
 
 def menu(user: UserSession) -> None:
-    links: List[Tuple[str, str]] = [
-        ('Мои задачи', '/'),
-        ('Запустить новый процесс', '/task-assignment'),
-        ('Завершение задач', '/task_completion'),
-        ('Документы Mayan EDMS', '/mayan_documents'),
-        ('Запущенные мной процессы', '/my_processes'),
-        ('Управление шаблонами процессов', '/process_templates'),
-        ('Подписание документов', '/document_signing'),
+    links: List[Tuple[str, str, bool]] = [
+        ('Мои задачи', '/', False),
+        ('Запустить новый процесс', '/task-assignment', False),
+        ('Завершение задач', '/task_completion', False),
+        ('Документы Mayan EDMS', '/mayan_documents', False),
+        ('Поиск документов', '/mayan_documents_search', True),  # True = подраздел
+        ('Загрузка документов', '/mayan_documents_upload', True),  # True = подраздел
+        ('Запущенные мной процессы', '/my_processes', False),
+        ('Управление шаблонами процессов', '/process_templates', False),
+        ('Подписание документов', '/document_signing', False),
     ]
     with ui.column().classes('gap-1'):
-        for text, url in links:
-             ui.link(text, url).classes(
-            'block w-full px-3 py-2 rounded hover:bg-white/10 text-white no-underline hover:no-underline'
-        )
+        for text, url, is_submenu in links:
+            if is_submenu:
+                # Подраздел с отступом
+                ui.link(text, url).classes(
+                    'block w-full px-3 py-2 rounded hover:bg-white/10 text-white no-underline hover:no-underline pl-8'
+                )
+            else:
+                # Обычный пункт меню
+                ui.link(text, url).classes(
+                    'block w-full px-3 py-2 rounded hover:bg-white/10 text-white no-underline hover:no-underline'
+                )
 
