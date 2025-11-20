@@ -13,112 +13,112 @@ class DocumentAccessManager:
     def __init__(self):
         self.mayan_client = None
         
-    def _get_mayan_client(self) -> MayanClient:
+    async def _get_mayan_client(self) -> MayanClient:
         """Получает клиент Mayan EDMS"""
         if not self.mayan_client:
-            self.mayan_client = MayanClient.create_with_session_user()
+            self.mayan_client = await MayanClient.create_with_session_user()
         return self.mayan_client
     
-    def get_user_accessible_documents(self, user: UserSession) -> List[MayanDocument]:
+    async def get_user_accessible_documents(self, user: UserSession) -> List[MayanDocument]:
         """
         Получает список документов, доступных пользователю
         Пока возвращаем все документы
         """
         try:
-            client = self._get_mayan_client()
-            all_documents = client.get_documents(page=1, page_size=1000)
-            logger.info(f"Пользователь {user.username} видит {len(all_documents)} документов")
+            client = await self._get_mayan_client()
+            all_documents = await client.get_documents(page=1, page_size=1000)
+            logger.info(f'Пользователь {user.username} видит {len(all_documents)} документов')
             return all_documents
             
         except Exception as e:
-            logger.error(f"Ошибка при получении доступных документов: {e}")
+            logger.error(f'Ошибка при получении доступных документов: {e}')
             return []
     
-    def grant_document_access_to_user(self, document_id: str, document_label: str,
+    async def grant_document_access_to_user(self, document_id: str, document_label: str,
                                  username: str, permission: str) -> bool:
         """
         Предоставляет доступ к документу конкретному пользователю
         """
         try:
-            client = self._get_mayan_client()
+            client = await self._get_mayan_client()
             
             # Получаем список пользователей
-            users = client.get_users()
-            logger.info(f"Получено {len(users)} пользователей из Mayan EDMS")
+            users = await client.get_users()
+            logger.info(f'Получено {len(users)} пользователей из Mayan EDMS')
             
             if not users:
-                logger.error("В Mayan EDMS не найдено пользователей")
+                logger.error('В Mayan EDMS не найдено пользователей')
                 return False
             
             # Находим пользователя по имени
             user_id = None
             user_info = None
             for user in users:
-                logger.info(f"Проверяем пользователя: {user.get('username')}")
+                logger.info(f'Проверяем пользователя: {user.get("username")}')
                 if user['username'] == username:
                     user_id = user['id']
                     user_info = user
                     break
             
             if not user_id:
-                logger.error(f"Пользователь {username} не найден в Mayan EDMS")
-                logger.error(f"Доступные пользователи: {[u['username'] for u in users]}")
+                logger.error(f'Пользователь {username} не найден в Mayan EDMS')
+                logger.error(f'Доступные пользователи: {[u["username"] for u in users]}')
                 return False
             
-            logger.info(f"Найден пользователь {username} с ID: {user_id}")
-            logger.info(f"Информация о пользователе: {user_info}")
+            logger.info(f'Найден пользователь {username} с ID: {user_id}')
+            logger.info(f'Информация о пользователе: {user_info}')
             
             # Создаем ACL для документа с пользователем через правильный endpoint
-            acl = client.create_acl_for_object('documents', 'document', document_id, user_id=user_id)
+            acl = await client.create_acl_for_object('documents', 'document', document_id, user_id=user_id)
             if not acl:
-                logger.error("Не удалось создать ACL")
+                logger.error('Не удалось создать ACL')
                 return False
             
-            logger.info(f"ACL создан: {acl}")
+            logger.info(f'ACL создан: {acl}')
             
             # Получаем ID разрешения
-            permission_id = self._get_permission_id(client, permission)
+            permission_id = await self._get_permission_id(client, permission)
             if not permission_id:
-                logger.error(f"Не удалось найти разрешение: {permission}")
+                logger.error(f'Не удалось найти разрешение: {permission}')
                 return False
             
-            logger.info(f"Найдено разрешение {permission} с ID: {permission_id}")
+            logger.info(f'Найдено разрешение {permission} с ID: {permission_id}')
             
             # Добавляем разрешение к ACL
             acl_id = acl.get('id') or acl.get('pk')
             if not acl_id:
-                logger.error("Не удалось получить ID созданного ACL")
+                logger.error('Не удалось получить ID созданного ACL')
                 return False
             
-            success = client.add_permissions_to_object_acl('documents', 'document', document_id, acl_id, [permission_id])
+            success = await client.add_permissions_to_object_acl('documents', 'document', document_id, acl_id, [permission_id])
             
             if success:
-                logger.info(f"Доступ к документу {document_id} предоставлен пользователю {username}")
+                logger.info(f'Доступ к документу {document_id} предоставлен пользователю {username}')
             
             return success
             
         except Exception as e:
-            logger.error(f"Ошибка при предоставлении доступа пользователю: {e}")
+            logger.error(f'Ошибка при предоставлении доступа пользователю: {e}')
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f'Traceback: {traceback.format_exc()}')
             return False
 
-    def grant_document_access_to_role_by_pks(self, document_id: str, document_label: str,
+    async def grant_document_access_to_role_by_pks(self, document_id: str, document_label: str,
                                         role_name: str, permission_pks: List[str]) -> bool:
         """
         Предоставляет доступ к документу роли по списку pk разрешений
         """
         try:
-            logger.info(f"=== НАЧАЛО ПРЕДОСТАВЛЕНИЯ ДОСТУПА ===")
-            logger.info(f"Документ: {document_label} (ID: {document_id})")
-            logger.info(f"Роль: {role_name}")
-            logger.info(f"Разрешения PK: {permission_pks}")
+            logger.info(f'=== НАЧАЛО ПРЕДОСТАВЛЕНИЯ ДОСТУПА ===')
+            logger.info(f'Документ: {document_label} (ID: {document_id})')
+            logger.info(f'Роль: {role_name}')
+            logger.info(f'Разрешения PK: {permission_pks}')
             
-            client = self._get_mayan_client()
+            client = await self._get_mayan_client()
             
             # Получаем список ролей
-            roles = client.get_roles()
-            logger.info(f"Получено {len(roles)} ролей из Mayan EDMS")
+            roles = await client.get_roles()
+            logger.info(f'Получено {len(roles)} ролей из Mayan EDMS')
             
             # Находим роль по имени
             role_id = None
@@ -130,43 +130,104 @@ class DocumentAccessManager:
                     break
             
             if not role_id:
-                logger.error(f"Роль {role_name} не найдена в Mayan EDMS")
-                logger.error(f"Доступные роли: {[r['label'] for r in roles]}")
+                logger.error(f'Роль {role_name} не найдена в Mayan EDMS')
+                logger.error(f'Доступные роли: {[r["label"] for r in roles]}')
                 return False
             
-            logger.info(f"Найдена роль {role_name} с ID: {role_id}")
+            logger.info(f'Найдена роль {role_name} с ID: {role_id}')
             
-            # Создаем ACL для документа с ролью
-            logger.info(f"Создаем ACL для документа {document_id} с ролью {role_id}")
-            acl = client.create_acl_for_object('documents', 'document', document_id, role_id=role_id)
+            # Проверяем, существует ли уже ACL для этой роли
+            logger.info(f'Проверяем существующие ACL для документа {document_id}')
+            existing_acls = await client.get_object_acls_list('documents', 'document', document_id)
+            
+            acl = None
+            acl_id = None
+            
+            # Ищем существующий ACL для этой роли
+            for existing_acl in existing_acls:
+                # Проверяем по role_id или role
+                existing_role = existing_acl.get('role') or existing_acl.get('role_id')
+                
+                # role может быть словарем с полем 'id' или просто числом
+                existing_role_id = None
+                if isinstance(existing_role, dict):
+                    existing_role_id = existing_role.get('id')
+                elif isinstance(existing_role, (int, str)):
+                    existing_role_id = int(existing_role) if str(existing_role).isdigit() else existing_role
+                
+                if existing_role_id == role_id:
+                    logger.info(f'Найден существующий ACL для роли {role_name}: {existing_acl}')
+                    acl = existing_acl
+                    acl_id = existing_acl.get('id') or existing_acl.get('pk')
+                    break
+            
+            # Если ACL не найден, создаем новый
             if not acl:
-                logger.error("Не удалось создать ACL")
-                return False
+                logger.info(f'ACL для роли {role_name} не найден, создаем новый')
+                acl = await client.create_acl_for_object('documents', 'document', document_id, role_id=role_id)
+                
+                # Если не удалось создать (возможно, ACL уже существует), пробуем получить существующий
+                if not acl:
+                    logger.warning('Не удалось создать ACL, возможно он уже существует. Пробуем получить существующий...')
+                    # Повторно получаем список ACL
+                    existing_acls = await client.get_object_acls_list('documents', 'document', document_id)
+                    for existing_acl in existing_acls:
+                        existing_role = existing_acl.get('role') or existing_acl.get('role_id')
+                        existing_role_id = None
+                        if isinstance(existing_role, dict):
+                            existing_role_id = existing_role.get('id')
+                        elif isinstance(existing_role, (int, str)):
+                            existing_role_id = int(existing_role) if str(existing_role).isdigit() else existing_role
+                        
+                        if existing_role_id == role_id:
+                            logger.info(f'Найден существующий ACL после неудачной попытки создания: {existing_acl}')
+                            acl = existing_acl
+                            acl_id = existing_acl.get('id') or existing_acl.get('pk')
+                            break
+                    
+                    if not acl:
+                        logger.error('Не удалось создать ACL и не удалось найти существующий')
+                        return False
+                else:
+                    logger.info(f'ACL создан: {acl}')
+                    acl_id = acl.get('id') or acl.get('pk')
+            else:
+                logger.info(f'Используем существующий ACL {acl_id} для роли {role_name}')
             
-            logger.info(f"ACL создан: {acl}")
+            if not acl_id:
+                logger.error('Не удалось получить ID ACL')
+                return False
             
             # Получаем ID разрешений (могут быть строковыми)
             permission_ids = []
             for permission_pk in permission_pks:
-                logger.info(f"Получаем ID для разрешения: {permission_pk}")
-                permission_id = client.get_permission_id_by_pk(permission_pk)
+                logger.info(f'Получаем ID для разрешения: {permission_pk}')
+                permission_id = await client.get_permission_id_by_pk(permission_pk)
                 if not permission_id:
-                    logger.error(f"Не удалось получить ID для разрешения: {permission_pk}")
-                    return False
+                    logger.error(f'Не удалось получить ID для разрешения: {permission_pk}')
+                    # Продолжаем с другими разрешениями вместо возврата False
+                    continue
                 permission_ids.append(permission_id)
-                logger.info(f"Найдено разрешение {permission_pk} с ID: {permission_id}")
+                logger.info(f'Найдено разрешение {permission_pk} с ID: {permission_id}')
             
-            # Добавляем разрешения к ACL
-            acl_id = acl.get('id') or acl.get('pk')
-            if not acl_id:
-                logger.error("Не удалось получить ID созданного ACL")
+            if not permission_ids:
+                logger.error('Не удалось получить ID ни для одного разрешения')
                 return False
             
-            logger.info(f"Добавляем разрешения {permission_ids} к ACL {acl_id}")
-            success = client.add_permissions_to_object_acl('documents', 'document', document_id, acl_id, permission_ids)
+            # Добавляем разрешения к ACL
+            logger.info(f'Добавляем разрешения {permission_ids} к ACL {acl_id}')
+            success = await client.add_permissions_to_object_acl('documents', 'document', document_id, acl_id, permission_ids)
             
             if success:
                 logger.info(f'Доступ к документу {document_id} предоставлен роли {role_name} с разрешениями: {permission_pks}')
+                
+                # Проверяем, что разрешения действительно добавлены
+                acl_details = await client.get_object_acl_details('documents', 'document', document_id, str(acl_id))
+                if acl_details:
+                    existing_permissions = acl_details.get('permissions', [])
+                    logger.info(f'Текущие разрешения в ACL: {existing_permissions}')
+                else:
+                    logger.warning(f'Не удалось получить детали ACL для проверки')
             else:
                 logger.error(f'Не удалось добавить разрешения к ACL')
             
@@ -175,25 +236,25 @@ class DocumentAccessManager:
         except Exception as e:
             logger.error(f'Ошибка при предоставлении доступа роли: {e}')
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f'Traceback: {traceback.format_exc()}')
             return False
 
-    def grant_document_access_to_role_by_pk(self, document_id: str, document_label: str,
+    async def grant_document_access_to_role_by_pk(self, document_id: str, document_label: str,
                                       role_name: str, permission_pk: str) -> bool:
         """
         Предоставляет доступ к документу роли по pk разрешения
         """
         try:
-            logger.info(f"=== НАЧАЛО ПРЕДОСТАВЛЕНИЯ ДОСТУПА ===")
-            logger.info(f"Документ: {document_label} (ID: {document_id})")
-            logger.info(f"Роль: {role_name}")
-            logger.info(f"Разрешение PK: {permission_pk}")
+            logger.info(f'=== НАЧАЛО ПРЕДОСТАВЛЕНИЯ ДОСТУПА ===')
+            logger.info(f'Документ: {document_label} (ID: {document_id})')
+            logger.info(f'Роль: {role_name}')
+            logger.info(f'Разрешение PK: {permission_pk}')
             
-            client = self._get_mayan_client()
+            client = await self._get_mayan_client()
             
             # Получаем список ролей
-            roles = client.get_roles()
-            logger.info(f"Получено {len(roles)} ролей из Mayan EDMS")
+            roles = await client.get_roles()
+            logger.info(f'Получено {len(roles)} ролей из Mayan EDMS')
             
             # Находим роль по имени
             role_id = None
@@ -205,38 +266,38 @@ class DocumentAccessManager:
                     break
             
             if not role_id:
-                logger.error(f"Роль {role_name} не найдена в Mayan EDMS")
-                logger.error(f"Доступные роли: {[r['label'] for r in roles]}")
+                logger.error(f'Роль {role_name} не найдена в Mayan EDMS')
+                logger.error(f'Доступные роли: {[r["label"] for r in roles]}')
                 return False
             
-            logger.info(f"Найдена роль {role_name} с ID: {role_id}")
+            logger.info(f'Найдена роль {role_name} с ID: {role_id}')
             
             # Создаем ACL для документа с ролью
-            logger.info(f"Создаем ACL для документа {document_id} с ролью {role_id}")
-            acl = client.create_acl_for_object('documents', 'document', document_id, role_id=role_id)
+            logger.info(f'Создаем ACL для документа {document_id} с ролью {role_id}')
+            acl = await client.create_acl_for_object('documents', 'document', document_id, role_id=role_id)
             if not acl:
-                logger.error("Не удалось создать ACL")
+                logger.error('Не удалось создать ACL')
                 return False
             
-            logger.info(f"ACL создан: {acl}")
+            logger.info(f'ACL создан: {acl}')
             
             # Получаем ID разрешения (теперь может быть строковым)
-            logger.info(f"Получаем ID для разрешения: {permission_pk}")
-            permission_id = client.get_permission_id_by_pk(permission_pk)
+            logger.info(f'Получаем ID для разрешения: {permission_pk}')
+            permission_id = await client.get_permission_id_by_pk(permission_pk)
             if not permission_id:
-                logger.error(f"Не удалось получить ID для разрешения: {permission_pk}")
+                logger.error(f'Не удалось получить ID для разрешения: {permission_pk}')
                 return False
             
-            logger.info(f"Найдено разрешение {permission_pk} с ID: {permission_id}")
+            logger.info(f'Найдено разрешение {permission_pk} с ID: {permission_id}')
             
             # Добавляем разрешение к ACL
             acl_id = acl.get('id') or acl.get('pk')
             if not acl_id:
-                logger.error("Не удалось получить ID созданного ACL")
+                logger.error('Не удалось получить ID созданного ACL')
                 return False
             
-            logger.info(f"Добавляем разрешение {permission_id} к ACL {acl_id}")
-            success = client.add_permissions_to_object_acl('documents', 'document', document_id, acl_id, [permission_id])
+            logger.info(f'Добавляем разрешение {permission_id} к ACL {acl_id}')
+            success = await client.add_permissions_to_object_acl('documents', 'document', document_id, acl_id, [permission_id])
             
             if success:
                 logger.info(f'Доступ к документу {document_id} предоставлен роли {role_name}')
@@ -248,20 +309,20 @@ class DocumentAccessManager:
         except Exception as e:
             logger.error(f'Ошибка при предоставлении доступа роли: {e}')
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f'Traceback: {traceback.format_exc()}')
             return False
     
-    def grant_document_access_to_role(self, document_id: str, document_label: str,
+    async def grant_document_access_to_role(self, document_id: str, document_label: str,
                                     role_name: str, permission: str) -> bool:
         """
         Предоставляет доступ к документу роли
         """
         try:
-            client = self._get_mayan_client()
+            client = await self._get_mayan_client()
             
             # Получаем список ролей
-            roles = client.get_roles()
-            logger.info(f"Получено {len(roles)} ролей из Mayan EDMS")
+            roles = await client.get_roles()
+            logger.info(f'Получено {len(roles)} ролей из Mayan EDMS')
             
             # Находим роль по имени
             role_id = None
@@ -273,59 +334,59 @@ class DocumentAccessManager:
                     break
             
             if not role_id:
-                logger.error(f"Роль {role_name} не найдена в Mayan EDMS")
-                logger.error(f"Доступные роли: {[r['label'] for r in roles]}")
+                logger.error(f'Роль {role_name} не найдена в Mayan EDMS')
+                logger.error(f'Доступные роли: {[r["label"] for r in roles]}')
                 return False
             
-            logger.info(f"Найдена роль {role_name} с ID: {role_id}")
+            logger.info(f'Найдена роль {role_name} с ID: {role_id}')
             
             # Создаем ACL для документа с ролью
-            acl = client.create_acl_for_object('documents', 'document', document_id, role_id=role_id)
+            acl = await client.create_acl_for_object('documents', 'document', document_id, role_id=role_id)
             if not acl:
-                logger.error("Не удалось создать ACL")
+                logger.error('Не удалось создать ACL')
                 return False
             
-            logger.info(f"ACL создан: {acl}")
+            logger.info(f'ACL создан: {acl}')
             
             # Получаем ID разрешения
-            permission_id = self._get_permission_id(client, permission)
+            permission_id = await self._get_permission_id(client, permission)
             if not permission_id:
-                logger.error(f"Не удалось найти разрешение: {permission}")
+                logger.error(f'Не удалось найти разрешение: {permission}')
                 return False
             
-            logger.info(f"Найдено разрешение {permission} с ID: {permission_id}")
+            logger.info(f'Найдено разрешение {permission} с ID: {permission_id}')
             
             # Добавляем разрешение к ACL
             acl_id = acl.get('id') or acl.get('pk')
             if not acl_id:
-                logger.error("Не удалось получить ID созданного ACL")
+                logger.error('Не удалось получить ID созданного ACL')
                 return False
             
-            success = client.add_permissions_to_object_acl('documents', 'document', document_id, acl_id, [permission_id])
+            success = await client.add_permissions_to_object_acl('documents', 'document', document_id, acl_id, [permission_id])
             
             if success:
-                logger.info(f"Доступ к документу {document_id} предоставлен роли {role_name}")
+                logger.info(f'Доступ к документу {document_id} предоставлен роли {role_name}')
             
             return success
             
         except Exception as e:
-            logger.error(f"Ошибка при предоставлении доступа роли: {e}")
+            logger.error(f'Ошибка при предоставлении доступа роли: {e}')
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f'Traceback: {traceback.format_exc()}')
             return False
 
-    def revoke_document_access_from_user(self, document_id: str, username: str) -> bool:
+    async def revoke_document_access_from_user(self, document_id: str, username: str) -> bool:
         """
         Отзывает доступ к документу у пользователя
         """
         try:
-            client = self._get_mayan_client()
+            client = await self._get_mayan_client()
             
             # Получаем ACL для документа
-            acls = client.get_object_acls_list('documents', 'document', document_id)
+            acls = await client.get_object_acls_list('documents', 'document', document_id)
             
             # Находим пользователя
-            users = client.get_users()
+            users = await client.get_users()
             user_id = None
             for user in users:
                 if user['username'] == username:
@@ -333,7 +394,7 @@ class DocumentAccessManager:
                     break
             
             if not user_id:
-                logger.error(f"Пользователь {username} не найден")
+                logger.error(f'Пользователь {username} не найден')
                 return False
             
             # Находим ACL для этого пользователя
@@ -342,40 +403,40 @@ class DocumentAccessManager:
                     acl_id = acl.get('id') or acl.get('pk')
                     if acl_id:
                         # Удаляем ACL
-                        success = client.delete_object_acl('documents', 'document', document_id, acl_id)
+                        success = await client.delete_object_acl('documents', 'document', document_id, acl_id)
                         if success:
-                            logger.info(f"Доступ к документу {document_id} отозван у пользователя {username}")
+                            logger.info(f'Доступ к документу {document_id} отозван у пользователя {username}')
                         return success
                 
                 # Проверяем также детали ACL
-                acl_details = client.get_object_acl_details('documents', 'document', document_id, str(acl.get('id', '')))
+                acl_details = await client.get_object_acl_details('documents', 'document', document_id, str(acl.get('id', '')))
                 if acl_details and acl_details.get('user') == user_id:
                     acl_id = acl_details.get('id')
                     if acl_id:
-                        success = client.delete_object_acl('documents', 'document', document_id, acl_id)
+                        success = await client.delete_object_acl('documents', 'document', document_id, acl_id)
                         if success:
-                            logger.info(f"Доступ к документу {document_id} отозван у пользователя {username}")
+                            logger.info(f'Доступ к документу {document_id} отозван у пользователя {username}')
                         return success
             
-            logger.warning(f"ACL для пользователя {username} и документа {document_id} не найден")
+            logger.warning(f'ACL для пользователя {username} и документа {document_id} не найден')
             return False
             
         except Exception as e:
-            logger.error(f"Ошибка при отзыве доступа у пользователя: {e}")
+            logger.error(f'Ошибка при отзыве доступа у пользователя: {e}')
             return False
 
-    def revoke_document_access_from_role(self, document_id: str, role_name: str) -> bool:
+    async def revoke_document_access_from_role(self, document_id: str, role_name: str) -> bool:
         """
         Отзывает доступ к документу у роли
         """
         try:
-            client = self._get_mayan_client()
+            client = await self._get_mayan_client()
             
             # Получаем ACL для документа
-            acls = client.get_object_acls_list('documents', 'document', document_id)
+            acls = await client.get_object_acls_list('documents', 'document', document_id)
             
             # Находим роль
-            roles = client.get_roles()
+            roles = await client.get_roles()
             role_id = None
             for role in roles:
                 if role['label'] == role_name:
@@ -383,7 +444,7 @@ class DocumentAccessManager:
                     break
             
             if not role_id:
-                logger.error(f"Роль {role_name} не найдена")
+                logger.error(f'Роль {role_name} не найдена')
                 return False
             
             # Находим ACL для этой роли
@@ -392,34 +453,34 @@ class DocumentAccessManager:
                     acl_id = acl.get('id') or acl.get('pk')
                     if acl_id:
                         # Удаляем ACL
-                        success = client.delete_object_acl('documents', 'document', document_id, acl_id)
+                        success = await client.delete_object_acl('documents', 'document', document_id, acl_id)
                         if success:
-                            logger.info(f"Доступ к документу {document_id} отозван у роли {role_name}")
+                            logger.info(f'Доступ к документу {document_id} отозван у роли {role_name}')
                         return success
                 
                 # Проверяем также детали ACL
-                acl_details = client.get_object_acl_details('documents', 'document', document_id, str(acl.get('id', '')))
+                acl_details = await client.get_object_acl_details('documents', 'document', document_id, str(acl.get('id', '')))
                 if acl_details and acl_details.get('role') == role_id:
                     acl_id = acl_details.get('id')
                     if acl_id:
-                        success = client.delete_object_acl('documents', 'document', document_id, acl_id)
+                        success = await client.delete_object_acl('documents', 'document', document_id, acl_id)
                         if success:
-                            logger.info(f"Доступ к документу {document_id} отозван у роли {role_name}")
+                            logger.info(f'Доступ к документу {document_id} отозван у роли {role_name}')
                         return success
             
-            logger.warning(f"ACL для роли {role_name} и документа {document_id} не найден")
+            logger.warning(f'ACL для роли {role_name} и документа {document_id} не найден')
             return False
             
         except Exception as e:
-            logger.error(f"Ошибка при отзыве доступа у роли: {e}")
+            logger.error(f'Ошибка при отзыве доступа у роли: {e}')
             return False
     
-    def get_document_access_info(self, document_id: str) -> Dict[str, Any]:
+    async def get_document_access_info(self, document_id: str) -> Dict[str, Any]:
         """
         Получает информацию о доступе к документу
         """
         try:
-            client = self._get_mayan_client()
+            client = await self._get_mayan_client()
             
             access_info = {
                 'document_id': document_id,
@@ -432,16 +493,16 @@ class DocumentAccessManager:
             
             # Получаем список ACL для документа
             try:
-                acls_list = client.get_object_acls_list('documents', 'document', document_id)
-                logger.info(f"Получено {len(acls_list)} ACL для документа {document_id}")
+                acls_list = await client.get_object_acls_list('documents', 'document', document_id)
+                logger.info(f'Получено {len(acls_list)} ACL для документа {document_id}')
                 
                 if acls_list:
                     # Получаем роли и пользователей для контекста
                     try:
-                        roles = {role['id']: role for role in client.get_roles()}
-                        users = {user['id']: user for user in client.get_users()}
+                        roles = {role['id']: role for role in await client.get_roles()}
+                        users = {user['id']: user for user in await client.get_users()}
                     except Exception as e:
-                        logger.warning(f"Не удалось получить роли или пользователей: {e}")
+                        logger.warning(f'Не удалось получить роли или пользователей: {e}')
                         roles = {}
                         users = {}
                     
@@ -449,11 +510,11 @@ class DocumentAccessManager:
                     for acl_summary in acls_list:
                         acl_id = acl_summary.get('id') or acl_summary.get('pk')
                         if not acl_id:
-                            logger.warning(f"ACL без ID: {acl_summary}")
+                            logger.warning(f'ACL без ID: {acl_summary}')
                             continue
                         
                         # Получаем детали ACL
-                        acl_details = client.get_object_acl_details('documents', 'document', document_id, str(acl_id))
+                        acl_details = await client.get_object_acl_details('documents', 'document', document_id, str(acl_id))
                         
                         if acl_details:
                             acl_info = {
@@ -501,7 +562,7 @@ class DocumentAccessManager:
                             
                             access_info['acls'].append(acl_info)
                         else:
-                            logger.warning(f"Не удалось получить детали ACL {acl_id}")
+                            logger.warning(f'Не удалось получить детали ACL {acl_id}')
                             # Добавляем хотя бы краткую информацию
                             acl_info = {
                                 'acl_id': acl_id,
@@ -510,37 +571,37 @@ class DocumentAccessManager:
                             }
                             access_info['acls'].append(acl_info)
                 else:
-                    logger.info(f"Для документа {document_id} не настроены ACL")
+                    logger.info(f'Для документа {document_id} не настроены ACL')
                         
             except Exception as e:
-                logger.warning(f"Не удалось получить ACL для документа {document_id}: {e}")
-                access_info['error'] = f"Не удалось получить информацию о доступе: {str(e)}"
+                logger.warning(f'Не удалось получить ACL для документа {document_id}: {e}')
+                access_info['error'] = f'Не удалось получить информацию о доступе: {str(e)}'
                 access_info['access_method'] = 'error'
             
             return access_info
             
         except Exception as e:
-            logger.error(f"Ошибка при получении информации о доступе: {e}")
+            logger.error(f'Ошибка при получении информации о доступе: {e}')
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f'Traceback: {traceback.format_exc()}')
             return {
                 'document_id': document_id, 
-                'error': f"Ошибка при получении информации о доступе: {str(e)}"
+                'error': f'Ошибка при получении информации о доступе: {str(e)}'
             }
     
-    def get_available_roles(self) -> List[Dict[str, Any]]:
+    async def get_available_roles(self) -> List[Dict[str, Any]]:
         """
         Получает список всех доступных ролей с сервера
         """
         try:
-            client = self._get_mayan_client()
+            client = await self._get_mayan_client()
             
-            logger.info("=== ПОЛУЧАЕМ РОЛИ ===")
-            roles = client.get_roles()
-            logger.info(f"Получено {len(roles)} ролей из Mayan EDMS")
+            logger.info('=== ПОЛУЧАЕМ РОЛИ ===')
+            roles = await client.get_roles()
+            logger.info(f'Получено {len(roles)} ролей из Mayan EDMS')
             
             if not roles:
-                logger.warning("Роли не найдены через основной endpoint. Пробуем альтернативные методы.")
+                logger.warning('Роли не найдены через основной endpoint. Пробуем альтернативные методы.')
                 
                 # Пробуем альтернативные endpoints
                 alternative_endpoints = [
@@ -553,12 +614,12 @@ class DocumentAccessManager:
                 
                 for alt_endpoint in alternative_endpoints:
                     try:
-                        logger.info(f"Пробуем альтернативный endpoint: {alt_endpoint}")
-                        response = client._make_request('GET', alt_endpoint)
+                        logger.info(f'Пробуем альтернативный endpoint: {alt_endpoint}')
+                        response = await client._make_request('GET', alt_endpoint)
                         
                         if response.status_code == 200:
                             data = response.json()
-                            logger.info(f"Получены данные через {alt_endpoint}: {data}")
+                            logger.info(f'Получены данные через {alt_endpoint}: {data}')
                             
                             # Пробуем извлечь роли из ответа
                             if 'results' in data:
@@ -567,37 +628,37 @@ class DocumentAccessManager:
                                 roles = data
                             
                             if roles:
-                                logger.info(f"Найдено {len(roles)} ролей через {alt_endpoint}")
+                                logger.info(f'Найдено {len(roles)} ролей через {alt_endpoint}')
                                 break
                         else:
-                            logger.warning(f"Endpoint {alt_endpoint} вернул статус {response.status_code}")
+                            logger.warning(f'Endpoint {alt_endpoint} вернул статус {response.status_code}')
                             
                     except Exception as e:
-                        logger.warning(f"Ошибка при обращении к {alt_endpoint}: {e}")
+                        logger.warning(f'Ошибка при обращении к {alt_endpoint}: {e}')
                         continue
             
             # Выводим все роли для отладки
-            logger.info("=== ВСЕ РОЛИ ===")
+            logger.info('=== ВСЕ РОЛИ ===')
             for i, role in enumerate(roles):
-                logger.info(f"{i+1}. ID: {role.get('id', 'N/A')} | Label: {role.get('label', 'N/A')} | Name: {role.get('name', 'N/A')}")
+                logger.info(f'{i+1}. ID: {role.get("id", "N/A")} | Label: {role.get("label", "N/A")} | Name: {role.get("name", "N/A")}')
             
             return roles
         
         except Exception as e:
-            logger.error(f"Ошибка при получении ролей: {e}")
+            logger.error(f'Ошибка при получении ролей: {e}')
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f'Traceback: {traceback.format_exc()}')
             return []
     
-    def get_available_permissions_for_documents(self) -> List[Dict[str, Any]]:
+    async def get_available_permissions_for_documents(self) -> List[Dict[str, Any]]:
         """
         Получает список всех разрешений для документов из Mayan EDMS
         """
         try:
-            client = self._get_mayan_client()
-            permissions = client.get_permissions()
+            client = await self._get_mayan_client()
+            permissions = await client.get_permissions()
             
-            logger.info(f"Получено {len(permissions)} разрешений")
+            logger.info(f'Получено {len(permissions)} разрешений')
             
             # Фильтруем только разрешения для документов
             document_permissions = []
@@ -617,7 +678,7 @@ class DocumentAccessManager:
                             'namespace': namespace
                         })
             
-            logger.info(f"Найдено {len(document_permissions)} разрешений для документов")
+            logger.info(f'Найдено {len(document_permissions)} разрешений для документов')
             
             # Сортируем по названию
             document_permissions.sort(key=lambda x: x['label'])
@@ -625,35 +686,35 @@ class DocumentAccessManager:
             return document_permissions
             
         except Exception as e:
-            logger.error(f"Ошибка при получении разрешений для документов: {e}")
+            logger.error(f'Ошибка при получении разрешений для документов: {e}')
             return []
 
-    def get_available_permissions(self) -> List[Dict[str, Any]]:
+    async def get_available_permissions(self) -> List[Dict[str, Any]]:
         """
         Получает список всех доступных разрешений с сервера
         """
         try:
-            client = self._get_mayan_client()
-            permissions = client.get_permissions()
+            client = await self._get_mayan_client()
+            permissions = await client.get_permissions()
             
-            logger.info(f"=== ДОСТУПНЫЕ РАЗРЕШЕНИЯ ===")
-            logger.info(f"Всего разрешений: {len(permissions)}")
+            logger.info('=== ДОСТУПНЫЕ РАЗРЕШЕНИЯ ===')
+            logger.info(f'Всего разрешений: {len(permissions)}')
             
             # Просто выводим все разрешения подряд
-            logger.info("=== ВСЕ РАЗРЕШЕНИЯ ===")
+            logger.info('=== ВСЕ РАЗРЕШЕНИЯ ===')
             for i, permission in enumerate(permissions):
                 if permission:
                     # ИСПРАВЛЕНИЕ: Проверяем реальную структуру данных
-                    logger.info(f"Структура разрешения {i+1}: {permission}")
+                    logger.info(f'Структура разрешения {i+1}: {permission}')
                     perm_id = permission.get('id', permission.get('pk', 'N/A'))
                     perm_name = permission.get('name', permission.get('codename', 'N/A'))
                     perm_label = permission.get('label', permission.get('title', 'N/A'))
-                    logger.info(f"{i+1:3d}. ID: {perm_id} | Name: {perm_name} | Label: {perm_label}")
+                    logger.info(f'{i+1:3d}. ID: {perm_id} | Name: {perm_name} | Label: {perm_label}')
                 else:
-                    logger.warning(f"{i+1:3d}. None permission found!")
+                    logger.warning(f'{i+1:3d}. None permission found!')
             
             # Ищем разрешения, связанные с документами
-            logger.info("=== РАЗРЕШЕНИЯ ДЛЯ ДОКУМЕНТОВ ===")
+            logger.info('=== РАЗРЕШЕНИЯ ДЛЯ ДОКУМЕНТОВ ===')
             document_permissions = []
             for permission in permissions:
                 if permission:
@@ -663,28 +724,28 @@ class DocumentAccessManager:
                         document_permissions.append(permission)
                         perm_id = permission.get('id', permission.get('pk', 'N/A'))
                         perm_name = permission.get('name', permission.get('codename', 'N/A'))
-                        logger.info(f"DOC: ID: {perm_id} | Name: {perm_name} | Label: {label}")
+                        logger.info(f'DOC: ID: {perm_id} | Name: {perm_name} | Label: {label}')
             
-            logger.info(f"Найдено {len(document_permissions)} разрешений для документов")
+            logger.info(f'Найдено {len(document_permissions)} разрешений для документов')
             
             return permissions
             
         except Exception as e:
-            logger.error(f"Ошибка при получении разрешений: {e}")
+            logger.error(f'Ошибка при получении разрешений: {e}')
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f'Traceback: {traceback.format_exc()}')
             return []
 
-    def _get_permission_id(self, client: MayanClient, permission_name: str) -> Optional[int]:
+    async def _get_permission_id(self, client: MayanClient, permission_name: str) -> Optional[int]:
         """
         Получает ID разрешения по названию
         """
         try:
-            logger.info(f"=== ПОИСК РАЗРЕШЕНИЯ ===")
-            logger.info(f"Ищем разрешение: {permission_name}")
+            logger.info(f'=== ПОИСК РАЗРЕШЕНИЯ ===')
+            logger.info(f'Ищем разрешение: {permission_name}')
             
-            permissions = client.get_permissions()
-            logger.info(f"Получено {len(permissions)} разрешений")
+            permissions = await client.get_permissions()
+            logger.info(f'Получено {len(permissions)} разрешений')
             
             # Маппинг разрешений - используем человекочитаемые названия
             permission_map = {
@@ -701,7 +762,7 @@ class DocumentAccessManager:
                 logger.error(f'Доступные разрешения: {list(permission_map.keys())}')
                 return None
             
-            logger.info(f"Ищем разрешение по label: {mayan_permission}")
+            logger.info(f'Ищем разрешение по label: {mayan_permission}')
             
             # Ищем разрешение по label
             for permission in permissions:
@@ -713,12 +774,12 @@ class DocumentAccessManager:
                             logger.info(f'Найдено разрешение {mayan_permission} с pk: {pk}')
                             
                             # Получаем числовой ID через детальную информацию
-                            numeric_id = client.get_permission_id_by_pk(pk)
+                            numeric_id = await client.get_permission_id_by_pk(pk)
                             if numeric_id:
                                 logger.info(f'Получен числовой ID: {numeric_id}')
                                 return numeric_id
                             else:
-                                logger.warning(f"Не удалось получить числовой ID для {pk}")
+                                logger.warning(f'Не удалось получить числовой ID для {pk}')
                                 # Попробуем использовать pk как есть (может сработать)
                                 return pk
             
@@ -732,7 +793,7 @@ class DocumentAccessManager:
                     perm_pk = permission.get('pk', 'N/A')
                     perm_label = permission.get('label', 'N/A')
                     perm_url = permission.get('url', 'N/A')
-                    logger.error(f"ID: {perm_id}, PK: {perm_pk}, Label: {perm_label}, URL: {perm_url}")
+                    logger.error(f'ID: {perm_id}, PK: {perm_pk}, Label: {perm_label}, URL: {perm_url}')
             
             return None
             
@@ -743,19 +804,19 @@ class DocumentAccessManager:
             return None
 
 
-    def test_acl_reading(self, document_id: str) -> Dict[str, Any]:
+    async def test_acl_reading(self, document_id: str) -> Dict[str, Any]:
         """
         Тестовый метод для проверки чтения ACL
         """
         try:
-            client = self._get_mayan_client()
+            client = await self._get_mayan_client()
             
-            logger.info(f"=== ТЕСТ ЧТЕНИЯ ACL ДЛЯ ДОКУМЕНТА {document_id} ===")
+            logger.info(f'=== ТЕСТ ЧТЕНИЯ ACL ДЛЯ ДОКУМЕНТА {document_id} ===')
             
             # Шаг 1: Получаем список ACL
             logger.info('Шаг 1: Получаем список ACL')
-            acls_list = client.get_object_acls_list('documents', 'document', document_id)
-            logger.info(f"Получено ACL: {len(acls_list)}")
+            acls_list = await client.get_object_acls_list('documents', 'document', document_id)
+            logger.info(f'Получено ACL: {len(acls_list)}')
             
             result = {
                 'document_id': document_id,
@@ -766,30 +827,30 @@ class DocumentAccessManager:
             
             # Шаг 2: Для каждого ACL получаем детали
             for i, acl_summary in enumerate(acls_list):
-                logger.info(f"Шаг 2.{i+1}: Получаем детали ACL {acl_summary.get('id', 'unknown')}")
+                logger.info(f'Шаг 2.{i+1}: Получаем детали ACL {acl_summary.get("id", "unknown")}')
                 
                 acl_id = acl_summary.get('id') or acl_summary.get('pk')
                 if acl_id:
-                    acl_details = client.get_object_acl_details('documents', 'document', document_id, str(acl_id))
+                    acl_details = await client.get_object_acl_details('documents', 'document', document_id, str(acl_id))
                     result['acl_details'].append({
                         'acl_id': acl_id,
                         'summary': acl_summary,
                         'details': acl_details
                     })
                 else:
-                    logger.warning(f"ACL без ID: {acl_summary}")
+                    logger.warning(f'ACL без ID: {acl_summary}')
             
-            logger.info(f"=== ТЕСТ ЗАВЕРШЕН ===")
+            logger.info(f'=== ТЕСТ ЗАВЕРШЕН ===')
             return result
             
         except Exception as e:
-            logger.error(f"Ошибка в тесте чтения ACL: {e}")
+            logger.error(f'Ошибка в тесте чтения ACL: {e}')
             return {
                 'document_id': document_id,
                 'error': str(e)
             }
 
-    def get_user_roles(self, username: str) -> List[str]:
+    async def get_user_roles(self, username: str) -> List[str]:
         """
         Получает список названий ролей пользователя
         Использует обратный подход: проверяет все роли и ищет пользователя по username
@@ -801,11 +862,11 @@ class DocumentAccessManager:
             Список названий ролей (label)
         """
         try:
-            client = self._get_mayan_client()
+            client = await self._get_mayan_client()
             
             # Получаем все роли (без пагинации, если возможно)
             logger.info(f'Получаем все роли для поиска пользователя {username}')
-            all_roles = client.get_roles(page=1, page_size=1000)
+            all_roles = await client.get_roles(page=1, page_size=1000)
             logger.info(f'Получено {len(all_roles)} ролей')
             
             # Находим роли, в которых состоит пользователь
@@ -818,7 +879,7 @@ class DocumentAccessManager:
                     continue
                 
                 try:
-                    role_users = client.get_role_users(role_id)
+                    role_users = await client.get_role_users(role_id)
                     logger.debug(f'Роль {role_label} (ID: {role_id}) содержит {len(role_users)} пользователей')
                     
                     # Проверяем, есть ли пользователь в этой роли по username
@@ -840,10 +901,10 @@ class DocumentAccessManager:
         except Exception as e:
             logger.error(f'Ошибка при получении ролей пользователя {username}: {e}')
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f'Traceback: {traceback.format_exc()}')
             return []
     
-    def grant_document_access_for_signing(self, document_id: str, document_label: str, 
+    async def grant_document_access_for_signing(self, document_id: str, document_label: str, 
                                          signer_usernames: List[str]) -> bool:
         """
         Предоставляет доступ к документу ролям подписантов для подписания
@@ -863,15 +924,15 @@ class DocumentAccessManager:
             
             # Используем системный клиент для получения групп (административные права)
             # и пользовательский клиент для предоставления доступа
-            system_client = MayanClient.create_default()
-            user_client = self._get_mayan_client()
+            system_client = await MayanClient.create_default()
+            user_client = await self._get_mayan_client()
             
             logger.info(f'=== НАЧАЛО ПОИСКА РОЛЕЙ ЧЕРЕЗ ГРУППЫ ===')
             logger.info(f'Подписанты: {signer_usernames}')
             
             # Шаг 1: Получаем все группы через системный клиент
             logger.info('Шаг 1: Получаем все группы (используем системный клиент)')
-            all_groups = system_client.get_groups()
+            all_groups = await system_client.get_groups()
             logger.info(f'Получено {len(all_groups)} групп')
             
             if not all_groups:
@@ -895,7 +956,7 @@ class DocumentAccessManager:
                 
                 try:
                     # Получаем пользователей группы через системный клиент
-                    group_users = system_client.get_group_users(str(group_id))
+                    group_users = await system_client.get_group_users(str(group_id))
                     logger.debug(f'Группа {group_name} (ID: {group_id}) содержит {len(group_users)} пользователей')
                     
                     # Для каждого пользователя группы запоминаем эту группу
@@ -931,7 +992,7 @@ class DocumentAccessManager:
             # Шаг 4: Получаем все роли и для каждой роли получаем группы
             # Используем системный клиент для получения ролей
             logger.info('Шаг 4: Получаем роли и их группы (используем системный клиент)')
-            all_roles = system_client.get_roles(page=1, page_size=1000)
+            all_roles = await system_client.get_roles(page=1, page_size=1000)
             logger.info(f'Получено {len(all_roles)} ролей')
             
             if not all_roles:
@@ -950,7 +1011,7 @@ class DocumentAccessManager:
                 
                 try:
                     # Получаем группы роли через системный клиент
-                    role_groups = system_client.get_role_groups(role_id)
+                    role_groups = await system_client.get_role_groups(role_id)
                     logger.debug(f'Роль {role_label} (ID: {role_id}) содержит {len(role_groups)} групп')
                     
                     # Проверяем, есть ли пересечение между группами роли и группами подписантов
@@ -961,7 +1022,7 @@ class DocumentAccessManager:
                     
                     if common_groups:
                         unique_roles.add(role_label)
-                        logger.info(f'✓ Найдена роль {role_label} для подписантов (общие группы: {common_groups})')
+                        logger.info(f'Найдена роль {role_label} для подписантов (общие группы: {common_groups})')
                         
                 except Exception as e:
                     logger.warning(f'Ошибка при получении групп роли {role_label} (ID: {role_id}): {e}')
@@ -981,7 +1042,7 @@ class DocumentAccessManager:
             permission_names = AccessTypeManager.get_access_type_permissions(AccessType.SUBSCRIBE_DOCUMENT)
             
             # Получаем все разрешения через пользовательский клиент
-            all_permissions = user_client.get_permissions()
+            all_permissions = await user_client.get_permissions()
             
             # Составляем маппинг название -> pk
             permission_map = {}
@@ -1006,7 +1067,7 @@ class DocumentAccessManager:
             success_count = 0
             for role_name in unique_roles:
                 try:
-                    result = self.grant_document_access_to_role_by_pks(
+                    result = await self.grant_document_access_to_role_by_pks(
                         document_id=document_id,
                         document_label=document_label,
                         role_name=role_name,
@@ -1014,9 +1075,9 @@ class DocumentAccessManager:
                     )
                     if result:
                         success_count += 1
-                        logger.info(f'✓ Доступ к документу {document_id} предоставлен роли {role_name}')
+                        logger.info(f'Доступ к документу {document_id} предоставлен роли {role_name}')
                     else:
-                        logger.error(f'✗ Не удалось предоставить доступ роли {role_name}')
+                        logger.error(f'Не удалось предоставить доступ роли {role_name}')
                 except Exception as e:
                     logger.error(f'Ошибка при предоставлении доступа роли {role_name}: {e}')
                     import traceback
@@ -1029,10 +1090,10 @@ class DocumentAccessManager:
         except Exception as e:
             logger.error(f'Ошибка при предоставлении доступа для подписания: {e}')
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f'Traceback: {traceback.format_exc()}')
             return False
 
-    def grant_document_access_to_roles(self, document_id: str, document_label: str, 
+    async def grant_document_access_to_roles(self, document_id: str, document_label: str, 
                                       role_names: List[str]) -> bool:
         """
         Предоставляет доступ к документу указанным ролям для подписания
@@ -1056,13 +1117,13 @@ class DocumentAccessManager:
             logger.info(f'Документ: {document_id} ({document_label})')
             logger.info(f'Роли: {role_names}')
             
-            client = self._get_mayan_client()
+            client = await self._get_mayan_client()
             
             # Получаем разрешения для типа доступа SUBSCRIBE_DOCUMENT
             permission_names = AccessTypeManager.get_access_type_permissions(AccessType.SUBSCRIBE_DOCUMENT)
             
             # Получаем все разрешения
-            all_permissions = client.get_permissions()
+            all_permissions = await client.get_permissions()
             
             # Составляем маппинг название -> pk
             permission_map = {}
@@ -1087,7 +1148,7 @@ class DocumentAccessManager:
             success_count = 0
             for role_name in role_names:
                 try:
-                    result = self.grant_document_access_to_role_by_pks(
+                    result = await self.grant_document_access_to_role_by_pks(
                         document_id=document_id,
                         document_label=document_label,
                         role_name=role_name,
@@ -1095,9 +1156,9 @@ class DocumentAccessManager:
                     )
                     if result:
                         success_count += 1
-                        logger.info(f'✓ Доступ к документу {document_id} предоставлен роли {role_name}')
+                        logger.info(f'Доступ к документу {document_id} предоставлен роли {role_name}')
                     else:
-                        logger.error(f'✗ Не удалось предоставить доступ роли {role_name}')
+                        logger.error(f'Не удалось предоставить доступ роли {role_name}')
                 except Exception as e:
                     logger.error(f'Ошибка при предоставлении доступа роли {role_name}: {e}')
                     import traceback
@@ -1110,7 +1171,7 @@ class DocumentAccessManager:
         except Exception as e:
             logger.error(f'Ошибка при предоставлении доступа ролям: {e}')
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f'Traceback: {traceback.format_exc()}')
             return False
 
 # Глобальный экземпляр менеджера

@@ -5,6 +5,7 @@ from config.settings import config
 from auth.session_manager import session_manager
 from auth.token_storage import token_storage, clear_last_token
 from menu import menu
+from pages.mayan_documents import _current_user
 
 def logout():
     try:
@@ -17,6 +18,14 @@ def logout():
         session_manager.remove_session(token)
         token_storage.remove_token(clientIp)
     clear_last_token()
+    
+    # Сбрасываем кэшированного пользователя в mayan_documents
+    try:
+        global _current_user
+        _current_user = None
+    except:
+        pass
+    
     ui.navigate.to('/login')
 
 def create_user_info():

@@ -646,3 +646,33 @@ class DocumentSignatureMetadata(pydantic.BaseModel):
         }
         self.signatures.append(new_signature)
         self.updated_at = datetime.now().isoformat()
+
+
+class IncomingEmail(pydantic.BaseModel):
+    """Модель входящего письма"""
+    message_id: str
+    from_address: str
+    subject: str
+    body: str
+    received_date: datetime
+    attachments: List[Dict[str, Any]] = []
+    # attachment = {
+    #             'filename': str,  # Имя файла
+    #             'content': bytes, # Содержимое файла
+    #             'mimetype': str,  # MIME-тип
+    #             'size': int       # Размер в байтах
+    #             }         
+    processed: bool = False
+    registered_number: Optional[str] = None
+    error_message: Optional[str] = None
+
+class EmailConfig(pydantic.BaseModel):
+    """Конфигурация почтового сервера"""
+    server: str
+    port: int
+    username: str
+    password: str
+    use_ssl: bool = True
+    protocol: str = "imap"  # imap или pop3
+    allowed_senders: List[str] = []  # Whitelist адресов
+

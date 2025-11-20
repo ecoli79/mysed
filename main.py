@@ -115,7 +115,19 @@ def mayan_documents_upload_page_handler() -> None:
         'user': user.username
     })
     with theme.frame('Загрузка документов'):
-        mayan_documents.upload_content()
+        # Создаем контейнер в синхронном контексте
+        container = ui.column().classes('w-full')
+        
+        async def load_upload_content():
+            try:
+                # Передаем контейнер и пользователя в функцию
+                await mayan_documents.upload_content(container, user)
+            except Exception as e:
+                logger.error(f'Ошибка загрузки страницы загрузки документов: {e}', exc_info=True)
+                with container:
+                    ui.label(f'Ошибка загрузки страницы: {str(e)}').classes('text-red-500')
+        
+        ui.timer(0.1, lambda: asyncio.create_task(load_upload_content()), once=True)
 
 # Страница только для администраторов
 @ui.page('/admin')

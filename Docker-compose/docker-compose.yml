@@ -1,0 +1,228 @@
+# Удалена строка version: '3.8' - она устарела
+
+services:
+  # ==================== PostgreSQL (единый экземпляр) ====================
+  postgresql:
+    image: postgres:14.15-alpine3.21
+    container_name: postgresql
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Gkb6CodCod}
+      POSTGRES_DB: postgres
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./data/postgresql:/var/lib/postgresql/data
+      - ./scripts/postgresql-init:/docker-entrypoint-initdb.d
+      - ./backups/postgresql:/backups
+    networks:
+      - services_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command:
+      - "postgres"
+      - "-c"
+      - "default_statistics_target=200"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "work_mem=32MB"
+
+  # ==================== PostgreSQL Backup Service ====================
+  postgresql-backup:
+    image: postgres:14.15-alpine3.21
+    container_name: postgresql-backup
+    environment:
+      PGHOST: postgresql
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:-Gkb6CodCod}
+    volumes:
+      - ./backups/postgresql:/backups
+      - ./scripts/backup-script.sh:/backup-script.sh
+    networks:
+      - services_network
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/backup-script.sh"]
+    profiles:
+      - backup
+
+  # ==================== OpenLDAP ====================
+  openldap:
+    image: osixia/openldap:latest
+    container_name: openldap
+    environment:
+      - LDAP_ORGANISATION=gp7
+      - LDAP_DOMAIN=permgp7.ru
+      - LDAP_ADMIN_PASSWORD=Gkb6CodCod
+    ports:
+      - "389:389"
+      - "636:636"
+    volumes:
+      - ./data/openldap/ldap_data:/var/lib/ldap
+      - ./data/openldap/ldap_config:/etc/ldap/slapd.d
+      - ./backups/openldap:/backups
+    networks:
+      - services_network
+    restart: unless-stopped
+
+  # ==================== phpLDAPadmin ====================
+  phpldapadmin:
+    image: osixia/phpldapadmin:latest
+    container_name: phpldapadmin
+    environment:
+      - PHPLDAPADMIN_LDAP_HOSTS=openldap
+    ports:
+      - "6443:443"
+    depends_on:
+      - openldap
+    networks:
+      - services_network
+    restart: unless-stopped
+
+  # ==================== RabbitMQ (для Mayan) ====================
+  rabbitmq:
+    image: rabbitmq:4.0.5-management-alpine
+    container_name: rabbitmq
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${MAYAN_RABBITMQ_USER:-mayan}
+      RABBITMQ_DEFAULT_PASS: ${MAYAN_RABBITMQ_PASSWORD:-mayanrabbitpass}
+      RABBITMQ_DEFAULT_VHOST: ${MAYAN_RABBITMQ_VHOST:-mayan}
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: ${MAYAN_RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS:--rabbit consumer_timeout 1800000}
+    ports:
+      - "${MAYAN_RABBITMQ_ADMIN_PORT:-15672}:15672"
+      - "5672:5672"
+    volumes:
+      - ./data/rabbitmq:/var/lib/rabbitmq
+      - ./backups/rabbitmq:/backups
+    networks:
+      - services_network
+    restart: unless-stopped
+
+  # ==================== Redis (для Mayan) ====================
+  redis:
+    image: redis:7.4.1-alpine3.20
+    container_name: redis
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --databases
+      - "3"
+      - --maxmemory
+      - "100mb"
+      - --maxclients
+      - "500"
+      - --maxmemory-policy
+      - "allkeys-lru"
+      - --requirepass
+      - "${MAYAN_REDIS_PASSWORD:-mayanredispassword}"
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+      - ./backups/redis:/backups
+    networks:
+      - services_network
+    restart: unless-stopped
+
+  # ==================== Elasticsearch (для Mayan, опционально) ====================
+  elasticsearch:
+    image: elasticsearch:7.17.26
+    container_name: elasticsearch
+    environment:
+      - bootstrap.memory_lock=true
+      - discovery.type=single-node
+      - http.max_content_length=400mb
+      - xpack.security.enabled=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - ELASTIC_PASSWORD=${MAYAN_ELASTICSEARCH_PASSWORD:-mayanespassword}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - ./data/elasticsearch:/usr/share/elasticsearch/data
+      - ./backups/elasticsearch:/backups
+    networks:
+      - services_network
+    restart: unless-stopped
+    profiles:
+      - elasticsearch
+
+  # ==================== Mayan EDMS ====================
+  mayan-app:
+    image: mayanedms/mayanedms:latest
+    container_name: mayan-app
+    environment:
+      MAYAN_CELERY_BROKER_URL: amqp://${MAYAN_RABBITMQ_USER:-mayan}:${MAYAN_RABBITMQ_PASSWORD:-mayanrabbitpass}@rabbitmq:5672/${MAYAN_RABBITMQ_VHOST:-mayan}
+      MAYAN_CELERY_RESULT_BACKEND: redis://:${MAYAN_REDIS_PASSWORD:-mayanredispassword}@redis:6379/1
+      MAYAN_DATABASES: "{'default':{'ENGINE':'django.db.backends.postgresql','NAME':'mayan','PASSWORD':'${MAYAN_DATABASE_PASSWORD:-mayandbpass}','USER':'${MAYAN_DATABASE_USER:-mayan}','HOST':'postgresql','PORT':5432,'CONN_MAX_AGE':0}}"
+      MAYAN_LOCK_MANAGER_BACKEND: mayan.apps.lock_manager.backends.redis_lock.RedisLock
+      MAYAN_LOCK_MANAGER_BACKEND_ARGUMENTS: "{'redis_url':'redis://:${MAYAN_REDIS_PASSWORD:-mayanredispassword}@redis:6379/2'}"
+      MAYAN_SETTINGS_MODULE: user_settings.ldap_connection_settings
+      MAYAN_DOCUMENTS_FILE_STORAGE_BACKEND: "storages.backends.s3boto3.S3Boto3Storage"
+      MAYAN_DOCUMENTS_FILE_STORAGE_BACKEND_ARGUMENTS: '{"bucket_name": "mayan", "endpoint_url": "http://172.19.228.50:9000", "access_key": "admin", "secret_key": "gkb6codcod", "region_name": "us-east-1", "use_ssl": false, "default_acl": "private"}'
+    ports:
+      - "${MAYAN_FRONTEND_HTTP_PORT:-80}:8000"
+    volumes:
+      - ./data/mayan/app:/var/lib/mayan
+      - ./mayan/document_deadlines:/var/lib/mayan/document_deadlines
+      - ./mayan/media:/var/lib/mayan/user_settings
+      - ./backups/mayan:/backups
+    networks:
+      - services_network
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+        mode: "non-blocking"
+
+  # ==================== Camunda BPM ====================
+  camunda:
+    image: camunda/camunda-bpm-platform:run-latest
+    container_name: camunda
+    ports:
+      - "8081:8080"
+      - "8443:8443"
+    command: ["./start.sh", "--production"]
+    volumes:
+      - ./camunda/production.yml:/camunda/configuration/production.yml
+      - ./data/camunda:/camunda/webapps
+      - ./backups/camunda:/backups
+    environment:
+      - CAMUNDA_BPM_RUN_CONFIGURATION=production
+    networks:
+      - services_network
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  services_network:
+    driver: bridge
+
+

@@ -27,19 +27,19 @@ class SignatureManager:
     
     def __init__(self):
         self.mayan_client = None
-    
-    def _get_mayan_client(self) -> MayanClient:
+     
+    async def _get_mayan_client(self) -> MayanClient:
         if not self.mayan_client:
-            self.mayan_client = MayanClient.create_with_session_user()
+            self.mayan_client = await MayanClient.create_with_session_user()
         return self.mayan_client
     
-    def get_document_current_hash(self, document_id: str) -> Optional[str]:
+    async def get_document_current_hash(self, document_id: str) -> Optional[str]:
         '''Получает хеш актуальной версии документа'''
         try:
-            mayan_client = self._get_mayan_client()
+            mayan_client = await self._get_mayan_client()
             
             # ИСПРАВЛЕНИЕ: Получаем БИНАРНОЕ содержимое файла напрямую
-            file_content = mayan_client.get_document_file_content(document_id)
+            file_content = await mayan_client.get_document_file_content(document_id)
             
             if not file_content:
                 logger.error(f'Не удалось получить содержимое файла документа {document_id}')
@@ -56,11 +56,11 @@ class SignatureManager:
             logger.error(f'Ошибка получения хеша документа {document_id}: {e}')
             return None
     
-    def upload_signature_to_document(self, document_id: str, username: str, 
+    async def upload_signature_to_document(self, document_id: str, username: str, 
                                  signature_base64: str, certificate_info: Dict[str, Any]) -> bool:
         '''Загружает файл подписи *.p7s к документу'''
         try:
-            mayan_client = self._get_mayan_client()
+            mayan_client = await self._get_mayan_client()
             
             # Декодируем подпись из base64
             import base64
@@ -72,7 +72,7 @@ class SignatureManager:
             logger.info(f'Проверяем наличие существующих подписей пользователя {username} для документа {document_id}')
             
             # Получаем список файлов документа
-            files_response = mayan_client._make_request('GET', f'documents/{document_id}/files/')
+            files_response = await mayan_client._make_request('GET', f'documents/{document_id}/files/')
             files_response.raise_for_status()
             files_data = files_response.json()
             files_list = files_data.get('results', [])
@@ -89,7 +89,7 @@ class SignatureManager:
             if existing_signature_file:
                 logger.info(f'Удаляем существующую подпись {signature_filename}')
                 try:
-                    delete_response = mayan_client._make_request('DELETE', 
+                    delete_response = await mayan_client._make_request('DELETE', 
                         f'documents/{document_id}/files/{existing_signature_file["id"]}/')
                     delete_response.raise_for_status()
                     logger.info(f'Существующая подпись удалена')
@@ -101,7 +101,7 @@ class SignatureManager:
             # чтобы не создавать новую версию документа при загрузке подписи
             logger.info(f'Загружаем подпись {signature_filename} к документу {document_id}')
             
-            result = mayan_client.upload_file_to_document(
+            result = await mayan_client.upload_file_to_document(
                 document_id=int(document_id),
                 filename=signature_filename,
                 file_content=signature_binary,
@@ -122,13 +122,13 @@ class SignatureManager:
             logger.info(f'Подпись загружена с ID: {file_id}')
             
             # Получаем текущий хеш документа (после загрузки, но версия не изменилась)
-            document_hash = self.get_document_current_hash(document_id)
+            document_hash = await self.get_document_current_hash(document_id)
             if not document_hash:
                 logger.error(f'Не удалось получить хеш документа {document_id}')
                 return False
             
             # Сохраняем метаданные о подписи
-            self._save_signature_metadata(document_id, username, file_id, 
+            await self._save_signature_metadata(document_id, username, file_id, 
                                         document_hash, signature_base64, certificate_info)
             
             logger.info(f'Подпись {username}.p7s успешно загружена к документу {document_id}')
@@ -138,7 +138,7 @@ class SignatureManager:
             logger.error(f'Ошибка загрузки подписи: {e}', exc_info=True)
             return False
     
-    def _save_signature_metadata(self, document_id: str, username: str, file_id: str,
+    async def _save_signature_metadata(self, document_id: str, username: str, file_id: str,
                                 document_hash: str, signature_base64: str, 
                                 certificate_info: Dict[str, Any]) -> bool:
         '''Сохраняет метаданные подписи'''
@@ -164,7 +164,7 @@ class SignatureManager:
                 'status': 'valid',
             }
             
-            mayan_client = self._get_mayan_client()
+            mayan_client = await self._get_mayan_client()
             
             # Создаем имя файла метаданных
             metadata_filename = f'signature_metadata_{username}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
@@ -176,7 +176,7 @@ class SignatureManager:
             # чтобы не создавать новую версию документа при загрузке метаданных
             logger.info(f'Загружаем метаданные подписи {metadata_filename} к документу {document_id}')
             
-            result = mayan_client.upload_file_to_document(
+            result = await mayan_client.upload_file_to_document(
                 document_id=int(document_id),
                 filename=metadata_filename,
                 file_content=metadata_content,
@@ -197,13 +197,13 @@ class SignatureManager:
             logger.error(f'Ошибка сохранения метаданных подписи: {e}', exc_info=True)
             return False
     
-    def check_user_signature_exists(self, document_id: str, username: str) -> bool:
+    async def check_user_signature_exists(self, document_id: str, username: str) -> bool:
         '''Проверяет, существует ли уже подпись пользователя для документа'''
         try:
-            mayan_client = self._get_mayan_client()
+            mayan_client = await self._get_mayan_client()
             
             # Получаем список файлов документа
-            files_response = mayan_client._make_request('GET', f'documents/{document_id}/files/')
+            files_response = await mayan_client._make_request('GET', f'documents/{document_id}/files/')
             files_response.raise_for_status()
             files_data = files_response.json()
             files_list = files_data.get('results', [])
@@ -223,17 +223,17 @@ class SignatureManager:
             logger.error(f'Ошибка проверки подписи пользователя {username} для документа {document_id}: {e}')
             return False
     
-    def validate_document_signatures(self, document_id: str) -> Dict[str, Any]:
+    async def validate_document_signatures(self, document_id: str) -> Dict[str, Any]:
         '''Проверяет валидность всех подписей документа'''
         try:
             # Получаем текущий хеш документа
-            current_hash = self.get_document_current_hash(document_id)
+            current_hash = await self.get_document_current_hash(document_id)
             if not current_hash:
                 return {'valid': False, 'error': 'Не удалось получить хеш документа'}
             
             # Получаем список файлов документа
-            mayan_client = self._get_mayan_client()
-            files_response = mayan_client._make_request('GET', f'documents/{document_id}/files/')
+            mayan_client = await self._get_mayan_client()
+            files_response = await mayan_client._make_request('GET', f'documents/{document_id}/files/')
             files_response.raise_for_status()
             files_data = files_response.json()
             
@@ -263,7 +263,7 @@ class SignatureManager:
                                            key=lambda x: x['filename'], 
                                            reverse=True)[0]
                     
-                    metadata_content = mayan_client._make_request('GET', 
+                    metadata_content = await mayan_client._make_request('GET', 
                         f'documents/{document_id}/files/{latest_metadata["id"]}/download/')
                     metadata_content.raise_for_status()
                     metadata = json.loads(metadata_content.content)
@@ -298,17 +298,17 @@ class SignatureManager:
             logger.error(f'Ошибка валидации подписей для документа {document_id}: {e}')
             return {'valid': False, 'error': str(e)}
     
-    def invalidate_all_signatures(self, document_id: str) -> bool:
+    async def invalidate_all_signatures(self, document_id: str) -> bool:
         '''Делает все подписи документа недействительными'''
         try:
             # Получаем текущий хеш документа
-            current_hash = self.get_document_current_hash(document_id)
+            current_hash = await self.get_document_current_hash(document_id)
             if not current_hash:
                 return False
             
             # Получаем список всех метаданных подписей
-            mayan_client = self._get_mayan_client()
-            files_response = mayan_client._make_request('GET', f'documents/{document_id}/files/')
+            mayan_client = await self._get_mayan_client()
+            files_response = await mayan_client._make_request('GET', f'documents/{document_id}/files/')
             files_response.raise_for_status()
             files_data = files_response.json()
             
@@ -317,7 +317,7 @@ class SignatureManager:
             
             for metadata_file in metadata_files:
                 # Загружаем метаданные
-                metadata_content = mayan_client._make_request('GET', 
+                metadata_content = await mayan_client._make_request('GET', 
                     f'documents/{document_id}/files/{metadata_file["id"]}/download/')
                 metadata_content.raise_for_status()
                 metadata = json.loads(metadata_content.content)
@@ -330,7 +330,7 @@ class SignatureManager:
                 # Загружаем обновленные метаданные
                 import io
                 updated_content = json.dumps(metadata, ensure_ascii=False).encode('utf-8')
-                mayan_client._make_request('POST', f'documents/{document_id}/files/',
+                await mayan_client._make_request('POST', f'documents/{document_id}/files/',
                     data={'action_name': 'upload', 'description': 'Обновленные метаданные'},
                     files={'file_new': (metadata_file['filename'], updated_content, 'application/json')})
             
@@ -340,7 +340,7 @@ class SignatureManager:
             logger.error(f'Ошибка инвалидации подписей для документа {document_id}: {e}')
             return False
 
-    def create_signed_document_pdf(self, document_id: str) -> Optional[bytes]:
+    async def create_signed_document_pdf(self, document_id: str) -> Optional[bytes]:
         '''Создает итоговый PDF документ с информацией о всех подписях'''
         try:
             from reportlab.pdfgen import canvas
@@ -352,16 +352,15 @@ class SignatureManager:
             from reportlab.lib.colors import HexColor
             import reportlab.lib.colors as colors
             
-            mayan_client = self._get_mayan_client()
+            mayan_client = await self._get_mayan_client()
             
             # Получаем бинарный файл документа
-            document_content = mayan_client.get_document_file_content(document_id)
+            document_content = await mayan_client.get_document_file_content(document_id)
             if not document_content:
                 logger.error(f'Не удалось получить содержимое документа {document_id}')
                 return None
-            
             # Получаем список подписей
-            files_response = mayan_client._make_request('GET', f'documents/{document_id}/files/')
+            files_response = await mayan_client._make_request('GET', f'documents/{document_id}/files/')
             files_response.raise_for_status()
             files_data = files_response.json()
             files_list = files_data.get('results', [])
@@ -375,7 +374,7 @@ class SignatureManager:
                 if filename.startswith('signature_metadata_') and filename.endswith('.json'):
                     try:
                         # Загружаем метаданные
-                        metadata_response = mayan_client._make_request('GET', 
+                        metadata_response = await mayan_client._make_request('GET', 
                             f'documents/{document_id}/files/{file_info["id"]}/download/')
                         metadata_response.raise_for_status()
                         metadata = json.loads(metadata_response.content)
@@ -393,6 +392,7 @@ class SignatureManager:
                 logger.info(f'Документ {document_id} не имеет подписей')
                 return document_content
             
+            # ... остальной код создания PDF остается без изменений (строки 396-593) ...
             # Загружаем шрифты для поддержки русского текста
             fonts_dir = os.path.join(os.path.dirname(__file__), '..', 'static', 'fonts')
             font_name = 'Helvetica'
@@ -430,8 +430,7 @@ class SignatureManager:
             
             can.setFont(font_name, 9)
             can.setFillColor(colors.grey)
-            can.drawString(2*cm, 27.5*cm, f'Документ ID: {document_id}')
-            can.drawString(2*cm, 27.2*cm, f'Дата создания отчета: {datetime.now().strftime("%d.%m.%Y %H:%M:%S")}')
+            # can.drawString(2*cm, 27.5*cm, f'Документ ID: {document_id}')
             can.drawString(2*cm, 26.9*cm, f'Количество подписей: {len(signatures_info)}')
             
             # ИЗМЕНЕНИЕ: Плашки по 2 в строку, меньшей ширины
@@ -596,25 +595,37 @@ class SignatureManager:
             logger.error(f'Ошибка создания итогового PDF для документа {document_id}: {e}', exc_info=True)
             return None
 
-    def document_has_signatures(self, document_id: str) -> bool:
+    async def document_has_signatures(self, document_id: str) -> bool:
         '''Проверяет, есть ли у документа подписи'''
         try:
-            mayan_client = self._get_mayan_client()
+            mayan_client = await self._get_mayan_client()
             
-            # Получаем список файлов документа
-            files_response = mayan_client._make_request('GET', f'documents/{document_id}/files/')
+            # Получаем список файлов документа (с параметрами для получения всех файлов)
+            files_response = await mayan_client._make_request(
+                'GET', 
+                f'documents/{document_id}/files/',
+                params={'page': 1, 'page_size': 100}  # Явно указываем параметры
+            )
             files_response.raise_for_status()
             files_data = files_response.json()
             files_list = files_data.get('results', [])
+            
+            # Логируем все файлы для отладки
+            logger.info(f'Проверка подписей для документа {document_id}: найдено {len(files_list)} файлов')
+            for file_info in files_list:
+                filename = file_info.get('filename', '')
+                logger.info(f'  - Файл: {filename}')
             
             # Ищем файлы подписей (*.p7s)
             for file_info in files_list:
                 filename = file_info.get('filename', '')
                 if filename.endswith('.p7s'):
+                    logger.info(f'Найдена подпись: {filename} для документа {document_id}')
                     return True
             
+            logger.info(f'Подписи не найдены для документа {document_id}')
             return False
             
         except Exception as e:
-            logger.error(f'Ошибка проверки наличия подписей для документа {document_id}: {e}')
+            logger.error(f'Ошибка проверки наличия подписей для документа {document_id}: {e}', exc_info=True)
             return False

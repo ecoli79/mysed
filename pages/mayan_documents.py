@@ -1,5 +1,5 @@
 from nicegui import ui
-from services.mayan_connector import MayanClient, MayanDocument
+from services.mayan_connector import MayanClient, MayanDocument, MayanTokenExpiredError
 from services.access_types import AccessTypeManager, AccessType
 from services.document_access_manager import document_access_manager
 from auth.middleware import get_current_user
@@ -19,6 +19,9 @@ import os
 import base64
 from components.loading_indicator import LoadingIndicator, with_loading
 import logging
+import asyncio
+from auth.ldap_auth import LDAPAuthenticator
+from auth.session_manager import session_manager
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,7 @@ _upload_form_container: Optional[ui.column] = None
 _mayan_client: Optional[MayanClient] = None
 _connection_status: bool = False
 _auth_error: Optional[str] = None
+_current_user: Optional[Any] = None
 
 # Исключения
 class UploadError(Exception):
@@ -84,7 +88,7 @@ class DocumentMetadata:
 # Протоколы
 class FormDataExtractor(Protocol):
     """Протокол для извлечения данных из формы"""
-    def extract_metadata(self, container: ui.column, params: UploadParams) -> DocumentMetadata: ...
+    async def extract_metadata(self, container: ui.column, params: UploadParams) -> DocumentMetadata: ...
 
 # Классы
 class FileValidator:
@@ -132,26 +136,30 @@ class DocumentUploader:
     def __init__(self, client: MayanClient, extractor: FormDataExtractor = None):
         self.client = client
         self.extractor = extractor
+        self.container: Optional[ui.column] = None  # Добавить для хранения контейнера
     
-    def upload_document(
+    async def upload_document(
         self, 
         upload_event, 
         params: UploadParams, 
         container: ui.column
     ) -> None:
         """Загружает документ"""
+        # Сохраняем контейнер для уведомлений
+        self.container = container
+        
         try:
             # Валидация входных данных
             self._validate_params(params)
             
             # Извлечение метаданных
-            metadata = self.extractor.extract_metadata(container, params)
+            metadata = await self.extractor.extract_metadata(container, params)
             
             # Обработка файла
             file_info = self._process_file(upload_event)
             
             # Создание документа с файлом в одном запросе используя новый метод из MayanClient
-            result = self.client.create_document_with_file(
+            result = await self.client.create_document_with_file(
                 label=params.label,
                 description=params.description,
                 filename=file_info.name,
@@ -216,40 +224,55 @@ class DocumentUploader:
     
     def _notify_success(self, label: str, document_id: int) -> None:
         """Уведомляет об успешной загрузке"""
-        ui.notify(f'Документ "{label}" успешно загружен!', type='positive')
+        try:
+            if self.container:
+                with self.container:
+                    success_label = ui.label(f'Документ "{label}" успешно загружен! (ID: {document_id})').classes('text-green-600 p-4 bg-green-50 rounded')
+            else:
+                logger.info(f'Документ "{label}" успешно загружен! (ID: {document_id})')
+        except Exception as e:
+            logger.info(f'Документ "{label}" успешно загружен! (ID: {document_id})')
+            logger.warning(f'Не удалось отобразить уведомление об успехе: {e}')
         logger.info(f"Документ {label} успешно загружен с ID: {document_id}")
     
     def _notify_error(self, message: str) -> None:
         """Уведомляет об ошибке"""
-        ui.notify(message, type='error')
-        logger.error(message)
+        try:
+            if self.container:
+                with self.container:
+                    error_label = ui.label(message).classes('text-red-500 p-4 bg-red-50 rounded')
+            else:
+                logger.error(message)
+        except Exception as e:
+            logger.error(message)
+            logger.warning(f'Не удалось отобразить ошибку в UI: {e}')
 
 class SimpleFormDataExtractor:
     """Упрощенный извлекатель данных из формы"""
     
-    def extract_metadata(self, container: ui.column, params: UploadParams) -> DocumentMetadata:
+    async def extract_metadata(self, container: ui.column, params: UploadParams) -> DocumentMetadata:
         """Извлекает метаданные из параметров напрямую"""
         # Получаем клиент для получения ID по названиям
-        client = get_mayan_client()
+        client = await get_mayan_client()
         
         # Получаем ID типа документа
-        document_type_id = self._get_document_type_id_by_name(client, params.document_type_name)
+        document_type_id = await self._get_document_type_id_by_name(client, params.document_type_name)
         
         # Получаем ID кабинета - используем переданный ID, если он есть, иначе ищем по имени
         cabinet_id = params.cabinet_id
         logger.info(f"SimpleFormDataExtractor: params.cabinet_id={params.cabinet_id}, params.cabinet_name={params.cabinet_name}")
         if not cabinet_id and params.cabinet_name:
             logger.info(f"SimpleFormDataExtractor: Ищем кабинет по имени '{params.cabinet_name}'")
-            cabinet_id = self._get_cabinet_id_by_name(client, params.cabinet_name)
+            cabinet_id = await self._get_cabinet_id_by_name(client, params.cabinet_name)
             logger.info(f"SimpleFormDataExtractor: Найден cabinet_id={cabinet_id}")
         
         logger.info(f"SimpleFormDataExtractor: Итоговый cabinet_id={cabinet_id}")
         
         # Получаем ID языка
-        # language_id = self._get_language_id_by_name(client, params.language_name)
+        # language_id = await self._get_language_id_by_name(client, params.language_name)
         
         # Получаем ID тегов
-        tag_ids = self._get_tag_ids_by_names(client, params.tag_names)
+        tag_ids = await self._get_tag_ids_by_names(client, params.tag_names)
         
         return DocumentMetadata(
             document_type_id=document_type_id,
@@ -258,38 +281,38 @@ class SimpleFormDataExtractor:
             tag_ids=tag_ids
         )
     
-    def _get_document_type_id_by_name(self, client: MayanClient, type_name: Optional[str]) -> int:
+    async def _get_document_type_id_by_name(self, client: MayanClient, type_name: Optional[str]) -> int:
         """Получает ID типа документа по названию"""
         if not type_name:
             raise ValidationError("Тип документа не выбран")
         
-        document_types = client.get_document_types()
+        document_types = await client.get_document_types()
         for dt in document_types:
             if dt['label'] == type_name:
                 return dt['id']
         
         raise ValidationError(f"Не удалось найти тип документа: {type_name}")
     
-    def _get_cabinet_id_by_name(self, client: MayanClient, cabinet_name: Optional[str]) -> Optional[int]:
+    async def _get_cabinet_id_by_name(self, client: MayanClient, cabinet_name: Optional[str]) -> Optional[int]:
         """Получает ID кабинета по названию"""
         if not cabinet_name:
             return None
         
-        cabinets = client.get_cabinets()
+        cabinets = await client.get_cabinets()
         for cabinet in cabinets:
             if cabinet['label'] == cabinet_name:
                 return cabinet['id']
         
         logger.warning(f"Не удалось найти кабинет: {cabinet_name}")
         return None
-
-    def _get_tag_ids_by_names(self, client: MayanClient, tag_names: Optional[List[str]]) -> Optional[List[int]]:
+    
+    async def _get_tag_ids_by_names(self, client: MayanClient, tag_names: Optional[List[str]]) -> Optional[List[int]]:
         """Получает ID тегов по названиям"""
         if not tag_names:
             return None
         
         try:
-            tags = client.get_tags()
+            tags = await client.get_tags()
             tag_ids = []
             
             for tag_name in tag_names:
@@ -305,17 +328,111 @@ class SimpleFormDataExtractor:
             logger.warning(f"Ошибка при получении тегов: {e}")
             return None
 
-def get_mayan_client() -> MayanClient:
+async def get_mayan_client() -> MayanClient:
     """Получает клиент Mayan EDMS с учетными данными текущего пользователя"""
-    return MayanClient.create_with_session_user()
+    try:
+        # ВСЕГДА получаем текущего пользователя из контекста, чтобы использовать актуальный токен
+        from auth.middleware import get_current_user
+        current_user = get_current_user()
+        
+        if not current_user:
+            raise ValueError('Пользователь не авторизован')
+        
+        # Создаем клиент с API токеном пользователя напрямую
+        from config.settings import config
+        if not hasattr(current_user, 'mayan_api_token') or not current_user.mayan_api_token:
+            raise MayanTokenExpiredError(f'У пользователя {current_user.username} нет API токена для доступа к Mayan EDMS')
+        
+        client = MayanClient(
+            base_url=config.mayan_url,
+            api_token=current_user.mayan_api_token
+        )
+        
+        # Проверяем действительность токена
+        is_valid = await client.check_token_validity()
+        
+        if not is_valid:
+            logger.warning('API токен Mayan EDMS истек, запрашиваем повторную авторизацию')
+            
+            # Показываем диалог повторной авторизации
+            new_token = await show_mayan_reauth_dialog()
+            
+            if new_token:
+                # Обновляем токен пользователя в сессии
+                current_user.mayan_api_token = new_token
+                # Обновляем сессию в session_manager
+                try:
+                    from nicegui import ui
+                    from auth.token_storage import token_storage
+                    from auth.session_manager import session_manager
+                    client_ip = ui.context.client.request.client.host
+                    token = token_storage.get_token(client_ip)
+                    if token:
+                        session = session_manager.get_user_by_token(token)
+                        if session:
+                            session.mayan_api_token = new_token
+                except Exception as e:
+                    logger.warning(f'Не удалось обновить токен в сессии: {e}')
+                
+                # Создаем новый клиент с обновленным токеном
+                client = MayanClient(
+                    base_url=config.mayan_url,
+                    api_token=new_token
+                )
+                logger.info('Клиент Mayan EDMS обновлен с новым токеном')
+            else:
+                raise ValueError('Повторная авторизация не удалась или была отменена')
+        
+        return client
+        
+    except MayanTokenExpiredError:
+        logger.warning('Обнаружен истекший токен, запрашиваем повторную авторизацию')
+        
+        # Показываем диалог повторной авторизации
+        new_token = await show_mayan_reauth_dialog()
+        
+        if new_token:
+            # Получаем текущего пользователя для обновления токена
+            from auth.middleware import get_current_user
+            current_user = get_current_user()
+            
+            if current_user:
+                current_user.mayan_api_token = new_token
+                # Обновляем сессию в session_manager
+                try:
+                    from nicegui import ui
+                    from auth.token_storage import token_storage
+                    from auth.session_manager import session_manager
+                    client_ip = ui.context.client.request.client.host
+                    token = token_storage.get_token(client_ip)
+                    if token:
+                        session = session_manager.get_user_by_token(token)
+                        if session:
+                            session.mayan_api_token = new_token
+                except Exception as e:
+                    logger.warning(f'Не удалось обновить токен в сессии: {e}')
+            
+            # Создаем новый клиент с обновленным токеном
+            from config.settings import config
+            client = MayanClient(
+                base_url=config.mayan_url,
+                api_token=new_token
+            )
+            logger.info('Клиент Mayan EDMS обновлен с новым токеном')
+            return client
+        else:
+            raise ValueError('Повторная авторизация не удалась или была отменена')
+    except Exception as e:
+        logger.error(f'Ошибка при создании клиента Mayan EDMS: {e}', exc_info=True)
+        raise
 
-def check_connection() -> bool:
+async def check_connection() -> bool:
     """Проверяет подключение к Mayan EDMS"""
     global _connection_status, _auth_error
     
     try:
-        client = get_mayan_client()
-        _connection_status = client.test_connection()
+        client = await get_mayan_client()
+        _connection_status = await client.test_connection()
         _auth_error = None
         return _connection_status
     except Exception as e:
@@ -349,13 +466,13 @@ def format_datetime(dt_str: str) -> str:
     except:
         return dt_str
 
-def update_file_size(document: MayanDocument, size_label: ui.label):
+async def update_file_size(document: MayanDocument, size_label: ui.label):
     """Асинхронно обновляет количество страниц в карточке документа"""
     try:
-        client = get_mayan_client()
+        client = await get_mayan_client()
         
         # Получаем количество страниц документа
-        page_count = client.get_document_page_count(document.document_id)
+        page_count = await client.get_document_page_count(document.document_id)
         
         if page_count and page_count > 0:
             if page_count == 1:
@@ -381,19 +498,250 @@ def create_document_card(document: MayanDocument) -> ui.card:
     logger.info(f"- Размер файла: {document.file_latest_size}")
     logger.info(f"- MIME-тип: {document.file_latest_mimetype}")
     
-    # ИСПРАВЛЕНИЕ: Проверяем наличие подписей у документа
-    has_signatures = False
-    try:
-        from services.signature_manager import SignatureManager
-        signature_manager = SignatureManager()
-        has_signatures = signature_manager.document_has_signatures(document.document_id)
-        logger.info(f"  - Есть подписи: {has_signatures}")
-    except Exception as e:
-        logger.warning(f"Ошибка проверки подписей для документа {document.document_id}: {e}")
-    
     with ui.card().classes('w-full mb-4') as card:
-        with ui.row().classes('w-full items-start'):
-            # Основная информация
+        with ui.row().classes('w-full items-start gap-4'):
+            # Превью документа (слева)
+            preview_container = ui.column().classes('flex-shrink-0')
+            with preview_container:
+                # Контейнер для превью (будет обновляться)
+                preview_html = ui.html('<div class="w-32 h-32 flex items-center justify-center text-xs text-gray-400 bg-gray-100 rounded border">Загрузка превью...</div>').classes('w-32 h-32')
+                
+                # Переменная для хранения data_uri для полноразмерного просмотра
+                preview_data_uri = {'value': None}
+                
+                # Функция для открытия полноразмерного изображения с каруселью
+                async def show_full_preview():
+                    """Открывает полноразмерное изображение превью с каруселью всех страниц"""
+                    try:
+                        client = await get_mayan_client()
+                        
+                        # Получаем все страницы документа
+                        pages = await client.get_document_pages(document.document_id)
+                        
+                        if not pages or len(pages) == 0:
+                            if preview_data_uri['value']:
+                                with ui.dialog().classes('w-full h-full') as dialog:
+                                    with ui.card().classes('w-full h-full flex flex-col').style('max-width: 98vw; max-height: 98vh; width: 98vw; height: 98vh;'):
+                                        # Заголовок (фиксированная высота)
+                                        ui.label(f'Превью документа: {document.label}').classes('text-lg font-semibold mb-2 flex-shrink-0')
+                                        
+                                        # Контейнер для изображения (занимает оставшееся пространство)
+                                        full_preview_html = ui.html(
+                                            f'<img src="{preview_data_uri["value"]}" class="max-w-full object-contain mx-auto" alt="Превью документа {document.document_id}" style="display: block; max-height: calc(98vh - 120px);" />'
+                                        ).classes('flex-1 flex justify-center items-center overflow-auto').style('min-height: 0;')
+                                        
+                                        # Кнопка закрытия (фиксированная высота, всегда видна)
+                                        with ui.row().classes('w-full justify-end mt-2 flex-shrink-0'):
+                                            ui.button('Закрыть', icon='close', on_click=dialog.close).classes('bg-gray-500 text-white')
+                                
+                                dialog.open()
+                            return
+                        
+                        # Создаем диалог с индикатором загрузки
+                        with ui.dialog().classes('w-full h-full') as dialog:
+                            with ui.card().classes('w-full h-full flex flex-col').style('max-width: 99vw; max-height: 99vh; height: 99vh; width: auto;'):
+                                # Заголовок
+                                ui.label(f'Просмотр документа: {document.label}').classes('text-lg font-semibold mb-2 flex-shrink-0 px-4')
+                                
+                                # Контейнер для индикатора загрузки (отцентрирован)
+                                loading_container = ui.column().classes('flex-1').style('display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 1rem;')
+                                
+                                # Создаем индикатор загрузки
+                                loading = LoadingIndicator(loading_container, 'Загрузка страниц документа...')
+                                loading.show()
+                                
+                                # Убираем w-full и центрируем row
+                                if loading.row_widget:
+                                    loading.row_widget.classes(remove='w-full')
+                                    loading.row_widget.style('width: auto; margin: 0 auto;')
+                                
+                                dialog.open()
+                                
+                                # Загружаем изображения всех страниц с обновлением прогресса
+                                pages_data = []
+                                total_pages = len(pages)
+                                
+                                for index, page in enumerate(pages, 1):
+                                    image_url = page.get('image_url')
+                                    if image_url:
+                                        try:
+                                            # Обновляем прогресс
+                                            loading.update_message(f'Загрузка страниц документа... {index} / {total_pages}')
+                                            
+                                            if image_url.startswith('http://') or image_url.startswith('https://'):
+                                                response = await client.client.get(image_url)
+                                            else:
+                                                if image_url.startswith('/'):
+                                                    full_url = f'{client.base_url.rstrip("/")}{image_url}'
+                                                else:
+                                                    full_url = f'{client.api_url.rstrip("/")}/{image_url.lstrip("/")}'
+                                                response = await client.client.get(full_url)
+                                            
+                                            if response.status_code == 200:
+                                                image_data = response.content
+                                                import base64
+                                                img_base64 = base64.b64encode(image_data).decode()
+                                                
+                                                mimetype = 'image/jpeg'
+                                                if image_data[:4] == b'\x89PNG':
+                                                    mimetype = 'image/png'
+                                                elif image_data[:6] in [b'GIF87a', b'GIF89a']:
+                                                    mimetype = 'image/gif'
+                                                
+                                                data_uri = f'data:{mimetype};base64,{img_base64}'
+                                                pages_data.append({
+                                                    'page_number': page.get('page_number', len(pages_data) + 1),
+                                                    'data_uri': data_uri
+                                                })
+                                        except Exception as e:
+                                            logger.warning(f'Ошибка загрузки страницы {page.get("page_number")}: {e}')
+                                
+                                if not pages_data:
+                                    loading.update_message('Не удалось загрузить страницы документа')
+                                    ui.timer(3.0, dialog.close, once=True)
+                                    return
+                                
+                                # Скрываем индикатор загрузки
+                                loading.hide()
+                                loading_container.set_visibility(False)
+                                
+                                # Информация о странице (фиксированная высота)
+                                page_info_label = ui.label(f'Страница 1 из {len(pages_data)}').classes('text-sm text-gray-600 mb-2 flex-shrink-0 px-4')
+                                
+                                # Контейнер для изображения (занимает оставшееся пространство, без пустых отступов)
+                                image_container = ui.html('').classes('flex-1 overflow-auto').style('min-height: 0; width: 100%; display: flex; justify-content: center; align-items: center; padding: 0;')
+                                
+                                current_page = {'index': 0}
+                                
+                                def update_page_display():
+                                    page_data = pages_data[current_page['index']]
+                                    page_number = page_data['page_number']
+                                    page_info_label.text = f'Страница {current_page["index"] + 1} из {len(pages_data)} (страница документа: {page_number})'
+                                    # Изображение центрируется и занимает максимум доступного пространства
+                                    image_container.content = f'<img src="{page_data["data_uri"]}" alt="Страница {page_number}" style="max-width: 100%; max-height: calc(99vh - 250px); height: auto; width: auto; object-fit: contain; display: block; margin: 0 auto;" />'
+                                    image_container.update()
+                                
+                                # Кнопки навигации и закрытия (фиксированная высота, отцентрированы)
+                                with ui.row().classes('w-full justify-center items-center gap-4 mb-2 flex-shrink-0 px-4'):
+                                    prev_button = ui.button('Предыдущая', icon='arrow_back').classes('bg-blue-500 text-white')
+                                    next_button = ui.button('Следующая', icon='arrow_forward').classes('bg-blue-500 text-white')
+                                    close_button = ui.button('Закрыть', icon='close', on_click=dialog.close).classes('bg-gray-500 text-white')
+                                    
+                                    def go_to_previous():
+                                        if current_page['index'] > 0:
+                                            current_page['index'] -= 1
+                                            update_page_display()
+                                            prev_button.set_enabled(current_page['index'] > 0)
+                                            next_button.set_enabled(current_page['index'] < len(pages_data) - 1)
+                                    
+                                    def go_to_next():
+                                        if current_page['index'] < len(pages_data) - 1:
+                                            current_page['index'] += 1
+                                            update_page_display()
+                                            prev_button.set_enabled(current_page['index'] > 0)
+                                            next_button.set_enabled(current_page['index'] < len(pages_data) - 1)
+                                    
+                                    prev_button.on_click(go_to_previous)
+                                    next_button.on_click(go_to_next)
+                                    
+                                    if len(pages_data) > 1:
+                                        prev_button.set_enabled(False)
+                                        next_button.set_enabled(True)
+                                    else:
+                                        prev_button.set_enabled(False)
+                                        next_button.set_enabled(False)
+                                
+                                # Отображаем первую страницу
+                                update_page_display()
+                        
+                    except Exception as e:
+                        logger.error(f'Ошибка при открытии полноразмерного превью: {e}', exc_info=True)
+                        try:
+                            ui.notify(f'Ошибка при открытии превью: {str(e)}', type='error')
+                        except RuntimeError:
+                            # Если нет контекста UI, просто логируем ошибку
+                            logger.error(f'Ошибка при открытии превью (без контекста UI): {str(e)}')
+                
+                # Асинхронно загружаем превью
+                async def load_preview():
+                    """Загружает превью документа"""
+                    try:
+                        logger.info(f'Начинаем загрузку превью для документа {document.document_id}')
+                        client = await get_mayan_client()
+                        
+                        # Получаем URL превью
+                        preview_url = await client.get_document_preview_url(document.document_id)
+                        
+                        if preview_url:
+                            logger.info(f'URL превью для документа {document.document_id}: {preview_url}')
+                            
+                            # Загружаем изображение через клиент с аутентификацией
+                            image_data = await client.get_document_preview_image(document.document_id)
+                            
+                            if image_data:
+                                logger.info(f'Получено {len(image_data)} байт изображения для документа {document.document_id}')
+                                
+                                # Конвертируем в base64 для отображения
+                                import base64
+                                img_base64 = base64.b64encode(image_data).decode()
+                                
+                                # Определяем MIME-тип изображения
+                                mimetype = 'image/jpeg'
+                                if image_data[:4] == b'\x89PNG':
+                                    mimetype = 'image/png'
+                                elif image_data[:6] in [b'GIF87a', b'GIF89a']:
+                                    mimetype = 'image/gif'
+                                
+                                # Устанавливаем превью через data URI в HTML
+                                data_uri = f'data:{mimetype};base64,{img_base64}'
+                                
+                                # Сохраняем data_uri для полноразмерного просмотра
+                                preview_data_uri['value'] = data_uri
+                                
+                                # Создаем кликабельное превью с курсором pointer
+                                html_content = f'''
+                                    <div id="preview_clickable_{document.document_id}" 
+                                         style="cursor: pointer; transition: opacity 0.2s;" 
+                                         onmouseover="this.style.opacity='0.8'" 
+                                         onmouseout="this.style.opacity='1'"
+                                         title="Нажмите для просмотра всех страниц документа">
+                                        <img src="{data_uri}" 
+                                             class="w-32 h-32 object-contain bg-gray-100 rounded border" 
+                                             alt="Превью документа {document.document_id}" 
+                                             style="display: block; pointer-events: none;" />
+                                    </div>
+                                '''
+                                
+                                preview_html.content = html_content
+                                preview_html.update()
+                                
+                                # Добавляем обработчик клика через NiceGUI
+                                # NiceGUI поддерживает async функции напрямую в обработчиках
+                                # Регистрируем обработчик клика через NiceGUI
+                                # Используем ui.timer для регистрации обработчика после обновления DOM
+                                ui.timer(0.1, lambda: preview_html.on('click', show_full_preview), once=True)
+                            else:
+                                logger.warning(f'Не удалось загрузить изображение для документа {document.document_id}')
+                                preview_html.content = '<div class="w-32 h-32 flex items-center justify-center text-xs text-gray-400 bg-gray-100 rounded border">Превью недоступно</div>'
+                                preview_html.update()
+                        else:
+                            logger.warning(f'Превью недоступно для документа {document.document_id}')
+                            preview_html.content = '<div class="w-32 h-32 flex items-center justify-center text-xs text-gray-400 bg-gray-100 rounded border">Превью недоступно</div>'
+                            preview_html.update()
+                    except MayanTokenExpiredError:
+                        logger.warning(f'Токен истек при загрузке превью для документа {document.document_id}')
+                        preview_html.content = '<div class="w-32 h-32 flex items-center justify-center text-xs text-red-400 bg-gray-100 rounded border">Требуется авторизация</div>'
+                        preview_html.update()
+                    except Exception as e:
+                        logger.error(f'Ошибка загрузки превью для документа {document.document_id}: {e}', exc_info=True)
+                        preview_html.content = '<div class="w-32 h-32 flex items-center justify-center text-xs text-red-400 bg-gray-100 rounded border">Ошибка загрузки</div>'
+                        preview_html.update()
+                
+                # Запускаем загрузку превью
+                if document.file_latest_id:
+                    ui.timer(0.1, load_preview, once=True)
+            
+            # Основная информация (в центре)
             with ui.column().classes('flex-1'):
                 ui.label(document.label).classes('text-lg font-semibold')
                 
@@ -418,35 +766,49 @@ def create_document_card(document: MayanDocument) -> ui.card:
                     ui.label(f"Создан: {format_datetime(document.datetime_created)}")
                     ui.label(f"Изменен: {format_datetime(document.datetime_modified)}")
             
-            # Кнопки действий - исправляем структуру и выравнивание
-            with ui.column().classes('items-end gap-2 min-w-fit flex-shrink-0'):
+            # Кнопки действий (справа)
+            buttons_container = ui.column().classes('items-end gap-2 min-w-fit flex-shrink-0')
+            with buttons_container:
                 if document.file_latest_id:
                     # Кнопка скачивания
                     ui.button('Скачать', icon='download').classes('text-xs').on_click(
                         lambda doc=document: download_document_file(doc)
                     )
-                    
-                    # Кнопка предварительного просмотра
-                    ui.button('Просмотр', icon='visibility').classes('text-xs').on_click(
-                        lambda doc=document: preview_document_file(doc)
-                    )
-                    
-                    # ИСПРАВЛЕНИЕ: Кнопка "Скачать с подписями" показывается только если есть подписи
-                    if has_signatures:
-                        ui.button('Скачать с подписями', icon='verified', color='green').classes('text-xs').on_click(
-                            lambda doc=document: download_signed_document(doc)
-                        )                
+                
                 # Кнопка предоставления доступа
                 current_user = get_current_user()
                 if current_user:
                     ui.button('Предоставить доступ', icon='share', color='blue').classes('text-xs').on_click(
                         lambda doc=document: show_grant_access_dialog(doc)
                     )
+        
+        # Асинхронно проверяем наличие подписей и добавляем кнопку, если они есть
+        async def check_and_add_signature_button():
+            """Проверяет наличие подписей и добавляет кнопку"""
+            try:
+                from services.signature_manager import SignatureManager
+                signature_manager = SignatureManager()
+                has_signatures = await signature_manager.document_has_signatures(document.document_id)
+                logger.info(f"  - Есть подписи для документа {document.document_id}: {has_signatures}")
+                
+                if has_signatures:
+                    with buttons_container:
+                        async def download_handler(doc=document):
+                            await download_signed_document(doc)
+                        ui.button('Скачать с подписями', icon='verified', color='green').classes('text-xs').on_click(
+                            lambda doc=document: download_handler(doc)
+                        )
+            except Exception as e:
+                logger.warning(f"Ошибка проверки подписей для документа {document.document_id}: {e}")
+        
+        # Запускаем проверку подписей асинхронно
+        if document.file_latest_id:
+            ui.timer(0.1, check_and_add_signature_button, once=True)
     
     return card
 
 
-def show_grant_access_dialog(document: MayanDocument):
+async def show_grant_access_dialog(document: MayanDocument):
     """
     Показывает диалог для предоставления доступа к документу
     """
@@ -458,7 +820,7 @@ def show_grant_access_dialog(document: MayanDocument):
             
             # Получаем список ролей для выпадающего списка
             try:
-                roles = document_access_manager.get_available_roles()
+                roles = await document_access_manager.get_available_roles()
                 
                 if roles:
                     # Создаем список названий ролей
@@ -519,10 +881,7 @@ def show_grant_access_dialog(document: MayanDocument):
                 ui.label(f'Ошибка при загрузке типов доступа: {str(e)}').classes('text-red-500')
                 access_type_select = None
 
-
-
-
-            def handle_grant_access():
+            async def handle_grant_access():
                 try:
                     logger.info("=== НАЧАЛО ПРЕДОСТАВЛЕНИЯ ДОСТУПА ===")
                     
@@ -561,7 +920,7 @@ def show_grant_access_dialog(document: MayanDocument):
                     logger.info(f"Разрешения для типа доступа: {permission_names}")
                     
                     # Получаем все доступные разрешения из Mayan EDMS
-                    permissions = document_access_manager.get_available_permissions_for_documents()
+                    permissions = await document_access_manager.get_available_permissions_for_documents()
                     logger.info(f"Получено разрешений из Mayan EDMS: {len(permissions)}")
                     
                     # Находим pk разрешений по их названиям
@@ -588,7 +947,7 @@ def show_grant_access_dialog(document: MayanDocument):
                     logger.info(f"Предоставляем доступ к документу {document.document_id} роли {role_name}")
                     
                     # Предоставляем доступ роли
-                    success = document_access_manager.grant_document_access_to_role_by_pks(
+                    success = await document_access_manager.grant_document_access_to_role_by_pks(
                         document_id=document.document_id,
                         document_label=document.label,
                         role_name=role_name,
@@ -690,7 +1049,7 @@ def show_document_content(document: MayanDocument):
         ui.notify(f'Ошибка при получении содержимого: {str(e)}', type='error')
 
 
-def load_recent_documents():
+async def load_recent_documents():
     """Загружает последние 10 документов"""
     global _recent_documents_container
     
@@ -698,7 +1057,7 @@ def load_recent_documents():
         _recent_documents_container.clear()
     
     # Проверяем подключение
-    if not check_connection():
+    if not await check_connection():
         with _recent_documents_container:
             ui.label('Нет подключения к серверу Mayan EDMS').classes('text-red-500 text-center py-8')
             if _auth_error:
@@ -709,7 +1068,8 @@ def load_recent_documents():
     try:
         logger.info("Загружаем последние документы...")
         # Получаем последние 10 документов
-        documents = get_mayan_client().get_documents(page=1, page_size=10)
+        client = await get_mayan_client()
+        documents = await client.get_documents(page=1, page_size=10)
         logger.info(f"Получено документов: {len(documents)}")
         
         if not documents:
@@ -718,21 +1078,24 @@ def load_recent_documents():
             return
         
         with _recent_documents_container:
+            import asyncio
+            tasks = []
             for document in documents:
-                create_document_card(document)
+                card = create_document_card(document)  # Создаем карточку синхронно
+                # Загрузка превью происходит автоматически внутри create_document_card через ui.timer
+                #tasks.append(asyncio.create_task(load_preview_for_card(card, document)))
+            
+            # Ждем завершения всех задач (опционально)
+            # await asyncio.gather(*tasks)
                 
     except Exception as e:
         logger.error(f"Ошибка при загрузке документов: {e}")
         with _recent_documents_container:
             ui.label(f'Ошибка при загрузке документов: {str(e)}').classes('text-red-500 text-center py-8')
 
-def search_documents(query: str):
+async def search_documents(query: str):
     """Выполняет поиск документов"""
     global _search_results_container
-    
-    # Убираем логику переключения табов, так как теперь это отдельная страница
-    # if tabs_widget and search_tab_widget:
-    #     tabs_widget.value = search_tab_widget
     
     if not query.strip():
         if _search_results_container:
@@ -742,7 +1105,7 @@ def search_documents(query: str):
         return
     
     # Проверяем подключение
-    if not check_connection():
+    if not await check_connection():
         if _search_results_container:
             _search_results_container.clear()
             with _search_results_container:
@@ -758,11 +1121,12 @@ def search_documents(query: str):
         loading = LoadingIndicator(_search_results_container, 'Поиск документов...')
         loading.show()
         
-        def perform_search():
+        async def perform_search():
             try:
                 logger.info(f"Выполняем поиск по запросу: {query}")
                 # Выполняем поиск
-                documents = get_mayan_client().search_documents(query, page=1, page_size=20)
+                client = await get_mayan_client()
+                documents = await client.search_documents(query, page=1, page_size=20)
                 logger.info(f"Найдено документов: {len(documents)}")
                 
                 # Скрываем индикатор и очищаем контейнер перед показом результатов
@@ -787,9 +1151,9 @@ def search_documents(query: str):
                     ui.label(f'Ошибка при поиске: {str(e)}').classes('text-red-500 text-center py-8')
         
         # Выполняем поиск с небольшой задержкой, чтобы UI успел обновиться и показать индикатор
-        ui.timer(0.05, perform_search, once=True)
+        ui.timer(0.05, lambda: perform_search(), once=True)
 
-def upload_document():
+async def upload_document():
     """Загружает документ на сервер"""
     global _upload_form_container
     
@@ -800,7 +1164,7 @@ def upload_document():
         ui.label('Загрузка документа').classes('text-lg font-semibold mb-4')
         
         # Проверяем подключение
-        if not check_connection():
+        if not await check_connection():
             ui.label('Нет подключения к серверу Mayan EDMS').classes('text-red-500 text-center py-8')
             if _auth_error:
                 ui.label(f'Ошибка: {_auth_error}').classes('text-sm text-gray-500 text-center')
@@ -813,10 +1177,10 @@ def upload_document():
             description_input = ui.textarea('Описание (опционально)', placeholder='Введите описание документа').classes('w-full')
             
             try:
-                client = get_mayan_client()
+                client = await get_mayan_client()
                 
                 # Получаем типы документов
-                document_types = client.get_document_types()
+                document_types = await client.get_document_types()
                 document_type_select = None
                 if document_types:
                     # ОТЛАДКА: Выводим информацию о том, что приходит от API
@@ -849,7 +1213,7 @@ def upload_document():
                     ui.label('Не удалось загрузить типы документов').classes('text-red-500')
                             
                 # Получаем кабинеты
-                cabinets = client.get_cabinets()
+                cabinets = await client.get_cabinets()
                 cabinet_select = None
                 if cabinets:
                     # ИСПРАВЛЕНИЕ: Используем простой список названий для отображения
@@ -889,19 +1253,19 @@ def upload_document():
                 logger.info(f"Подготовка формы: cabinet_id_map = {local_cabinet_id_map}")
             
             upload_area = ui.upload(
-                on_upload=lambda e: handle_file_upload(
+                on_upload=lambda e: asyncio.create_task(handle_file_upload(
                     e, 
                     description_input.value,
                     document_type_select.value if document_type_select else None,
                     cabinet_select.value if cabinet_select else None,
-                    local_cabinet_id_map  # Используем локальную переменную вместо атрибута
-                ),
+                    local_cabinet_id_map
+                )),
                 auto_upload=False
             ).classes('w-full')
             
             ui.label('Выберите файл для загрузки').classes('text-sm text-gray-600')
 
-def handle_file_upload(
+async def handle_file_upload(
     upload_event, 
     description: str, 
     document_type_name: Optional[str] = None, 
@@ -912,7 +1276,8 @@ def handle_file_upload(
     global _upload_form_container
     
     if not _upload_form_container:
-        ui.notify('Форма загрузки не инициализирована', type='error')
+        # Не можем использовать ui.notify в асинхронной задаче, логируем ошибку
+        logger.error('Форма загрузки не инициализирована')
         return
     
     try:
@@ -935,9 +1300,6 @@ def handle_file_upload(
                 logger.info(f"Кабинет '{cabinet_name}' найден в карте, ID: {cabinet_id}")
             else:
                 logger.warning(f"Кабинет '{cabinet_name}' не найден в карте")
-                logger.warning(f"Сравнение ключей (строка): cabinet_name repr = {repr(cabinet_name)}")
-                for key in cabinet_id_map.keys():
-                    logger.warning(f"  Ключ в карте repr = {repr(key)}, совпадает: {key == cabinet_name}")
         else:
             if not cabinet_name:
                 logger.warning("cabinet_name не передан или пустой")
@@ -960,15 +1322,22 @@ def handle_file_upload(
         logger.info(f"Создан UploadParams с cabinet_id={params.cabinet_id}")
         
         # Получаем клиент
-        client = get_mayan_client()
+        client = await get_mayan_client()
         
         # Создаем загрузчик с упрощенным извлекателем
         uploader = DocumentUploader(client, SimpleFormDataExtractor())
-        uploader.upload_document(upload_event, params, _upload_form_container)
+        await uploader.upload_document(upload_event, params, _upload_form_container)
         
     except Exception as e:
         logger.error(f"Критическая ошибка при загрузке документа: {e}", exc_info=True)
-        ui.notify(f'Критическая ошибка: {str(e)}', type='error')
+        # Используем контейнер для отображения ошибки вместо ui.notify
+        try:
+            if _upload_form_container:
+                with _upload_form_container:
+                    error_label = ui.label(f'Ошибка загрузки: {str(e)}').classes('text-red-500 p-4 bg-red-50 rounded')
+        except Exception as ui_error:
+            # Если даже это не работает, просто логируем
+            logger.error(f'Не удалось отобразить ошибку в UI: {ui_error}')
 
 
 def download_document_file(document: MayanDocument):
@@ -1002,13 +1371,13 @@ def download_document_file(document: MayanDocument):
         logger.error(f"Ошибка при скачивании файла: {e}")
         ui.notify(f'Ошибка при скачивании: {str(e)}', type='error')
 
-def preview_document_file(document: MayanDocument):
+async def preview_document_file(document: MayanDocument):
     """Показывает превью документа в диалоге"""
     try:
-        client = get_mayan_client()
+        client = await get_mayan_client()
         
         # Получаем содержимое файла
-        file_content = client.get_document_file_content(document.document_id)
+        file_content = await client.get_document_file_content(document.document_id)
         if not file_content:
             ui.notify('Не удалось получить содержимое файла для просмотра', type='error')
             return
@@ -1017,12 +1386,28 @@ def preview_document_file(document: MayanDocument):
         filename = document.file_latest_filename or f"document_{document.document_id}"
         mimetype = document.file_latest_mimetype or 'application/octet-stream'
         
-        # Если MIME-тип не определен или неправильный, определяем по расширению
-        if mimetype == 'application/octet-stream' or not mimetype:
-            detected_mimetype, _ = mimetypes.guess_type(filename)
-            if detected_mimetype:
-                mimetype = detected_mimetype
-                logger.info(f"Определен MIME-тип по расширению: {mimetype}")
+        # ИСПРАВЛЕНИЕ: Проверяем магические байты для правильного определения типа файла
+        if file_content:
+            # Проверяем PDF по магическим байтам
+            if file_content[:4] == b'%PDF':
+                mimetype = 'application/pdf'
+                logger.info(f"Определен MIME-тип по магическим байтам: {mimetype}")
+            # Проверяем изображения
+            elif file_content[:3] == b'\xff\xd8\xff':
+                mimetype = 'image/jpeg'
+                logger.info(f"Определен MIME-тип по магическим байтам: {mimetype}")
+            elif file_content[:8] == b'\x89PNG\r\n\x1a\n':
+                mimetype = 'image/png'
+                logger.info(f"Определен MIME-тип по магическим байтам: {mimetype}")
+            elif file_content[:6] in [b'GIF87a', b'GIF89a']:
+                mimetype = 'image/gif'
+                logger.info(f"Определен MIME-тип по магическим байтам: {mimetype}")
+            # Если MIME-тип все еще не определен, пробуем по расширению
+            elif mimetype == 'application/octet-stream' or not mimetype:
+                detected_mimetype, _ = mimetypes.guess_type(filename)
+                if detected_mimetype:
+                    mimetype = detected_mimetype
+                    logger.info(f"Определен MIME-тип по расширению: {mimetype}")
         
         # Увеличиваем размер диалога для лучшего просмотра
         with ui.dialog() as dialog, ui.card().classes('w-full max-w-[95vw] max-h-[95vh]'):
@@ -1056,21 +1441,50 @@ def preview_document_file(document: MayanDocument):
                     temp_file.write(file_content)
                     temp_path = temp_file.name
                 
-                # Конвертируем в base64 для отображения в iframe
+                # Конвертируем в base64 для создания blob URL
                 with open(temp_path, 'rb') as f:
                     pdf_data = base64.b64encode(f.read()).decode()
                 
-                # Создаем iframe для отображения PDF с увеличенной высотой
-                pdf_url = f"data:{mimetype};base64,{pdf_data}"
+                # Создаем уникальный ID для контейнера PDF
+                pdf_container_id = f"pdf-container-{document.document_id}"
+                pdf_iframe_id = f"pdf-iframe-{document.document_id}"
+                
+                # Создаем HTML контейнер с iframe
                 ui.html(f'''
-                    <iframe src="{pdf_url}" 
-                            width="100%" 
-                            height="75vh" 
-                            style="border: none; min-height: 600px;">
-                        <p>Ваш браузер не поддерживает отображение PDF файлов. 
-                        <a href="{pdf_url}" target="_blank">Открыть в новой вкладке</a></p>
-                    </iframe>
+                    <div id="{pdf_container_id}" style="width: 100%; height: 75vh; min-height: 600px;">
+                        <iframe id="{pdf_iframe_id}" 
+                                width="100%" 
+                                height="100%" 
+                                style="border: none;">
+                            <p>Ваш браузер не поддерживает отображение PDF файлов.</p>
+                        </iframe>
+                    </div>
                 ''').classes('w-full')
+                
+                # ИСПРАВЛЕНИЕ: Используем ui.add_body_html() для добавления скрипта
+                # Создаем blob URL через JavaScript для избежания ограничений размера data URI
+                script_content = f'''
+                    (function() {{
+                        const pdfData = {repr(pdf_data)};
+                        const binaryString = atob(pdfData);
+                        const bytes = new Uint8Array(binaryString.length);
+                        for (let i = 0; i < binaryString.length; i++) {{
+                            bytes[i] = binaryString.charCodeAt(i);
+                        }}
+                        const blob = new Blob([bytes], {{ type: 'application/pdf' }});
+                        const blobUrl = URL.createObjectURL(blob);
+                        const iframe = document.getElementById('{pdf_iframe_id}');
+                        if (iframe) {{
+                            iframe.src = blobUrl;
+                        }}
+                        
+                        // Очищаем blob URL при закрытии диалога (через 5 минут или при размонтировании)
+                        setTimeout(function() {{
+                            URL.revokeObjectURL(blobUrl);
+                        }}, 300000);
+                    }})();
+                '''
+                ui.add_body_html(f'<script>{script_content}</script>')
                 
                 # Удаляем временный файл
                 ui.timer(10.0, lambda: os.unlink(temp_path), once=True)
@@ -1081,40 +1495,26 @@ def preview_document_file(document: MayanDocument):
                 ui.label(f'Файл: {filename}').classes('text-sm text-gray-600 mb-2')
                 ui.label(f'Размер: {format_file_size(len(file_content))}').classes('text-sm text-gray-600 mb-4')
                 ui.label('Для просмотра документа Word скачайте файл и откройте в соответствующем приложении.').classes('text-gray-500')
-                
-                # Кнопка для скачивания
-                ui.button('Скачать файл', icon='download', on_click=lambda: download_document_file(document)).classes('mt-4')
-            
-            elif mimetype in ['application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']:
-                # Для Excel файлов показываем информацию
-                ui.label('Таблица Microsoft Excel').classes('text-lg font-semibold mb-2')
-                ui.label(f'Файл: {filename}').classes('text-sm text-gray-600 mb-2')
-                ui.label(f'Размер: {format_file_size(len(file_content))}').classes('text-sm text-gray-600 mb-4')
-                ui.label('Для просмотра таблицы Excel скачайте файл и откройте в соответствующем приложении.').classes('text-gray-500')
-                
-                # Кнопка для скачивания
-                ui.button('Скачать файл', icon='download', on_click=lambda: download_document_file(document)).classes('mt-4')
             
             else:
-                # Для других типов файлов показываем информацию
-                ui.label(f'Файл типа {mimetype}').classes('text-lg font-semibold mb-2')
-                ui.label(f'Файл: {filename}').classes('text-sm text-gray-600 mb-2')
+                # Для неизвестных типов файлов показываем информацию
+                ui.label('Файл не может быть отображен в браузере').classes('text-lg font-semibold mb-2')
+                ui.label(f'Тип файла: {mimetype}').classes('text-sm text-gray-600 mb-2')
                 ui.label(f'Размер: {format_file_size(len(file_content))}').classes('text-sm text-gray-600 mb-4')
-                ui.label('Этот тип файла не может быть отображен в превью.').classes('text-gray-500')
-                
-                # Кнопка для скачивания
-                ui.button('Скачать файл', icon='download', on_click=lambda: download_document_file(document)).classes('mt-4')
+                ui.label('Скачайте файл для просмотра в соответствующем приложении.').classes('text-gray-500')
             
-            # Кнопки управления
-            with ui.row().classes('mt-4 gap-2'):
-                ui.button('Закрыть', on_click=dialog.close).classes('flex-1')
-                ui.button('Открыть в новой вкладке', icon='open_in_new', on_click=lambda: ui.open(f"data:{mimetype};base64,{base64.b64encode(file_content).decode()}")).classes('flex-1')
+            with ui.row().classes('mt-4'):
+                ui.button('Закрыть', on_click=dialog.close).classes('bg-gray-500 text-white')
+                ui.button('Открыть в новой вкладке', icon='open_in_new', on_click=lambda: (
+                    ui.download(temp_path if 'temp_path' in locals() else None, filename),
+                    dialog.close()
+                )).classes('bg-blue-500 text-white')
         
         dialog.open()
         
     except Exception as e:
-        logger.error(f"Ошибка при просмотре файла: {e}")
-        ui.notify(f'Ошибка при просмотре: {str(e)}', type='error')
+        logger.error(f'Ошибка при просмотре документа: {e}', exc_info=True)
+        ui.notify(f'Ошибка при просмотре документа: {str(e)}', type='error')
 
 # def grant_access_to_document_enhanced(document: MayanDocument, access_type: str,
 #                                     username: str, role_name: str, 
@@ -1291,7 +1691,7 @@ def content() -> None:
     # Загружаем документы только после создания контейнера
     ui.timer(0.1, load_documents_by_cabinets, once=True)
 
-def load_documents_by_cabinets():
+async def load_documents_by_cabinets():
     """Загружает документы, сгруппированные по кабинетам"""
     global _recent_documents_container
     
@@ -1299,7 +1699,7 @@ def load_documents_by_cabinets():
         _recent_documents_container.clear()
     
     # Проверяем подключение
-    if not check_connection():
+    if not await check_connection():
         with _recent_documents_container:
             ui.label('Нет подключения к серверу Mayan EDMS').classes('text-red-500 text-center py-8')
             if _auth_error:
@@ -1308,11 +1708,11 @@ def load_documents_by_cabinets():
         return
     
     try:
-        client = get_mayan_client()
+        client = await get_mayan_client()
         
         # Получаем список кабинетов
         logger.info("Загружаем список кабинетов...")
-        cabinets = client.get_cabinets()
+        cabinets = await client.get_cabinets()
         logger.info(f"Получено кабинетов: {len(cabinets)}")
         
         if not cabinets:
@@ -1345,37 +1745,41 @@ def load_documents_by_cabinets():
                 # Если props не работает, используем CSS
                 expansion.style('--q-primary: #1976D2; color: #1976D2;')
                 
+                # Создаем отдельный label для заголовка, который можно обновлять
+                #title_label = ui.label(cabinet_title).classes('text-lg font-medium')
+                
                 # Функция для обновления заголовка с количеством документов
                 def update_cabinet_title(count: int):
                     """Обновляет заголовок кабинета с количеством документов"""
                     try:
                         new_title = f"{cabinet_full_path} ({count})"
-                        # Обновляем заголовок через JavaScript
-                        expansion.run_javascript(f'''
-                            const element = document.querySelector('[data-id="{expansion.id}"]');
-                            if (element) {{
-                                const header = element.querySelector('.q-expansion-item__header');
-                                if (header) {{
-                                    const label = header.querySelector('.q-expansion-item__header-content');
-                                    if (label) {{
-                                        label.textContent = "{new_title}";
-                                    }}
-                                }}
-                            }}
-                        ''')
+                        # Обновляем заголовок expansion через props
+                        expansion.props(f'label="{new_title}"')
+                        expansion.update()
                     except Exception as e:
                         logger.error(f"Ошибка при обновлении заголовка кабинета {cabinet_id}: {e}")
-                        # Альтернативный способ - через прямое обновление свойства
+                        # Альтернативный способ - через JavaScript
                         try:
-                            expansion.props(f'label="{new_title}"')
+                            ui.run_javascript(f'''
+                                const element = document.querySelector('[data-id="{expansion.id}"]');
+                                if (element) {{
+                                    const header = element.querySelector('.q-expansion-item__header');
+                                    if (header) {{
+                                        const label = header.querySelector('.q-expansion-item__header-content');
+                                        if (label) {{
+                                            label.textContent = "{new_title}";
+                                        }}
+                                    }}
+                                }}
+                            ''')
                         except:
                             pass
                 
                 # Асинхронно загружаем количество документов
-                def load_documents_count():
+                async def load_documents_count():
                     """Загружает количество документов в кабинете"""
                     try:
-                        count = client.get_cabinet_documents_count(cabinet_id)
+                        count = await client.get_cabinet_documents_count(cabinet_id)
                         update_cabinet_title(count)
                     except Exception as e:
                         logger.error(f"Ошибка при загрузке количества документов кабинета {cabinet_id}: {e}")
@@ -1400,7 +1804,7 @@ def load_documents_by_cabinets():
                 documents_loaded = False
                 
                 # Загружаем документы асинхронно при разворачивании
-                def load_cabinet_content():
+                async def load_cabinet_content():
                     """Загружает документы и подкабинеты для конкретного кабинета"""
                     nonlocal documents_loaded
                     
@@ -1422,7 +1826,7 @@ def load_documents_by_cabinets():
                         
                         # Получаем документы кабинета через специальный endpoint
                         logger.info(f"Загружаем документы кабинета {cabinet_id} ({cabinet_label})...")
-                        documents = client.get_cabinet_documents(cabinet_id, page=1, page_size=100)
+                        documents = await client.get_cabinet_documents(cabinet_id, page=1, page_size=100)
                         logger.info(f"Получено документов для кабинета {cabinet_id}: {len(documents)}")
                         
                         # Находим подкабинеты
@@ -1454,7 +1858,7 @@ def load_documents_by_cabinets():
                         content_container.clear()
                         with content_container:
                             ui.label(f'Ошибка при загрузке: {str(e)}').classes('text-sm text-red-500')
-                
+
                 # Используем правильный способ отслеживания разворачивания
                 def on_expansion_change(e):
                     """Обработчик изменения состояния expansion"""
@@ -1473,13 +1877,13 @@ def load_documents_by_cabinets():
                         # Обновляем стили при изменении состояния
                         update_expansion_style(is_expanded)
                         
-                        # Загружаем содержимое при разворачивании
+                        # Загружаем содержимое при разворачивании (используем timer для async функции)
                         if is_expanded:
-                            load_cabinet_content()
+                            ui.timer(0.01, load_cabinet_content, once=True)
                     except Exception as ex:
                         logger.error(f"Ошибка при обработке события expansion: {ex}")
                         # В случае ошибки пробуем загрузить
-                        load_cabinet_content()
+                        ui.timer(0.01, load_cabinet_content, once=True)
                 
                 expansion.on('update:model-value', on_expansion_change)
         
@@ -1514,16 +1918,26 @@ def search_content() -> None:
     with _search_results_container:
         ui.label('Введите поисковый запрос для начала поиска').classes('text-gray-500 text-center py-8')
 
-def upload_content() -> None:
+async def upload_content(container: Optional[ui.column] = None, user: Optional[Any] = None) -> None:
     """Страница загрузки документов"""
     global _upload_form_container
     
     logger.info("Открыта страница загрузки документов")
     
-    _upload_form_container = ui.column().classes('w-full')
-    upload_document()
+    # Используем переданный контейнер или создаем новый (если вызывается напрямую)
+    if container is not None:
+        _upload_form_container = container
+    else:
+        _upload_form_container = ui.column().classes('w-full')
+    
+    # Сохраняем пользователя в глобальной переменной для использования в асинхронных функциях
+    if user is not None:
+        global _current_user
+        _current_user = user
+    
+    await upload_document()
 
-def download_signed_document(document: MayanDocument):
+async def download_signed_document(document: MayanDocument):
     '''Скачивает документ с информацией о подписях'''
     try:
         from services.signature_manager import SignatureManager
@@ -1532,7 +1946,7 @@ def download_signed_document(document: MayanDocument):
         ui.notify('Создание итогового документа с подписями...', type='info')
         
         signature_manager = SignatureManager()
-        signed_pdf = signature_manager.create_signed_document_pdf(document.document_id)
+        signed_pdf = await signature_manager.create_signed_document_pdf(document.document_id)
         
         if signed_pdf:
             # Создаем имя файла
@@ -1550,11 +1964,103 @@ def download_signed_document(document: MayanDocument):
             # Удаляем временный файл через некоторое время
             ui.timer(5.0, lambda: os.unlink(temp_path), once=True)
             
-            ui.notify(f'✅ Файл "{filename}" подготовлен для скачивания', type='success')
+            ui.notify(f'Файл "{filename}" подготовлен для скачивания', type='success')
             logger.info(f'Итоговый документ {document.document_id} подготовлен для скачивания как {filename}')
         else:
-            ui.notify('⚠️ Не удалось создать документ с подписями', type='warning')
+            ui.notify('Не удалось создать документ с подписями', type='warning')
             
     except Exception as e:
         logger.error(f'Ошибка скачивания документа с подписями: {e}', exc_info=True)
         ui.notify(f'Ошибка: {str(e)}', type='error')
+
+async def show_mayan_reauth_dialog() -> Optional[str]:
+    """
+    Показывает диалог повторной авторизации для Mayan EDMS
+    
+    Returns:
+        Новый API токен или None если авторизация не удалась
+    """
+    current_user = get_current_user()
+    if not current_user:
+        ui.notify('Пользователь не авторизован', type='error')
+        return None
+    
+    dialog_result = {'token': None, 'cancelled': False}
+    
+    with ui.dialog() as dialog, ui.card().classes('w-full max-w-md'):
+        ui.label('Требуется повторная авторизация').classes('text-lg font-semibold mb-4')
+        ui.label(f'API токен Mayan EDMS для пользователя {current_user.username} истек.').classes('text-sm text-gray-600 mb-4')
+        ui.label('Пожалуйста, введите пароль для повторной авторизации:').classes('text-sm mb-2')
+        
+        password_input = ui.input('Пароль', password=True, placeholder='Введите пароль').classes('w-full mb-4')
+        
+        status_label = ui.label('').classes('text-sm text-center mb-4')
+        
+        async def handle_reauth():
+            """Обрабатывает повторную авторизацию"""
+            password = password_input.value.strip()
+            
+            if not password:
+                status_label.text = 'Пожалуйста, введите пароль'
+                status_label.classes('text-red-500')
+                return
+            
+            status_label.text = 'Проверка учетных данных...'
+            status_label.classes('text-blue-500')
+            
+            try:
+                from config.settings import config
+                from services.mayan_connector import MayanClient
+                
+                # Создаем временный клиент с системными учетными данными
+                temp_mayan_client = MayanClient(
+                    base_url=config.mayan_url,
+                    username=config.mayan_username,
+                    password=config.mayan_password,
+                    api_token=config.mayan_api_token,
+                    verify_ssl=False
+                )
+                
+                # Создаем новый API токен для пользователя
+                new_token = await temp_mayan_client.create_user_api_token(current_user.username, password)
+                
+                if new_token:
+                    # Обновляем токен в сессии
+                    current_user.mayan_api_token = new_token
+                    session_manager.update_session(current_user.username, current_user)
+                    
+                    status_label.text = 'Авторизация успешна!'
+                    status_label.classes('text-green-500')
+                    
+                    dialog_result['token'] = new_token
+                    dialog.close()
+                else:
+                    status_label.text = 'Неверный пароль или ошибка создания токена'
+                    status_label.classes('text-red-500')
+                    
+            except Exception as e:
+                logger.error(f'Ошибка при повторной авторизации: {e}', exc_info=True)
+                status_label.text = f'Ошибка авторизации: {str(e)}'
+                status_label.classes('text-red-500')
+        
+        def handle_cancel():
+            """Обрабатывает отмену"""
+            dialog_result['cancelled'] = True
+            dialog.close()
+        
+        with ui.row().classes('w-full justify-end gap-2'):
+            ui.button('Отмена', on_click=handle_cancel).classes('bg-gray-500 text-white')
+            ui.button('Авторизоваться', on_click=handle_reauth).classes('bg-blue-500 text-white')
+        
+        # Обработка нажатия Enter
+        password_input.on('keydown.enter', handle_reauth)
+    
+    dialog.open()
+    
+    # Ждем закрытия диалога
+    await dialog
+    
+    if dialog_result['cancelled']:
+        return None
+    
+    return dialog_result['token']

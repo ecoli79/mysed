@@ -49,9 +49,9 @@ _document_for_signing = None
 _signature_result_handler = None
 
 
-def get_mayan_client() -> MayanClient:
+async def get_mayan_client() -> MayanClient:
     """Получает клиент Mayan EDMS с учетными данными текущего пользователя"""
-    return MayanClient.create_with_session_user()
+    return await MayanClient.create_with_session_user()
 
 def _is_valid_username(username: str) -> bool:
     """Проверяет безопасность имени пользователя"""
@@ -115,7 +115,10 @@ def create_active_tasks_section():
                 _tasks_container = ui.column().classes('w-full')
                 
                 # Загружаем задачи при открытии страницы
-                load_active_tasks(_tasks_header_container)
+                async def init_tasks():
+                    await load_active_tasks(_tasks_header_container)
+                
+                ui.timer(0.1, lambda: init_tasks(), once=True)
         
         # Правая колонка с деталями задачи (скрыта по умолчанию)
         _task_details_column = ui.column().classes('w-1/3')
@@ -131,7 +134,7 @@ def create_active_tasks_section():
         # Скрываем блок деталей по умолчанию
         _task_details_column.set_visibility(False)
 
-def load_active_tasks(header_container=None):
+async def load_active_tasks(header_container=None):
     """Загружает и отображает активные задачи пользователя"""
     global _tasks_container
     
@@ -162,8 +165,8 @@ def load_active_tasks(header_container=None):
         
         # Получаем активные задачи пользователя с фильтрацией
         assignee = user.username
-        camunda_client = create_camunda_client()
-        tasks = camunda_client.get_user_tasks_filtered(
+        camunda_client = await create_camunda_client()
+        tasks = await camunda_client.get_user_tasks_filtered(
             assignee=assignee,
             active_only=True,
             filter_completed=True
@@ -177,7 +180,7 @@ def load_active_tasks(header_container=None):
             
             # Добавляем карточки задач в основной контейнер
             for task in tasks:
-                create_task_card_with_progress(task)
+                await create_task_card_with_progress(task)
         else:
             # Показываем сообщение об отсутствии задач
             if header_container:
@@ -190,7 +193,7 @@ def load_active_tasks(header_container=None):
             with header_container:
                 ui.label(f'Ошибка при загрузке задач: {str(e)}').classes('text-red-600')
 
-def create_task_card_with_progress(task):
+async def create_task_card_with_progress(task):
     """Создает карточку задачи с информацией о прогрессе"""
     global _tasks_container
     
@@ -207,8 +210,8 @@ def create_task_card_with_progress(task):
                     
                     # Добавляем информацию о прогрессе
                     try:
-                        camunda_client = create_camunda_client()
-                        progress = camunda_client.get_task_progress(task.process_instance_id)
+                        camunda_client = await create_camunda_client()
+                        progress = await camunda_client.get_task_progress(task.process_instance_id)
                         
                         # Прогресс-бар
                         with ui.row().classes('w-full items-center gap-2 mt-2'):
@@ -303,7 +306,7 @@ def create_completed_tasks_section():
         # Загружаем задачи при открытии страницы
         load_completed_tasks()
 
-def load_completed_tasks():
+async def load_completed_tasks():
     """Загружает завершенные задачи"""
     global _completed_tasks_container
     
@@ -328,11 +331,11 @@ def load_completed_tasks():
             
             # Получаем завершенные задачи пользователя с группировкой
             assignee = user.username
-            camunda_client = create_camunda_client()
+            camunda_client = await create_camunda_client()
             
             logger.info(f"Загружаем завершенные задачи для пользователя {assignee}")
             
-            tasks = camunda_client.get_completed_tasks_grouped(assignee=assignee)
+            tasks = await camunda_client.get_completed_tasks_grouped(assignee=assignee)
             
             logger.info(f"Получено {len(tasks) if tasks else 0} задач (сгруппированных)")
             
@@ -416,7 +419,7 @@ def create_grouped_completed_task_card(task):
                     ui.label(f'Статус: Завершена').classes('text-xs text-green-600')
                     ui.label(f'Multi-user: {task.total_users} польз.').classes('text-xs text-blue-600')
 
-def show_grouped_task_details_in_tab(task):
+async def show_grouped_task_details_in_tab(task):
     """Показывает детали группированной завершенной задачи"""
     global _details_container, _tabs, _task_details_tab
     
@@ -500,8 +503,8 @@ def show_grouped_task_details_in_tab(task):
         
         # Информация о процессе
         try:
-            camunda_client = create_camunda_client()
-            process_variables = camunda_client.get_history_process_instance_variables_by_name(
+            camunda_client = await create_camunda_client()
+            process_variables = await camunda_client.get_history_process_instance_variables_by_name(
                 task.process_instance_id,
                 ['documentName', 'documentContent', 'assigneeList', 'reviewDates', 'reviewComments']
             )
@@ -514,9 +517,10 @@ def show_grouped_task_details_in_tab(task):
                         # Форматируем значение для лучшего отображения
                         formatted_value = format_variable_value(value)
                         if isinstance(formatted_value, (dict, list)):
-                            import json
-                            formatted_value = json.dumps(formatted_value, ensure_ascii=False, indent=2)
-                        ui.label(f'{key}: {formatted_value}').classes('text-sm mb-1 whitespace-pre-wrap')
+                            ui.label(f'{key}:').classes('text-sm font-medium mb-1')
+                            ui.json_editor({'content': {'json': formatted_value}}).classes('w-full')
+                        else:
+                            ui.label(f'{key}: {formatted_value}').classes('text-sm mb-2')
         except Exception as e:
             logger.warning(f"Не удалось получить переменные процесса {task.process_instance_id}: {e}")
         
@@ -552,12 +556,13 @@ def create_completed_task_card(task):
                     if hasattr(task, 'duration_formatted'):
                         ui.label(f'Длительность: {task.duration_formatted}').classes('text-sm text-gray-600')
                     
-                    # Кнопки действий
-                    with ui.row().classes('gap-2 mt-2'):
+                        async def show_details(t=task):
+                            await show_completed_task_details_in_tab(t)
+                        
                         ui.button(
                             'Просмотр деталей',
                             icon='visibility',
-                            on_click=lambda t=task: show_completed_task_details_in_tab(t)
+                            on_click=lambda t=task: show_details(t)
                         ).classes('bg-blue-500 text-white text-xs')
                         
                         ui.button(
@@ -571,7 +576,7 @@ def create_completed_task_card(task):
                     ui.label(f'Статус: Завершена').classes('text-xs text-green-600')
 
 
-def show_completed_task_details_in_tab(task):
+async def show_completed_task_details_in_tab(task):
     """Показывает детали завершенной задачи на вкладке 'Детали задачи'"""
     global _details_container, _tabs, _task_details_tab
     
@@ -598,13 +603,13 @@ def show_completed_task_details_in_tab(task):
                 return
             
             # Получаем детальную информацию о задаче
-            camunda_client = create_camunda_client()
+            camunda_client = await create_camunda_client()
             
             # Для завершенных задач используем исторический API
-            task_details = camunda_client.get_history_task_by_id(task.id)
+            task_details = await camunda_client.get_history_task_by_id(task.id)
             if not task_details:
                 # Если историческая задача не найдена, попробуем получить как активную
-                task_details = camunda_client.get_task_by_id(task.id)
+                task_details = await camunda_client.get_task_by_id(task.id)
             
             if not task_details:
                 ui.label(f'Задача {task.id} не найдена').classes('text-red-600')
@@ -616,7 +621,9 @@ def show_completed_task_details_in_tab(task):
             # Проверяем, является ли это частью multi-instance процесса
             # Получаем все задачи для этого процесса
             try:
-                all_process_tasks = camunda_client.get_completed_tasks_grouped()
+                user = get_current_user()
+                assignee = user.username if user else None
+                all_process_tasks = await camunda_client.get_completed_tasks_grouped(assignee=assignee)
                 grouped_task = None
                 
                 # Ищем группированную задачу для этого процесса
@@ -672,67 +679,11 @@ def show_completed_task_details_in_tab(task):
                 if hasattr(task_details, 'delete_reason') and task_details.delete_reason:
                     ui.label(f'Причина завершения: {task_details.delete_reason}').classes('text-sm mb-2')
             
-            # Детальная информация о пользователе (аналогично группированным задачам)
-            with ui.card().classes('p-4 bg-blue-50 mb-4'):
-                ui.label('Детали выполнения').classes('text-lg font-semibold mb-3')
-                
-                with ui.card().classes('p-3 mb-3 bg-white'):
-                    status_color = 'text-green-600'
-                    status_icon = 'check_circle'
-                    
-                    with ui.row().classes('items-center gap-2 mb-2'):
-                        ui.icon(status_icon).classes(status_color)
-                        user_display_name = get_user_display_name(task_details.assignee)
-                        ui.label(f'Пользователь: {user_display_name}').classes('text-sm font-semibold')
-                    
-                    ui.label(f'ID задачи: {task_details.id}').classes('text-xs text-gray-500 mb-1')
-                    ui.label(f'Начата: {task_details.start_time}').classes('text-xs mb-1')
-                    
-                    if hasattr(task_details, 'end_time') and task_details.end_time:
-                        ui.label(f'Завершена: {task_details.end_time}').classes('text-xs mb-1')
-                    
-                    if hasattr(task_details, 'duration') and task_details.duration:
-                        duration_sec = task_details.duration // 1000
-                        duration_formatted = f'{duration_sec // 60} мин {duration_sec % 60} сек'
-                        ui.label(f'Длительность: {duration_formatted}').classes('text-xs mb-1')
-                    
-                    ui.label(f'Статус: Завершено').classes(f'text-xs mb-1 {status_color}')
-                    
-                    # Получаем комментарий пользователя из переменных процесса
-                    try:
-                        process_variables = camunda_client.get_history_process_instance_variables_by_name(
-                            task_details.process_instance_id,
-                            ['userComments', 'userCompletionDates', 'userStatus', 'userCompleted']
-                        )
-                        
-                        if process_variables:
-                            from models import ProcessVariables
-                            process_vars = ProcessVariables(**process_variables)
-                            user_info = process_vars.get_user_info(task_details.assignee)
-                            
-                            # Отображаем комментарий пользователя
-                            if user_info and user_info.get('comment'):
-                                with ui.card().classes('p-2 bg-yellow-50 border-l-4 border-yellow-400 mt-2'):
-                                    ui.label('Комментарий:').classes('text-xs font-semibold text-yellow-800')
-                                    ui.label(user_info['comment']).classes('text-xs text-gray-700 italic')
-                            
-                            # Отображаем дату ознакомления
-                            if user_info and user_info.get('completion_date'):
-                                ui.label(f'Дата ознакомления: {user_info["completion_date"]}').classes('text-xs text-gray-600 mt-1')
-                            elif hasattr(task_details, 'end_time') and task_details.end_time:
-                                ui.label(f'Дата ознакомления: {task_details.end_time}').classes('text-xs text-gray-600 mt-1')
-                                
-                    except Exception as e:
-                        logger.warning(f"Не удалось получить комментарий для {task_details.assignee}: {e}")
-                        # Если не удалось получить комментарий, показываем базовую информацию
-                        if hasattr(task_details, 'end_time') and task_details.end_time:
-                            ui.label(f'Дата ознакомления: {task_details.end_time}').classes('text-xs text-gray-600 mt-1')
-            
-            # Информация о процессе (улучшенная версия)
+            # Переменные процесса
             try:
-                process_variables = camunda_client.get_history_process_instance_variables_by_name(
+                process_variables = await camunda_client.get_history_process_instance_variables_by_name(
                     task_details.process_instance_id,
-                    ['documentName', 'documentContent', 'assigneeList', 'reviewDates', 'reviewComments', 'taskDescription', 'dueDate']
+                    ['documentName', 'documentContent', 'assigneeList', 'reviewDates', 'reviewComments']
                 )
                 
                 if process_variables:
@@ -743,40 +694,30 @@ def show_completed_task_details_in_tab(task):
                             # Форматируем значение для лучшего отображения
                             formatted_value = format_variable_value(value)
                             if isinstance(formatted_value, (dict, list)):
-                                import json
-                                formatted_value = json.dumps(formatted_value, ensure_ascii=False, indent=2)
-                            ui.label(f'{key}: {formatted_value}').classes('text-sm mb-1 whitespace-pre-wrap')
-                else:
-                    # Fallback к старому методу
-                    process_variables = camunda_client.get_process_instance_variables(task_details.process_instance_id)
-                    if process_variables:
-                        with ui.card().classes('p-4 bg-purple-50 mb-4'):
-                            ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
-                            
-                            for key, value in process_variables.items():
-                                # Форматируем значение для лучшего отображения
-                                formatted_value = format_variable_value(value)
-                                ui.label(f'{key}: {formatted_value}').classes('text-sm mb-1')
+                                ui.label(f'{key}:').classes('text-sm font-medium mb-1')
+                                ui.json_editor({'content': {'json': formatted_value}}).classes('w-full')
+                            else:
+                                ui.label(f'{key}: {formatted_value}').classes('text-sm mb-2')
+                                
             except Exception as e:
-                logger.warning(f"Не удалось получить переменные процесса {task_details.process_instance_id}: {e}")
+                logger.warning(f"Не удалось загрузить переменные процесса: {e}")
             
-            # Кнопки действий
-            with ui.column().classes('w-full gap-2'):
-                ui.button(
-                    'Обновить детали',
-                    icon='refresh',
-                    on_click=lambda t=task: show_completed_task_details_in_tab(t)
-                ).classes('w-full bg-blue-500 text-white')
+            # История выполнения задачи
+            try:
+                task_history = await camunda_client.get_task_history(task_details.id)
+                if task_history:
+                    with ui.card().classes('p-4 bg-blue-50 mb-4'):
+                        ui.label('История выполнения').classes('text-lg font-semibold mb-3')
+                        for event in task_history:
+                            event_time = event.get('time', 'Неизвестно')
+                            event_type = event.get('type', 'Неизвестно')
+                            ui.label(f'{event_time}: {event_type}').classes('text-sm mb-1')
+            except Exception as e:
+                logger.warning(f"Не удалось загрузить историю задачи: {e}")
                 
-                ui.button(
-                    'Просмотр результатов',
-                    icon='folder_open',
-                    on_click=lambda t=task: show_task_results(t)
-                ).classes('w-full bg-green-500 text-white')
-            
         except Exception as e:
-            ui.label(f'Ошибка при загрузке деталей: {str(e)}').classes('text-red-600')
-            logger.error(f"Ошибка при загрузке деталей завершенной задачи {task.id}: {e}", exc_info=True)
+            logger.error(f'Ошибка при загрузке деталей завершенной задачи {task.id}: {e}', exc_info=True)
+            ui.label(f'Ошибка при загрузке деталей задачи: {str(e)}').classes('text-red-600')
 
 
 def show_completed_task_details(task):
@@ -809,7 +750,7 @@ def create_task_details_section():
         # Контейнер для деталей задачи
         _details_container = ui.column().classes('w-full')
 
-def load_task_details(task_id: str):
+async def load_task_details(task_id: str):
     """Загружает детали задачи"""
     global _details_container
     
@@ -868,11 +809,11 @@ def load_task_details(task_id: str):
             ui.label(f'Ошибка при загрузке деталей: {str(e)}').classes('text-red-600')
             logger.error(f"Ошибка при загрузке деталей задачи {task_id}: {e}", exc_info=True)
 
-def complete_task(task):
+async def complete_task(task):
     """Завершает задачу"""
     # Проверяем, является ли это задачей подписания
     if task.name == "Подписать документ":
-        complete_signing_task(task)
+        await complete_signing_task(task)
     else:
         complete_regular_task(task)
 
@@ -936,7 +877,7 @@ def complete_regular_task(task):
     
     dialog.open()
 
-def complete_signing_task(task):
+async def complete_signing_task(task):
     """Завершает задачу подписания документа"""
     
     with ui.dialog() as dialog, ui.card().classes('w-full max-w-4xl'):
@@ -949,8 +890,8 @@ def complete_signing_task(task):
             signer_list = []
             
             try:
-                camunda_client = create_camunda_client()
-                process_variables = camunda_client.get_process_instance_variables(task.process_instance_id)
+                camunda_client = await create_camunda_client()
+                process_variables = await camunda_client.get_process_instance_variables(task.process_instance_id)
                 
                 logger.info(f"Переменные процесса {task.process_instance_id}: {process_variables}")
                 
@@ -995,16 +936,14 @@ def complete_signing_task(task):
                         signature_manager = SignatureManager()
                         
                         # Проверяем, существует ли уже подпись пользователя
-                        if signature_manager.check_user_signature_exists(document_id, user.username):
+                        if await signature_manager.check_user_signature_exists(document_id, user.username):
                             with ui.card().classes('p-4 bg-yellow-50 border border-yellow-200'):
-                                ui.label('⚠️ Документ уже подписан').classes('text-lg font-semibold text-yellow-800 mb-2')
+                                ui.label('Документ уже подписан').classes('text-lg font-semibold text-yellow-800 mb-2')
                                 ui.label(f'Вы уже подписали этот документ ранее.').classes('text-yellow-700 mb-2')
                                 
                                 # Показываем кнопку "Завершить задачу" без возможности повторной подписи
-                                ui.button(
-                                    'Завершить задачу',
-                                    icon='check_circle',
-                                    on_click=lambda: submit_signing_task_completion(
+                                async def complete_already_signed():
+                                    await submit_signing_task_completion(
                                         task,
                                         True,
                                         '',
@@ -1012,6 +951,11 @@ def complete_signing_task(task):
                                         'Документ уже подписан',
                                         dialog
                                     )
+                                
+                                ui.button(
+                                    'Завершить задачу',
+                                    icon='check_circle',
+                                    on_click=complete_already_signed
                                 ).classes('bg-green-600 text-white')
                                 
                                 ui.button('Закрыть', on_click=dialog.close).classes('bg-gray-500 text-white')
@@ -1066,10 +1010,11 @@ def complete_signing_task(task):
                 ui.label('Список подписантов не найден в переменных процесса').classes('text-yellow-600 mt-4')
             
             # Загружаем документ из Mayan EDMS
+            document_loaded = False
             if document_id and document_id != 'НЕ НАЙДЕН' and str(document_id).strip():
                 try:
-                    mayan_client = get_mayan_client()
-                    document_content = mayan_client.get_document_file_content(document_id)
+                    mayan_client = await get_mayan_client()
+                    document_content = await mayan_client.get_document_file_content(document_id)
                     
                     if document_content:
                         import base64
@@ -1085,77 +1030,104 @@ def complete_signing_task(task):
                             'name': document_name,
                             'id': document_id
                         }
+                        document_loaded = True
                     else:
-                        ui.label('Не удалось загрузить содержимое документа').classes('text-red-600')
-                        return
+                        with ui.card().classes('p-4 bg-yellow-50 border border-yellow-200 mb-4'):
+                            ui.label('⚠️ Предупреждение').classes('text-lg font-semibold text-yellow-800 mb-2')
+                            ui.label('Не удалось загрузить содержимое документа из Mayan EDMS.').classes('text-yellow-700 mb-2')
+                            ui.label('Возможно, документ уже был удален или перемещен.').classes('text-yellow-700 mb-2')
+                            ui.label('Вы можете завершить задачу, если документ уже был подписан ранее.').classes('text-yellow-700')
                         
                 except Exception as e:
-                    ui.label(f'Ошибка при загрузке документа: {str(e)}').classes('text-red-600')
+                    with ui.card().classes('p-4 bg-red-50 border border-red-200 mb-4'):
+                        ui.label('❌ Ошибка загрузки документа').classes('text-lg font-semibold text-red-800 mb-2')
+                        ui.label(f'Ошибка при загрузке документа: {str(e)}').classes('text-red-700 mb-2')
+                        ui.label('Вы можете завершить задачу, если документ уже был подписан ранее.').classes('text-red-700')
                     logger.error(f"Ошибка при загрузке документа {document_id}: {e}")
-                    return
             else:
-                ui.label('ID документа не найден').classes('text-red-600')
-                return
+                with ui.card().classes('p-4 bg-yellow-50 border border-yellow-200 mb-4'):
+                    ui.label('⚠️ ID документа не найден').classes('text-lg font-semibold text-yellow-800 mb-2')
+                    ui.label('ID документа не найден в переменных процесса.').classes('text-yellow-700 mb-2')
+                    ui.label('Вы можете завершить задачу, если документ уже был подписан ранее.').classes('text-yellow-700')
             
-            # Статус КриптоПро
-            ui.label('Электронная подпись:').classes('text-lg font-semibold')
-            crypto_status = ui.html('').classes('mb-4')
-            check_crypto_pro_availability(crypto_status)
-            
-            # Информация о выбранном сертификате
-            certificate_info_display = ui.html('').classes('w-full mb-4 p-4 bg-gray-50 rounded')
-            
-            # Поля для подписания
-            signing_fields_container = ui.column().classes('w-full mb-4')
-            
-            with signing_fields_container:
-                ui.label('Данные для подписания:').classes('text-lg font-semibold mb-2')
+            # Статус КриптоПро (показываем только если документ загружен)
+            if document_loaded:
+                ui.label('Электронная подпись:').classes('text-lg font-semibold')
+                crypto_status = ui.html('').classes('mb-4')
+                check_crypto_pro_availability(crypto_status)
                 
-                data_to_sign_value = f"Документ ID: {document_id}, Название: {document_name}"
+                # Информация о выбранном сертификате
+                certificate_info_display = ui.html('').classes('w-full mb-4 p-4 bg-gray-50 rounded')
                 
-                data_to_sign = ui.textarea(
-                    label='Данные для подписания',
-                    placeholder='Введите данные для подписания...',
-                    value=data_to_sign_value
-                ).classes('w-full mb-4')
+                # Поля для подписания
+                signing_fields_container = ui.column().classes('w-full mb-4')
                 
-                ui.button(
-                    'Подписать документ',
-                    icon='edit',
-                    on_click=lambda: sign_document_with_certificate(
-                        task,
-                        data_to_sign.value,
-                        signing_fields_container,
-                        certificate_info_display,
-                        result_container
-                    )
-                ).classes('mb-4 bg-green-500 text-white')
-                # ui.button(
-                #     'Проверить результат подписания',
-                #     icon='refresh',
-                #     on_click=lambda: check_and_display_signature_result(signature_info, signed_data_display, result_container)
-                # ).classes('mb-4 bg-blue-500 text-white')
-
-            # Результат подписания (изначально скрыт)
-            result_container = ui.column().classes('w-full mb-4')
-            result_container.visible = False
-            
-            with result_container:
-                ui.label('Документ успешно подписан!').classes('text-lg font-semibold mb-4 text-green-600')
+                with signing_fields_container:
+                    ui.label('Данные для подписания:').classes('text-lg font-semibold mb-2')
+                    
+                    data_to_sign_value = f"Документ ID: {document_id}, Название: {document_name}"
+                    
+                    data_to_sign = ui.textarea(
+                        label='Данные для подписания',
+                        placeholder='Введите данные для подписания...',
+                        value=data_to_sign_value
+                    ).classes('w-full mb-4')
+                    
+                    with ui.row().classes('w-full justify-between gap-2'):
+                        ui.button(
+                            'Подписать документ',
+                            icon='edit',
+                            on_click=lambda: sign_document_with_certificate(
+                                task,
+                                data_to_sign.value,
+                                signing_fields_container,
+                                certificate_info_display,
+                                result_container
+                            )
+                        ).classes('bg-green-500 text-white')
+                        ui.button('ОТМЕНА', on_click=dialog.close).classes('bg-gray-500 text-white')
                 
-                # Кнопка завершения задачи
-                ui.button(
-                    'Завершить задачу',
-                    icon='check',
-                    on_click=lambda: complete_signing_task_with_result(
-                        task,
-                        document_id,
-                        document_name,
-                        dialog
-                    )
-                ).classes('bg-green-600 text-white')
-            
-            ui.button('ОТМЕНА', on_click=dialog.close).classes('bg-gray-500 text-white')
+                # Результат подписания (изначально скрыт)
+                result_container = ui.column().classes('w-full mb-4')
+                result_container.visible = False
+                
+                with result_container:
+                    ui.label('Документ успешно подписан!').classes('text-lg font-semibold mb-4 text-green-600')
+                    
+                    # Кнопка завершения задачи
+                    ui.button(
+                        'Завершить задачу',
+                        icon='check',
+                        on_click=lambda: complete_signing_task_with_result(
+                            task,
+                            document_id,
+                            document_name,
+                            dialog
+                        )
+                    ).classes('bg-green-600 text-white')
+            else:
+                # Если документ не загружен, показываем только кнопку завершения задачи
+                with ui.card().classes('p-4 bg-blue-50 border border-blue-200 mb-4'):
+                    ui.label('Завершение задачи без подписания').classes('text-lg font-semibold text-blue-800 mb-2')
+                    ui.label('Документ не загружен. Вы можете завершить задачу, если документ уже был подписан ранее.').classes('text-blue-700 mb-4')
+                    
+                    async def complete_without_signing():
+                        await submit_signing_task_completion(
+                            task,
+                            True,
+                            '',
+                            {},
+                            'Документ уже подписан (не удалось загрузить для проверки)',
+                            dialog
+                        )
+                    
+                    with ui.row().classes('w-full justify-end gap-2'):
+                        ui.button('ОТМЕНА', on_click=dialog.close).classes('bg-gray-500 text-white')
+                        ui.button(
+                            'Завершить задачу',
+                            icon='check',
+                            on_click=complete_without_signing
+                        ).classes('bg-green-600 text-white')
     
     dialog.open()
 
@@ -1216,7 +1188,7 @@ def sign_document(certificate_value, data_to_sign, signing_fields_container, cer
         logger.error(f"Ошибка при подписании документа: {e}")
         ui.notify(f'Ошибка при подписании: {str(e)}', type='error')
 
-def complete_signing_task_with_result(task, document_id, document_name, dialog):
+async def complete_signing_task_with_result(task, document_id, document_name, dialog):
     '''Завершает задачу подписания с проверкой результата'''
     try:
         # Получаем результат подписания из api_router
@@ -1238,7 +1210,7 @@ def complete_signing_task_with_result(task, document_id, document_name, dialog):
         logger.info(f'Certificate info: {certificate_info}')
         
         # Завершаем задачу с данными подписи
-        submit_signing_task_completion(
+        await submit_signing_task_completion(
             task, 
             True,
             signature_data,
@@ -2248,16 +2220,16 @@ def check_signature_result():
     except Exception as e:
         logger.error(f"Ошибка обработки результата подписания: {e}")
 
-def load_and_display_document(document_id: str, container: ui.column):
+async def load_and_display_document(document_id: str, container: ui.column):
     """Загружает и отображает документ"""
     try:
         from services.mayan_connector import MayanClient
-        mayan_client = MayanClient.create_with_session_user()
+        mayan_client = await MayanClient.create_with_session_user()
         logger.info(f'mayan_client: {mayan_client}')
         logger.info(f'Загружаем документ {document_id}')
         
         # Получаем информацию о документе
-        document_info = mayan_client.get_document_info_for_review(document_id)
+        document_info = await mayan_client.get_document_info_for_review(document_id)
         
         if document_info:
             # Создаем ссылку на документ в Mayan EDMS
@@ -2378,7 +2350,7 @@ def load_document_content_for_signing(document_id: str, content_container: ui.ht
             </div>
         '''
 
-def submit_signing_task_completion(task, signed, signature_data, certificate_info, comment, dialog):
+async def submit_signing_task_completion(task, signed, signature_data, certificate_info, comment, dialog):
     '''Отправляет завершение задачи подписания'''
     try:
         if not signed:
@@ -2394,15 +2366,15 @@ def submit_signing_task_completion(task, signed, signature_data, certificate_inf
             else:
                 username = user.username
                 
-                camunda_client = create_camunda_client()
-                process_variables = camunda_client.get_process_instance_variables(task.process_instance_id)
+                camunda_client = await create_camunda_client()
+                process_variables = await camunda_client.get_process_instance_variables(task.process_instance_id)
                 document_id = process_variables.get('documentId')
                 
                 if document_id and signature_data:
                     from services.signature_manager import SignatureManager
                     signature_manager = SignatureManager()
                     
-                    success = signature_manager.upload_signature_to_document(
+                    success = await signature_manager.upload_signature_to_document(
                         document_id=document_id,
                         username=username,
                         signature_base64=signature_data,
@@ -2410,15 +2382,15 @@ def submit_signing_task_completion(task, signed, signature_data, certificate_inf
                     )
                     
                     if success:
-                        ui.notify(f'✅ Подпись {username}.p7s загружена к документу', type='positive')
+                        ui.notify(f'Подпись {username}.p7s загружена к документу', type='positive')
                         logger.info(f'Подпись пользователя {username} загружена к документу {document_id}')
                     else:
                         logger.error(f'Не удалось загрузить подпись пользователя {username} к документу {document_id}')
-                        ui.notify('⚠️ Подпись создана, но не загружена в Mayan', type='warning')
+                        ui.notify('Подпись создана, но не загружена в Mayan', type='warning')
                         
         except Exception as e:
             logger.error(f'Ошибка при загрузке подписи в Mayan EDMS: {e}', exc_info=True)
-            ui.notify('⚠️ Ошибка загрузки подписи в Mayan, задача будет завершена', type='warning')
+            ui.notify('Ошибка загрузки подписи в Mayan, задача будет завершена', type='warning')
         
         # Подготавливаем переменные для процесса подписания
         variables = {
@@ -2431,7 +2403,7 @@ def submit_signing_task_completion(task, signed, signature_data, certificate_inf
         }
         
         # Завершаем задачу в Camunda
-        success = camunda_client.complete_task_with_variables(task.id, variables)
+        success = await camunda_client.complete_task_with_variables(task.id, variables)
         
         if success:
             # Очищаем результат подписания после успешного завершения
@@ -2439,7 +2411,7 @@ def submit_signing_task_completion(task, signed, signature_data, certificate_inf
             ui.notify('Документ успешно подписан!', type='success')
             dialog.close()
             # Обновляем список задач
-            load_active_tasks(_tasks_header_container)
+            await load_active_tasks(_tasks_header_container)
         else:
             ui.notify('Ошибка при подписании документа', type='error')
             
@@ -2477,7 +2449,7 @@ def handle_file_upload(e):
                 ui.label(f'{file_info["filename"]} ({file_info["mimetype"]})').classes('text-sm')
                 ui.label(f'Размер: {file_info["size"]} байт').classes('text-xs text-gray-600')
 
-def submit_task_completion(task, status, comment, dialog):
+async def submit_task_completion(task, status, comment, dialog):
     """Отправляет завершение обычной задачи"""
     global _uploaded_files
     
@@ -2518,7 +2490,7 @@ def submit_task_completion(task, status, comment, dialog):
                 ui.notify('Файлы не загружены в Mayan EDMS, но задача будет завершена', type='warning')
         
         # Завершаем задачу в Camunda (упрощенная версия)
-        camunda_client = create_camunda_client()
+        camunda_client = await create_camunda_client()
         
         # Используем простой метод завершения задачи
         success = camunda_client.complete_task_with_user_data(
@@ -2540,7 +2512,7 @@ def submit_task_completion(task, status, comment, dialog):
         ui.notify(f'Ошибка: {str(e)}', type='error')
         logger.error(f"Ошибка при завершении задачи {task.id}: {e}", exc_info=True)
 
-def show_task_details(task):
+async def show_task_details(task):
     """Показывает детали задачи в правом блоке"""
     global _task_details_sidebar, _task_details_column
     
@@ -2559,7 +2531,7 @@ def show_task_details(task):
         
         try:
             # Получаем детальную информацию о задаче
-            camunda_client = create_camunda_client()
+            camunda_client = await create_camunda_client()
             
             logger.info(f"Попытка получить детали задачи {task.id}")
             
@@ -2567,7 +2539,7 @@ def show_task_details(task):
             is_history_task = False
             
             # Сначала пробуем получить как активную задачу
-            task_details = camunda_client.get_task_by_id(task.id)
+            task_details = await camunda_client.get_task_by_id(task.id)
             
             if task_details:
                 logger.info(f"Задача {task.id} найдена как активная")
@@ -2575,7 +2547,7 @@ def show_task_details(task):
             else:
                 # Если активная задача не найдена, пробуем получить как историческую
                 logger.info(f"Активная задача {task.id} не найдена, пробуем получить как историческую")
-                task_details = camunda_client.get_history_task_by_id(task.id)
+                task_details = await camunda_client.get_history_task_by_id(task.id)
                 
                 if task_details:
                     logger.info(f"Задача {task.id} найдена как историческая")
@@ -2588,12 +2560,12 @@ def show_task_details(task):
                         logger.info(f"Проверяем процесс {task.process_instance_id}")
                         
                         # Проверяем активный процесс
-                        process_info = camunda_client.get_process_instance_by_id(task.process_instance_id)
+                        process_info = await camunda_client.get_process_instance_by_id(task.process_instance_id)
                         if process_info:
                             logger.info(f"Процесс {task.process_instance_id} найден как активный")
                         else:
                             # Проверяем исторический процесс
-                            process_info = camunda_client.get_history_process_instance_by_id(task.process_instance_id)
+                            process_info = await camunda_client.get_history_process_instance_by_id(task.process_instance_id)
                             if process_info:
                                 logger.info(f"Процесс {task.process_instance_id} найден как исторический")
                             else:
@@ -2658,7 +2630,7 @@ def show_task_details(task):
             # Переменные задачи (только для активных задач)
             if not is_history_task:
                 try:
-                    variables = camunda_client.get_task_variables(task.id)
+                    variables = await camunda_client.get_task_variables(task.id)
                     if variables:
                         with ui.card().classes('p-4 bg-green-50 mb-4'):
                             ui.label('Переменные задачи').classes('text-lg font-semibold mb-3')
@@ -2677,7 +2649,7 @@ def show_task_details(task):
             
             # Переменные процесса
             try:
-                process_variables = camunda_client.get_process_instance_variables(task_details.process_instance_id)
+                process_variables = await camunda_client.get_process_instance_variables(task_details.process_instance_id)
                 if process_variables:
                     with ui.card().classes('p-4 bg-yellow-50 mb-4'):
                         ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
@@ -2708,8 +2680,7 @@ def show_task_details(task):
                         # Добавляем кнопку для открытия документа в Mayan EDMS, если documentId найден
                         if document_id:
                             try:
-                                from services.mayan_connector import MayanClient
-                                mayan_client = MayanClient.create_with_session_user()
+                                mayan_client = await MayanClient.create_with_session_user()
                                 
                                 # Преобразуем document_id в строку, если нужно
                                 doc_id_str = str(document_id).strip()
@@ -2858,17 +2829,17 @@ def format_variable_value(value):
     else:
         return str(value)
 
-def download_document_from_task(document_id: str, document_name: str = None):
+async def download_document_from_task(document_id: str, document_name: str = None):
     """Скачивает документ из Mayan EDMS через безопасный прокси-подход"""
     try:
         from services.mayan_connector import MayanClient
         import tempfile
         import os
         
-        mayan_client = MayanClient.create_with_session_user()
+        mayan_client = await MayanClient.create_with_session_user()
         
         # Получаем содержимое файла И информацию о выбранном файле
-        file_content = mayan_client.get_document_file_content(str(document_id))
+        file_content = await mayan_client.get_document_file_content(str(document_id))
         if not file_content:
             ui.notify('Не удалось получить содержимое файла', type='error')
             return
@@ -2931,13 +2902,13 @@ def download_document_from_task(document_id: str, document_name: str = None):
         logger.error(f"Ошибка при скачивании документа {document_id}: {e}", exc_info=True)
         ui.notify(f'Ошибка при скачивании: {str(e)}', type='error')
 
-def open_document_preview(document_id: str):
+async def open_document_preview(document_id: str):
     """Открывает предварительный просмотр документа"""
     try:
         from services.mayan_connector import MayanClient
         
-        mayan_client = MayanClient.create_with_session_user()
-        preview_url = mayan_client.get_document_preview_url(str(document_id))
+        mayan_client = await MayanClient.create_with_session_user()
+        preview_url = await mayan_client.get_document_preview_url(str(document_id))
         
         if preview_url:
             # Для просмотра используем window.open, так как это просмотр, а не скачивание

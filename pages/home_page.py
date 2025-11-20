@@ -85,13 +85,29 @@ async def create_tasks_page(login: str):
                 logger.info(f"Ограничение завершенных задач: после {finished_after}, максимум {max_results} задач")
             
             # Получаем задачи
-            user_tasks = camunda_client.get_user_tasks(
-                current_login, 
-                active_only=active_only,
-                finished_after=finished_after if show_finished else None,
-                max_results=max_results if show_finished else None
-            )
-            logger.info(f"Получено {len(user_tasks)} задач от Camunda API")
+            if show_finished:
+                # Для завершенных задач используем отдельный метод
+                user_tasks = await camunda_client.get_completed_tasks_grouped(assignee=current_login)
+                # Фильтруем по дате вручную, если нужно
+                if finished_after:
+                    from datetime import datetime
+                    try:
+                        finished_date = datetime.fromisoformat(finished_after.replace('+0000', '+00:00'))
+                        user_tasks = [task for task in user_tasks 
+                                     if hasattr(task, 'endTime') and task.endTime 
+                                     and datetime.fromisoformat(task.endTime.replace('Z', '+00:00')) >= finished_date]
+                    except Exception as e:
+                        logger.warning(f'Ошибка фильтрации по дате: {e}')
+                # Ограничиваем количество результатов
+                if max_results and len(user_tasks) > max_results:
+                    user_tasks = user_tasks[:max_results]
+            else:
+                # Для активных задач используем обычный метод
+                user_tasks = await camunda_client.get_user_tasks(
+                    current_login, 
+                    active_only=True
+                )
+            logger.info(f'Получено {len(user_tasks)} задач от Camunda API')
             
             for task in user_tasks:
                 # Логируем каждую задачу для отладки
@@ -123,9 +139,19 @@ async def create_tasks_page(login: str):
             # Обновляем данные в таблице
             if tasks_grid:
                 logger.info(f"Обновляем таблицу с {len(tasks)} задачами")
-                tasks_grid.options['rowData'] = tasks
-                tasks_grid.update()
-                logger.info("Таблица задач обновлена")
+                try:
+                    tasks_grid.options['rowData'] = tasks
+                    tasks_grid.update()
+                    logger.info("Таблица задач обновлена")
+                except KeyError as e:
+                    # Игнорируем ошибку удаления уже удаленного клиента (race condition в NiceGUI)
+                    logger.warning(f"Ошибка обновления таблицы (игнорируем): {e}")
+                    # Пробуем обновить еще раз
+                    try:
+                        tasks_grid.options['rowData'] = tasks
+                        tasks_grid.update()
+                    except Exception as e2:
+                        logger.error(f"Повторная ошибка обновления таблицы: {e2}")
             else:
                 logger.warning("tasks_grid не инициализирована!")
             

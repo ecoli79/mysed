@@ -98,7 +98,7 @@ class LDAPAuthenticator:
                         )
                         
                         # Создаем API токен для пользователя
-                        mayan_token = temp_mayan_client.create_user_api_token(username, password)
+                        mayan_token = await temp_mayan_client.create_user_api_token(username, password)
                         if mayan_token:
                             user_session.mayan_api_token = mayan_token
                             logger.info(f'LDAP: API токен Mayan EDMS успешно создан для пользователя {username}')

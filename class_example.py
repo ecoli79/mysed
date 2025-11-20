@@ -20,7 +20,7 @@ class ClassExample:
         @ui.page('/task-assignment')
         async def page_task_assignment():
             with theme.frame('Назначение задач пользователям'):
-                message('Выбор пользователей и назначение им задач')
+                #message('Выбор пользователей и назначение им задач')
                 # Список для хранения выбранных пользователей
                 selected_users = []
                 all_users = await get_users()
@@ -64,58 +64,64 @@ class ClassExample:
                     # Кнопка для очистки фильтра
                     ui.button('Очистить', on_click=lambda: clear_filter(all_users, all_users_grid, search_input)).classes('ml-2')
                 
-                all_users_grid = ui.aggrid({
-                    'columnDefs': [
-                        {'headerName': 'Логин', 'field': 'login'},
-                        {'headerName': 'Имя', 'field': 'first_name'},
-                        {'headerName': 'Фамилия', 'field': 'last_name'},
-                        {'headerName': 'Email', 'field': 'email'},
-                    ],
-                    'rowData': [ user.__dict__ for user in all_users],
-                    'rowSelection': 'multiple',
-                    # Простая HTML заглушка
-                    'overlayNoRowsTemplate': '''
-                        <div style="padding: 40px; text-align: center; color: #666; font-size: 16px;">
-                            <i class="material-icons" style="font-size: 48px; color: #ccc; margin-bottom: 10px;">people</i>
-                            <br/>
-                            <strong>Нет пользователей для отображения</strong>
-                            <br/>
-                            <span style="font-size: 14px; color: #999;">Попробуйте изменить фильтр поиска</span>
-                        </div>
-                    ''',
-                    'suppressNoRowsOverlay': False,  # Показывать заглушку когда нет данных
-                }).classes('w-4/5').on('cellDoubleClicked', on_row_dblclick)
-               
-                user_count_label = ui.label(f'Найдено пользователей: {len(all_users)}')
-               
-                # Создаем контейнер для выбранных пользователей
-                with ui.column().classes('w-full mt-4'):
-                    ui.label('Выбранные пользователи:').classes('text-lg font-bold mb-2')
+                # Контейнер с двумя таблицами рядом
+                with ui.row().classes('w-full gap-4'):
+                    # Левая колонка - таблица всех пользователей
+                    with ui.column().classes('flex-1'):
+                        ui.label('Все пользователи:').classes('text-lg font-bold mb-2')
+                        
+                        all_users_grid = ui.aggrid({
+                            'columnDefs': [
+                                {'headerName': 'Логин', 'field': 'login'},
+                                {'headerName': 'Имя', 'field': 'first_name'},
+                                {'headerName': 'Фамилия', 'field': 'last_name'},
+                                {'headerName': 'Email', 'field': 'email'},
+                            ],
+                            'rowData': [ user.__dict__ for user in all_users],
+                            'rowSelection': 'multiple',
+                            # Простая HTML заглушка
+                            'overlayNoRowsTemplate': '''
+                                <div style="padding: 40px; text-align: center; color: #666; font-size: 16px;">
+                                    <i class="material-icons" style="font-size: 48px; color: #ccc; margin-bottom: 10px;">people</i>
+                                    <br/>
+                                    <strong>Нет пользователей для отображения</strong>
+                                    <br/>
+                                    <span style="font-size: 14px; color: #999;">Попробуйте изменить фильтр поиска</span>
+                                </div>
+                            ''',
+                            'suppressNoRowsOverlay': False,  # Показывать заглушку когда нет данных
+                        }).classes('w-full').on('cellDoubleClicked', on_row_dblclick)
+                       
+                        user_count_label = ui.label(f'Найдено пользователей: {len(all_users)}').classes('text-sm text-gray-600 mt-2')
                     
-                    # Таблица выбранных пользователей
-                selected_users_grid = ui.aggrid({
-                    'columnDefs': [
-                        {'headerName': 'Логин', 'field': 'login'},
-                        {'headerName': 'Имя', 'field': 'first_name'},
-                        {'headerName': 'Фамилия', 'field': 'last_name'},
-                        {'headerName': 'Email', 'field': 'email'},
-                    ],
-                    'rowData': [],
-                    'rowSelection': 'multiple',
-                      # Простая HTML заглушка
-                    'overlayNoRowsTemplate': '''
-                        <div style="padding: 40px; text-align: center; color: #666; font-size: 16px;">
-                            <i class="material-icons" style="font-size: 48px; color: #ccc; margin-bottom: 10px;">people</i>
-                            <br/>
-                            <strong>Не выбраны пользователи</strong>
-                            <br/>
-                            <span style="font-size: 14px; color: #999;">Выберите пользователей из верхнего списка чтобы назначить им задачу</span>
-                        </div>
-                    ''',
-                }).classes('w-4/5')
-                
-                # Счетчик выбранных пользователей
-                selected_count_label = ui.label('Выбрано пользователей: 0').classes('text-sm text-gray-600 mt-2')
+                    # Правая колонка - таблица выбранных пользователей
+                    with ui.column().classes('flex-1'):
+                        ui.label('Выбранные пользователи:').classes('text-lg font-bold mb-2')
+                        
+                        # Таблица выбранных пользователей
+                        selected_users_grid = ui.aggrid({
+                            'columnDefs': [
+                                {'headerName': 'Логин', 'field': 'login'},
+                                {'headerName': 'Имя', 'field': 'first_name'},
+                                {'headerName': 'Фамилия', 'field': 'last_name'},
+                                {'headerName': 'Email', 'field': 'email'},
+                            ],
+                            'rowData': [],
+                            'rowSelection': 'multiple',
+                              # Простая HTML заглушка
+                            'overlayNoRowsTemplate': '''
+                                <div style="padding: 40px; text-align: center; color: #666; font-size: 16px;">
+                                    <i class="material-icons" style="font-size: 48px; color: #ccc; margin-bottom: 10px;">people</i>
+                                    <br/>
+                                    <strong>Не выбраны пользователи</strong>
+                                    <br/>
+                                    <span style="font-size: 14px; color: #999;">Выберите пользователей из верхнего списка чтобы назначить им задачу</span>
+                                </div>
+                            ''',
+                        }).classes('w-full')
+                        
+                        # Счетчик выбранных пользователей
+                        selected_count_label = ui.label('Выбрано пользователей: 0').classes('text-sm text-gray-600 mt-2')
                                         
                 # Кнопки для работы с выбранными пользователями
                 with ui.row().classes('w-full mt-2'):
@@ -226,14 +232,14 @@ class ClassExample:
                     count_label.text = f'Найдено пользователей: {len(users)}'
                 
                 # Функция для загрузки активных шаблонов процессов
-                def load_process_templates():
+                async def load_process_templates():
                     if not camunda_client:
                         ui.notify('Camunda клиент не инициализирован', type='negative')
                         return
                         
                     print("Начинаем загрузку шаблонов процессов...")
                     try:
-                        process_definitions = camunda_client.get_active_process_definitions()
+                        process_definitions = await camunda_client.get_active_process_definitions()
                         print(f"Получено определений процессов: {len(process_definitions)}")
                         
                         # Создаем словарь для select: {key: name}
@@ -252,7 +258,7 @@ class ClassExample:
                         logger.error(f"Ошибка при загрузке шаблонов процессов: {e}", exc_info=True)
                                                        
                 # Функция для открытия формы запуска процесса
-                def open_process_form():
+                async def open_process_form():
                     if not selected_users:
                         ui.notify('Не выбраны пользователи', type='warning')
                         return
@@ -395,8 +401,8 @@ class ClassExample:
                                 
                                 try:
                                     # Используем системный клиент для получения ролей
-                                    system_client = MayanClient.create_default()
-                                    roles = system_client.get_roles(page=1, page_size=1000)
+                                    system_client = await MayanClient.create_default()
+                                    roles = await system_client.get_roles(page=1, page_size=1000)
                                     
                                     # Создаем словарь role_label -> role_label для выбора
                                     role_options = {}
@@ -426,7 +432,7 @@ class ClassExample:
                                 ui.label('Выберите роли, которым будет предоставлен доступ к документу для подписания').classes('text-xs text-gray-600 mb-2')
                                 
                                 # Определяем функции после объявления всех переменных
-                                def search_and_display_documents_for_task(query: str = ''):
+                                async def search_and_display_documents_for_task(query: str = ''):
                                     """Ищет и отображает документы из Mayan EDMS для выбора"""
                                     try:
                                         # Если query не передан, берем из поля ввода
@@ -443,19 +449,19 @@ class ClassExample:
                                         from services.mayan_connector import MayanClient
                                         
                                         # Получаем клиент Mayan EDMS
-                                        mayan_client = MayanClient.create_with_session_user()
+                                        mayan_client = await MayanClient.create_with_session_user()
                                         
                                         # Выполняем поиск
                                         query = query.strip() if query else ''
                                         
                                         if query:
                                             logger.info(f"Выполняем поиск документов по запросу: '{query}'")
-                                            documents = mayan_client.search_documents(query, page=1, page_size=20)
+                                            documents = await mayan_client.search_documents(query, page=1, page_size=20)
                                             logger.info(f"Найдено документов: {len(documents)}")
                                         else:
                                             # Если запрос пустой, показываем последние документы
                                             logger.info("Запрос пустой, показываем последние документы")
-                                            documents = mayan_client.get_documents(page=1, page_size=20)
+                                            documents = await mayan_client.get_documents(page=1, page_size=20)
                                         
                                         # Очищаем контейнер перед показом результатов
                                         document_results_container.clear()
@@ -597,26 +603,24 @@ class ClassExample:
                         
                         # Кнопки
                         with ui.row().classes('w-full justify-end mt-4'):
+                            start_button = ui.button(
+                                'Запустить процесс',
+                                on_click=lambda: start_process_with_form(
+                                    dialog,
+                                    task_name_input.value,
+                                    task_description_input.value,
+                                    priority_select.value,
+                                    due_date_input.value,
+                                    category_input.value,
+                                    tags_input.value,
+                                    start_button,
+                                    document_id_input.value if document_id_input else '',
+                                    document_name_input.value if document_name_input else '',
+                                    roles_select.value if roles_select else []
+                                ),
+                                icon='play_arrow'
+                            ).classes('bg-green-500 text-white')
                             ui.button('Отмена', on_click=dialog.close).classes('mr-2')
-                            
-                        # Кнопка запуска с индикатором загрузки
-                        start_button = ui.button(
-                            'Запустить процесс',
-                            on_click=lambda: start_process_with_form(
-                                dialog,
-                                task_name_input.value,
-                                task_description_input.value,
-                                priority_select.value,
-                                due_date_input.value,
-                                category_input.value,
-                                tags_input.value,
-                                start_button,
-                                document_id_input.value if document_id_input else '',
-                                document_name_input.value if document_name_input else '',
-                                roles_select.value if roles_select else []
-                            ),
-                            icon='play_arrow'
-                        ).classes('bg-green-500 text-white')
                     
                     dialog.open()
                 
@@ -709,7 +713,7 @@ class ClassExample:
                             current_user = get_current_user()
                             creator_username = current_user.username if current_user else None
                             
-                            process_id = camunda_client.start_document_review_process_multi_instance(
+                            process_id = await camunda_client.start_document_review_process_multi_instance(
                                 document_name=task_name.strip(),
                                 document_content=task_description.strip(),
                                 assignee_list=assignee_list,
@@ -740,7 +744,7 @@ class ClassExample:
                             if isinstance(selected_roles, str):
                                 selected_roles = [selected_roles] if selected_roles else []
                             
-                            process_id = camunda_client.start_document_signing_process(
+                            process_id = await camunda_client.start_document_signing_process(
                                 document_id=document_id.strip(),
                                 document_name=document_name.strip(),
                                 signer_list=assignee_list,
@@ -755,7 +759,7 @@ class ClassExample:
                             current_user = get_current_user()
                             creator_username = current_user.username if current_user else None
                             
-                            process_id = camunda_client.start_process(
+                            process_id = await camunda_client.start_process(
                                 process_definition_key=process_key,
                                 assignee_list=assignee_list,
                                 additional_variables=process_variables,
@@ -786,6 +790,3 @@ class ClassExample:
                 # Загружаем шаблоны процессов при инициализации страницы с задержкой
                 ui.timer(2.0, lambda: load_process_templates(), once=True)
                 
-                # УДАЛИТЬ все функции отсюда до конца (строки 692-817)
-                # Функции уже определены внутри блока if process_template_select.value
-                # и используют замыкания для доступа к переменным

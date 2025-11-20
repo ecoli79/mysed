@@ -93,6 +93,16 @@ class AppConfig(BaseSettings):
     mayan_username: str = Field(default="", env="MAYAN_USERNAME")
     mayan_password: str = Field(default="", env="MAYAN_PASSWORD")
     mayan_api_token: str = Field(default="", env="MAYAN_API_TOKEN")
+
+    # Настройки почтового сервера
+    email_server: str = Field(default="", env="EMAIL_SERVER")
+    email_port: int = Field(default=993, env="EMAIL_PORT")
+    email_username: str = Field(default="", env="EMAIL_USERNAME")
+    email_password: str = Field(default="", env="EMAIL_PASSWORD")
+    email_use_ssl: bool = Field(default=True, env="EMAIL_USE_SSL")
+    email_protocol: str = Field(default="imap", env="EMAIL_PROTOCOL")  # imap или pop3
+    email_allowed_senders: str = Field(default="", env="EMAIL_ALLOWED_SENDERS")  # Через запятую
+    email_check_interval: int = Field(default=300, env="EMAIL_CHECK_INTERVAL")  # Интервал проверки в секундах
     
     
     # Логирование
