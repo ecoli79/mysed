@@ -6,11 +6,10 @@ from config.settings import config
 from datetime import datetime
 import logging
 from typing import List, Dict, Any, Optional
-from models import CamundaHistoryTask, LDAPUser
+from models import CamundaHistoryTask, LDAPUser, GroupedHistoryTask
 from auth.middleware import get_current_user
 from auth.ldap_auth import LDAPAuthenticator
 from utils import validate_username
-from datetime import datetime
 import api_router
 from ldap3 import Server, Connection, SUBTREE, ALL
 from utils.date_utils import format_date_russian
@@ -27,6 +26,9 @@ import io
 import os
 from services.signature_manager import SignatureManager
 import tempfile
+import json
+import pytz
+from components.document_viewer import show_document_viewer
 
 
 logger = logging.getLogger(__name__)
@@ -344,7 +346,6 @@ async def load_completed_tasks():
                 
                 for task in tasks:
                     # Проверяем тип задачи
-                    from models import GroupedHistoryTask
                     if isinstance(task, GroupedHistoryTask):
                         logger.info(f"Создаем карточку для группированной задачи {task.process_instance_id}")
                         create_grouped_completed_task_card(task)
@@ -596,7 +597,6 @@ async def show_completed_task_details_in_tab(task):
         
         try:
             # Проверяем, является ли это группированной задачей
-            from models import GroupedHistoryTask
             if isinstance(task, GroupedHistoryTask):
                 # Если это группированная задача, используем специальную функцию
                 show_grouped_task_details_in_tab(task)
@@ -905,7 +905,6 @@ async def complete_signing_task(task):
                     signer_list = signer_list['value']
                 elif isinstance(signer_list, str):
                     try:
-                        import json
                         signer_list = json.loads(signer_list)
                     except:
                         signer_list = [signer_list] if signer_list else []
@@ -973,7 +972,6 @@ async def complete_signing_task(task):
                 
                 try:
                     # ИСПРАВЛЕНИЕ: Создаем объект LDAPAuthenticator
-                    from auth.ldap_auth import LDAPAuthenticator
                     ldap_auth = LDAPAuthenticator()
                     
                     signers_container = ui.column().classes('w-full mb-4')
@@ -1017,11 +1015,30 @@ async def complete_signing_task(task):
                     document_content = await mayan_client.get_document_file_content(document_id)
                     
                     if document_content:
-                        import base64
                         document_base64 = base64.b64encode(document_content).decode('utf-8')
                         
                         ui.label(f'Документ загружен: {document_name or "Неизвестно"}').classes('text-green-600 mb-2')
                         ui.label(f'Размер файла: {len(document_content)} байт').classes('text-sm text-gray-600 mb-4')
+                        
+                        # Добавляем кнопки для просмотра и скачивания документа
+                        with ui.row().classes('w-full mb-4 gap-2'):
+                            async def open_preview():
+                                await open_document_preview(str(document_id))
+                            
+                            async def download_doc():
+                                await download_document_from_task(str(document_id), document_name)
+                            
+                            ui.button(
+                                'Просмотр документа',
+                                icon='visibility',
+                                on_click=open_preview
+                            ).classes('bg-blue-500 text-white')
+                            
+                            ui.button(
+                                'Скачать документ',
+                                icon='download',
+                                on_click=download_doc
+                            ).classes('bg-green-500 text-white')
                         
                         global _document_for_signing
                         _document_for_signing = {
@@ -1142,7 +1159,6 @@ def check_and_save_signed_pdf():
             
             if signed_document:
                 # Декодируем Base64 в бинарные данные
-                import base64
                 pdf_binary = base64.b64decode(signed_document)
                 
                 # Сохраняем подписанный PDF в файл
@@ -2004,9 +2020,6 @@ def save_signature_to_file(signature_base64, task_name):
             packet.seek(0)
             signature_page = packet.getvalue()
             
-            # Объединяем исходный PDF с блоком подписи
-            from PyPDF2 import PdfReader, PdfWriter
-            
             # Читаем исходный PDF
             original_pdf = PdfReader(io.BytesIO(pdf_binary))
             
@@ -2117,8 +2130,6 @@ def add_additional_signature_to_pdf(existing_pdf_path, signature_base64, signer_
             packet.seek(0)
             signature_page = packet.getvalue()
             
-            from PyPDF2 import PdfReader, PdfWriter
-            
             # Читаем существующий PDF
             with open(existing_pdf_path, 'rb') as f:
                 existing_pdf = PdfReader(f)
@@ -2161,7 +2172,6 @@ def save_signed_pdf_to_file():
             
             if signed_document:
                 # Декодируем Base64 в бинарные данные
-                import base64
                 pdf_binary = base64.b64decode(signed_document)
                 
                 # Сохраняем подписанный PDF в файл
@@ -2223,7 +2233,6 @@ def check_signature_result():
 async def load_and_display_document(document_id: str, container: ui.column):
     """Загружает и отображает документ"""
     try:
-        from services.mayan_connector import MayanClient
         mayan_client = await MayanClient.create_with_session_user()
         logger.info(f'mayan_client: {mayan_client}')
         logger.info(f'Загружаем документ {document_id}')
@@ -2371,7 +2380,6 @@ async def submit_signing_task_completion(task, signed, signature_data, certifica
                 document_id = process_variables.get('documentId')
                 
                 if document_id and signature_data:
-                    from services.signature_manager import SignatureManager
                     signature_manager = SignatureManager()
                     
                     success = await signature_manager.upload_signature_to_document(
@@ -2796,9 +2804,6 @@ def format_variable_value(value):
     elif isinstance(value, str):
         # Проверяем, похоже ли значение на ISO-дату
         try:
-            from datetime import datetime
-            import pytz
-            import json
             
             # Проверяем, похоже ли значение на ISO-дату (упрощённо)
             iso_like = (
@@ -2832,10 +2837,7 @@ def format_variable_value(value):
 async def download_document_from_task(document_id: str, document_name: str = None):
     """Скачивает документ из Mayan EDMS через безопасный прокси-подход"""
     try:
-        from services.mayan_connector import MayanClient
-        import tempfile
-        import os
-        
+
         mayan_client = await MayanClient.create_with_session_user()
         
         # Получаем содержимое файла И информацию о выбранном файле
@@ -2846,7 +2848,7 @@ async def download_document_from_task(document_id: str, document_name: str = Non
         
         # Получаем имя файла из выбранного файла (не из метаданных документа)
         # Используем внутренний метод для получения информации о выбранном файле
-        file_info = mayan_client._get_main_document_file(str(document_id))
+        file_info = await mayan_client._get_main_document_file(str(document_id))
         
         if file_info and file_info.get('filename'):
             # Используем имя файла из выбранного файла
@@ -2865,7 +2867,7 @@ async def download_document_from_task(document_id: str, document_name: str = Non
             logger.info(f"Используем document_name с расширением: {filename}")
         else:
             # Пробуем получить из document_info
-            document_info = mayan_client.get_document_info_for_review(str(document_id))
+            document_info = await mayan_client.get_document_info_for_review(str(document_id))
             if document_info and document_info.get('filename'):
                 filename = document_info.get('filename')
                 # КРИТИЧЕСКАЯ ПРОВЕРКА: Если имя файла заканчивается на .json, но содержимое PDF
@@ -2905,16 +2907,9 @@ async def download_document_from_task(document_id: str, document_name: str = Non
 async def open_document_preview(document_id: str):
     """Открывает предварительный просмотр документа"""
     try:
-        from services.mayan_connector import MayanClient
         
         mayan_client = await MayanClient.create_with_session_user()
-        preview_url = await mayan_client.get_document_preview_url(str(document_id))
-        
-        if preview_url:
-            # Для просмотра используем window.open, так как это просмотр, а не скачивание
-            ui.run_javascript(f'window.open("{preview_url}", "_blank")')
-        else:
-            ui.notify('Предварительный просмотр недоступен', type='warning')
+        await show_document_viewer(str(document_id), mayan_client=mayan_client)
             
     except Exception as e:
         logger.error(f"Ошибка при открытии просмотра документа {document_id}: {e}", exc_info=True)

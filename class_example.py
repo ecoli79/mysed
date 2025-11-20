@@ -701,7 +701,6 @@ class ClassExample:
                             }
                         
                         # Получаем текущего пользователя один раз в начале функции
-                        from auth.middleware import get_current_user
                         current_user = get_current_user()
                         creator_username = current_user.username if current_user else None
                         

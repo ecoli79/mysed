@@ -22,6 +22,10 @@ import logging
 import asyncio
 from auth.ldap_auth import LDAPAuthenticator
 from auth.session_manager import session_manager
+from auth.token_storage import token_storage
+from components.document_viewer import show_document_viewer
+from services.signature_manager import SignatureManager
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -332,14 +336,12 @@ async def get_mayan_client() -> MayanClient:
     """Получает клиент Mayan EDMS с учетными данными текущего пользователя"""
     try:
         # ВСЕГДА получаем текущего пользователя из контекста, чтобы использовать актуальный токен
-        from auth.middleware import get_current_user
         current_user = get_current_user()
         
         if not current_user:
             raise ValueError('Пользователь не авторизован')
         
         # Создаем клиент с API токеном пользователя напрямую
-        from config.settings import config
         if not hasattr(current_user, 'mayan_api_token') or not current_user.mayan_api_token:
             raise MayanTokenExpiredError(f'У пользователя {current_user.username} нет API токена для доступа к Mayan EDMS')
         
@@ -362,9 +364,6 @@ async def get_mayan_client() -> MayanClient:
                 current_user.mayan_api_token = new_token
                 # Обновляем сессию в session_manager
                 try:
-                    from nicegui import ui
-                    from auth.token_storage import token_storage
-                    from auth.session_manager import session_manager
                     client_ip = ui.context.client.request.client.host
                     token = token_storage.get_token(client_ip)
                     if token:
@@ -393,16 +392,12 @@ async def get_mayan_client() -> MayanClient:
         
         if new_token:
             # Получаем текущего пользователя для обновления токена
-            from auth.middleware import get_current_user
             current_user = get_current_user()
             
             if current_user:
                 current_user.mayan_api_token = new_token
                 # Обновляем сессию в session_manager
                 try:
-                    from nicegui import ui
-                    from auth.token_storage import token_storage
-                    from auth.session_manager import session_manager
                     client_ip = ui.context.client.request.client.host
                     token = token_storage.get_token(client_ip)
                     if token:
@@ -413,7 +408,6 @@ async def get_mayan_client() -> MayanClient:
                     logger.warning(f'Не удалось обновить токен в сессии: {e}')
             
             # Создаем новый клиент с обновленным токеном
-            from config.settings import config
             client = MayanClient(
                 base_url=config.mayan_url,
                 api_token=new_token
@@ -514,146 +508,7 @@ def create_document_card(document: MayanDocument) -> ui.card:
                     """Открывает полноразмерное изображение превью с каруселью всех страниц"""
                     try:
                         client = await get_mayan_client()
-                        
-                        # Получаем все страницы документа
-                        pages = await client.get_document_pages(document.document_id)
-                        
-                        if not pages or len(pages) == 0:
-                            if preview_data_uri['value']:
-                                with ui.dialog().classes('w-full h-full') as dialog:
-                                    with ui.card().classes('w-full h-full flex flex-col').style('max-width: 98vw; max-height: 98vh; width: 98vw; height: 98vh;'):
-                                        # Заголовок (фиксированная высота)
-                                        ui.label(f'Превью документа: {document.label}').classes('text-lg font-semibold mb-2 flex-shrink-0')
-                                        
-                                        # Контейнер для изображения (занимает оставшееся пространство)
-                                        full_preview_html = ui.html(
-                                            f'<img src="{preview_data_uri["value"]}" class="max-w-full object-contain mx-auto" alt="Превью документа {document.document_id}" style="display: block; max-height: calc(98vh - 120px);" />'
-                                        ).classes('flex-1 flex justify-center items-center overflow-auto').style('min-height: 0;')
-                                        
-                                        # Кнопка закрытия (фиксированная высота, всегда видна)
-                                        with ui.row().classes('w-full justify-end mt-2 flex-shrink-0'):
-                                            ui.button('Закрыть', icon='close', on_click=dialog.close).classes('bg-gray-500 text-white')
-                                
-                                dialog.open()
-                            return
-                        
-                        # Создаем диалог с индикатором загрузки
-                        with ui.dialog().classes('w-full h-full') as dialog:
-                            with ui.card().classes('w-full h-full flex flex-col').style('max-width: 99vw; max-height: 99vh; height: 99vh; width: auto;'):
-                                # Заголовок
-                                ui.label(f'Просмотр документа: {document.label}').classes('text-lg font-semibold mb-2 flex-shrink-0 px-4')
-                                
-                                # Контейнер для индикатора загрузки (отцентрирован)
-                                loading_container = ui.column().classes('flex-1').style('display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 1rem;')
-                                
-                                # Создаем индикатор загрузки
-                                loading = LoadingIndicator(loading_container, 'Загрузка страниц документа...')
-                                loading.show()
-                                
-                                # Убираем w-full и центрируем row
-                                if loading.row_widget:
-                                    loading.row_widget.classes(remove='w-full')
-                                    loading.row_widget.style('width: auto; margin: 0 auto;')
-                                
-                                dialog.open()
-                                
-                                # Загружаем изображения всех страниц с обновлением прогресса
-                                pages_data = []
-                                total_pages = len(pages)
-                                
-                                for index, page in enumerate(pages, 1):
-                                    image_url = page.get('image_url')
-                                    if image_url:
-                                        try:
-                                            # Обновляем прогресс
-                                            loading.update_message(f'Загрузка страниц документа... {index} / {total_pages}')
-                                            
-                                            if image_url.startswith('http://') or image_url.startswith('https://'):
-                                                response = await client.client.get(image_url)
-                                            else:
-                                                if image_url.startswith('/'):
-                                                    full_url = f'{client.base_url.rstrip("/")}{image_url}'
-                                                else:
-                                                    full_url = f'{client.api_url.rstrip("/")}/{image_url.lstrip("/")}'
-                                                response = await client.client.get(full_url)
-                                            
-                                            if response.status_code == 200:
-                                                image_data = response.content
-                                                import base64
-                                                img_base64 = base64.b64encode(image_data).decode()
-                                                
-                                                mimetype = 'image/jpeg'
-                                                if image_data[:4] == b'\x89PNG':
-                                                    mimetype = 'image/png'
-                                                elif image_data[:6] in [b'GIF87a', b'GIF89a']:
-                                                    mimetype = 'image/gif'
-                                                
-                                                data_uri = f'data:{mimetype};base64,{img_base64}'
-                                                pages_data.append({
-                                                    'page_number': page.get('page_number', len(pages_data) + 1),
-                                                    'data_uri': data_uri
-                                                })
-                                        except Exception as e:
-                                            logger.warning(f'Ошибка загрузки страницы {page.get("page_number")}: {e}')
-                                
-                                if not pages_data:
-                                    loading.update_message('Не удалось загрузить страницы документа')
-                                    ui.timer(3.0, dialog.close, once=True)
-                                    return
-                                
-                                # Скрываем индикатор загрузки
-                                loading.hide()
-                                loading_container.set_visibility(False)
-                                
-                                # Информация о странице (фиксированная высота)
-                                page_info_label = ui.label(f'Страница 1 из {len(pages_data)}').classes('text-sm text-gray-600 mb-2 flex-shrink-0 px-4')
-                                
-                                # Контейнер для изображения (занимает оставшееся пространство, без пустых отступов)
-                                image_container = ui.html('').classes('flex-1 overflow-auto').style('min-height: 0; width: 100%; display: flex; justify-content: center; align-items: center; padding: 0;')
-                                
-                                current_page = {'index': 0}
-                                
-                                def update_page_display():
-                                    page_data = pages_data[current_page['index']]
-                                    page_number = page_data['page_number']
-                                    page_info_label.text = f'Страница {current_page["index"] + 1} из {len(pages_data)} (страница документа: {page_number})'
-                                    # Изображение центрируется и занимает максимум доступного пространства
-                                    image_container.content = f'<img src="{page_data["data_uri"]}" alt="Страница {page_number}" style="max-width: 100%; max-height: calc(99vh - 250px); height: auto; width: auto; object-fit: contain; display: block; margin: 0 auto;" />'
-                                    image_container.update()
-                                
-                                # Кнопки навигации и закрытия (фиксированная высота, отцентрированы)
-                                with ui.row().classes('w-full justify-center items-center gap-4 mb-2 flex-shrink-0 px-4'):
-                                    prev_button = ui.button('Предыдущая', icon='arrow_back').classes('bg-blue-500 text-white')
-                                    next_button = ui.button('Следующая', icon='arrow_forward').classes('bg-blue-500 text-white')
-                                    close_button = ui.button('Закрыть', icon='close', on_click=dialog.close).classes('bg-gray-500 text-white')
-                                    
-                                    def go_to_previous():
-                                        if current_page['index'] > 0:
-                                            current_page['index'] -= 1
-                                            update_page_display()
-                                            prev_button.set_enabled(current_page['index'] > 0)
-                                            next_button.set_enabled(current_page['index'] < len(pages_data) - 1)
-                                    
-                                    def go_to_next():
-                                        if current_page['index'] < len(pages_data) - 1:
-                                            current_page['index'] += 1
-                                            update_page_display()
-                                            prev_button.set_enabled(current_page['index'] > 0)
-                                            next_button.set_enabled(current_page['index'] < len(pages_data) - 1)
-                                    
-                                    prev_button.on_click(go_to_previous)
-                                    next_button.on_click(go_to_next)
-                                    
-                                    if len(pages_data) > 1:
-                                        prev_button.set_enabled(False)
-                                        next_button.set_enabled(True)
-                                    else:
-                                        prev_button.set_enabled(False)
-                                        next_button.set_enabled(False)
-                                
-                                # Отображаем первую страницу
-                                update_page_display()
-                        
+                        await show_document_viewer(document.document_id, document.label, mayan_client=client)
                     except Exception as e:
                         logger.error(f'Ошибка при открытии полноразмерного превью: {e}', exc_info=True)
                         try:
@@ -682,7 +537,6 @@ def create_document_card(document: MayanDocument) -> ui.card:
                                 logger.info(f'Получено {len(image_data)} байт изображения для документа {document.document_id}')
                                 
                                 # Конвертируем в base64 для отображения
-                                import base64
                                 img_base64 = base64.b64encode(image_data).decode()
                                 
                                 # Определяем MIME-тип изображения
@@ -786,7 +640,6 @@ def create_document_card(document: MayanDocument) -> ui.card:
         async def check_and_add_signature_button():
             """Проверяет наличие подписей и добавляет кнопку"""
             try:
-                from services.signature_manager import SignatureManager
                 signature_manager = SignatureManager()
                 has_signatures = await signature_manager.document_has_signatures(document.document_id)
                 logger.info(f"  - Есть подписи для документа {document.document_id}: {has_signatures}")
@@ -967,7 +820,6 @@ async def show_grant_access_dialog(document: MayanDocument):
                             
                 except Exception as e:
                     logger.error(f"Ошибка при предоставлении доступа: {e}")
-                    import traceback
                     logger.error(f"Traceback: {traceback.format_exc()}")
                     ui.notify(f'Ошибка: {str(e)}', type='error')
             
@@ -1078,7 +930,6 @@ async def load_recent_documents():
             return
         
         with _recent_documents_container:
-            import asyncio
             tasks = []
             for document in documents:
                 card = create_document_card(document)  # Создаем карточку синхронно
@@ -1939,10 +1790,7 @@ async def upload_content(container: Optional[ui.column] = None, user: Optional[A
 
 async def download_signed_document(document: MayanDocument):
     '''Скачивает документ с информацией о подписях'''
-    try:
-        from services.signature_manager import SignatureManager
-        import tempfile
-        
+    try:       
         ui.notify('Создание итогового документа с подписями...', type='info')
         
         signature_manager = SignatureManager()
@@ -2008,10 +1856,7 @@ async def show_mayan_reauth_dialog() -> Optional[str]:
             status_label.text = 'Проверка учетных данных...'
             status_label.classes('text-blue-500')
             
-            try:
-                from config.settings import config
-                from services.mayan_connector import MayanClient
-                
+            try:               
                 # Создаем временный клиент с системными учетными данными
                 temp_mayan_client = MayanClient(
                     base_url=config.mayan_url,

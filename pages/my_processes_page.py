@@ -1,5 +1,5 @@
 from nicegui import ui
-from services.camunda_connector import CamundaClient
+from services.camunda_connector import CamundaClient, create_camunda_client
 from auth.middleware import get_current_user, require_auth
 from config.settings import config
 import logging
@@ -126,21 +126,22 @@ def content():
                 
         
         # Загружаем процессы
-        load_my_processes(processes_container, details_container, current_user.username)
+        ui.timer(0.1, lambda: load_my_processes(processes_container, details_container, current_user.username), once=True)
 
-def load_my_processes(processes_container, details_container, creator_username):
+async def load_my_processes(processes_container, details_container, creator_username):
     """Загружает процессы созданные пользователем"""
     try:
-        # ОЧИЩАЕМ КОНТЕЙНЕР ПЕРЕД ЗАГРУЗКОЙ
+        # ОЧИЩАЕМ КОНТЕЙНЕРЫ ПЕРЕД ЗАГРУЗКОЙ
         processes_container.clear()
+        details_container.clear()  # Очищаем блок с деталями процесса
         
-        camunda_client = get_camunda_client()
+        camunda_client = await create_camunda_client()
         
         # Получаем активные процессы
-        active_processes = camunda_client.get_processes_by_creator(creator_username, active_only=True)
+        active_processes = await camunda_client.get_processes_by_creator(creator_username, active_only=True)
         
         # Получаем завершенные процессы
-        completed_processes = camunda_client.get_processes_by_creator(creator_username, active_only=False)
+        completed_processes = await camunda_client.get_processes_by_creator(creator_username, active_only=False)
         
         # ИСКЛЮЧАЕМ АКТИВНЫЕ ПРОЦЕССЫ ИЗ ЗАВЕРШЕННЫХ (если они там есть)
         active_process_ids = {p['id'] for p in active_processes}
@@ -163,6 +164,7 @@ def load_my_processes(processes_container, details_container, creator_username):
                 ui.label('У вас нет созданных процессов').classes('text-gray-500 text-center mt-8')
     except Exception as e:
         processes_container.clear()
+        details_container.clear()  # Также очищаем при ошибке
         with processes_container:
             ui.label(f'Ошибка при загрузке процессов: {str(e)}').classes('text-red-600')
         logger.error(f"Ошибка при загрузке процессов: {e}", exc_info=True)
@@ -183,6 +185,10 @@ def create_process_card(process, is_active=True, details_container=None):
     process_name = (variables.get('taskName') or 
                    variables.get('documentName') or 
                    process.get('processDefinitionKey', 'Неизвестно'))
+    
+    # Обрезаем длинные названия процессов
+    if len(process_name) > 80:
+        process_name = process_name[:80] + '...'
     
     # Получаем список назначенных пользователей
     assignee_list = variables.get('assigneeList', [])
@@ -206,30 +212,37 @@ def create_process_card(process, is_active=True, details_container=None):
     if due_date:
         due_date = format_date_russian(due_date)
     
-    with ui.card().classes(f'mb-3 p-4 border-l-4 {status_color}'):
-        with ui.row().classes('items-start justify-between w-full'):
-            with ui.column().classes('flex-1'):
-                # Название процесса
-                ui.label(f'Процесс: {process_name}').classes('text-lg font-semibold')
+    # Обрезаем длинный ID процесса для отображения
+    display_process_id = process_id
+    if len(display_process_id) > 40:
+        display_process_id = display_process_id[:40] + '...'
+    
+    with ui.card().classes(f'mb-3 p-4 border-l-4 {status_color} w-full max-w-full'):
+        with ui.row().classes('items-start justify-between w-full gap-4'):
+            with ui.column().classes('flex-1 min-w-0'):
+                # Название процесса - с переносом текста
+                ui.label(f'Процесс: {process_name}').classes('text-lg font-semibold break-words mb-2')
                 
-                # ID процесса
-                ui.label(f'ID: {process_id}').classes('text-sm font-mono text-gray-600')
+                # ID процесса - с переносом и обрезкой
+                with ui.row().classes('items-center gap-2 mb-1'):
+                    ui.label('ID:').classes('text-sm font-medium text-gray-500 whitespace-nowrap')
+                    ui.label(display_process_id).classes('text-sm font-mono text-gray-600 break-all')
                 
                 # Статус
-                ui.label(f'Статус: {status_text}').classes('text-sm font-medium')
+                ui.label(f'Статус: {status_text}').classes('text-sm font-medium mb-1')
                 
                 # Дата создания
                 start_time = process.get('startTime', 'Неизвестно')
                 if start_time and start_time != 'Неизвестно':
                     formatted_time = format_date_russian(start_time)
-                    ui.label(f'Создан: {formatted_time}').classes('text-sm text-gray-600')
+                    ui.label(f'Создан: {formatted_time}').classes('text-sm text-gray-600 mb-1')
                 
                 # Кому назначен процесс
                 if assignee_list:
                     assignees_text = ', '.join(assignee_list) if isinstance(assignee_list, list) else str(assignee_list)
-                    if len(assignees_text) > 50:
-                        assignees_text = assignees_text[:50] + '...'
-                    ui.label(f'Назначено: {assignees_text}').classes('text-sm text-gray-700')
+                    if len(assignees_text) > 60:
+                        assignees_text = assignees_text[:60] + '...'
+                    ui.label(f'Назначено: {assignees_text}').classes('text-sm text-gray-700 break-words mb-1')
                 
                 # Стадия выполнения (прогресс)
                 if is_active and progress_info:
@@ -239,35 +252,38 @@ def create_process_card(process, is_active=True, details_container=None):
                         progress_percent = round((completed / total) * 100)
                         
                         # Прогресс-бар с текстом в одной строке
-                        with ui.row().classes('w-full items-center gap-2 my-2 mb-4'):
-                            ui.linear_progress(value=progress_percent / 100, show_value=False).classes('flex-1 h-4')
+                        with ui.row().classes('w-full items-center gap-2 my-2 mb-2'):
+                            ui.linear_progress(value=progress_percent / 100, show_value=False).classes('flex-1 h-4 min-w-0')
                             ui.label(f'{completed}/{total} ({progress_percent}%)').classes('text-xs text-gray-600 whitespace-nowrap')
                 
                 # Описание задачи (если есть)
                 if task_description:
-                    ui.label(f'Описание: {task_description}').classes('text-sm text-gray-600 italic')
+                    ui.label(f'Описание: {task_description}').classes('text-sm text-gray-600 italic break-words mb-1')
                 
                 # Дедлайн (если есть) - теперь отформатирован
                 if due_date:
-                    ui.label(f'Срок исполнения: {due_date}').classes('text-sm text-orange-600')
+                    ui.label(f'Срок исполнения: {due_date}').classes('text-sm text-orange-600 mb-1')
                 
                 # Бизнес-ключ
                 if process.get('businessKey'):
-                    ui.label(f'Бизнес-ключ: {process["businessKey"]}').classes('text-xs text-gray-500')
+                    business_key = str(process.get('businessKey'))
+                    if len(business_key) > 50:
+                        business_key = business_key[:50] + '...'
+                    ui.label(f'Бизнес-ключ: {business_key}').classes('text-xs text-gray-500 break-all')
             
-            with ui.column().classes('items-end'):
+            with ui.column().classes('items-end flex-shrink-0'):
                 if is_active:
-                    ui.button('Просмотр', icon='visibility', on_click=lambda pid=process_id, det_container=details_container: show_process_details(pid, det_container)).classes('bg-blue-500 text-white')
+                    ui.button('Просмотр', icon='visibility', on_click=lambda pid=process_id, det_container=details_container: show_process_details(pid, det_container)).classes('bg-blue-500 text-white whitespace-nowrap')
                 else:
-                    ui.button('История', icon='history', on_click=lambda pid=process_id, det_container=details_container: show_process_history(pid, det_container)).classes('bg-gray-500 text-white')
+                    ui.button('История', icon='history', on_click=lambda pid=process_id, det_container=details_container: show_process_history(pid, det_container)).classes('bg-gray-500 text-white whitespace-nowrap')
 
-def show_process_details(process_id, details_container):
+async def show_process_details(process_id, details_container):
     """Показывает детали активного процесса справа"""
     try:
-        camunda_client = get_camunda_client()
+        camunda_client = await create_camunda_client()
         
         # Получаем расширенную информацию о процессе
-        process_info = camunda_client.get_process_with_variables(process_id, is_active=True)
+        process_info = await camunda_client.get_process_with_variables(process_id, is_active=True)
         if not process_info:
             ui.notify('Не удалось получить информацию о процессе', type='error')
             return
@@ -279,21 +295,23 @@ def show_process_details(process_id, details_container):
         details_container.clear()
         
         with details_container:
-            with ui.card().classes('p-6 w-full'):
+            with ui.card().classes('p-6 w-full max-w-full'):
                 ui.label('Детали процесса').classes('text-xl font-bold mb-4')
                 
                 # Основная информация
-                ui.label(f'ID процесса: {process_id}').classes('text-sm font-mono text-gray-600 mb-2')
+                ui.label(f'ID процесса: {process_id}').classes('text-sm font-mono text-gray-600 mb-2 break-all')
                 
-                # Название процесса
+                # Название процесса - с обрезкой и переносом
                 process_name = variables.get('taskName') or variables.get('documentName') or 'Неизвестно'
-                ui.label(f'Название: {process_name}').classes('text-lg font-semibold mb-3')
+                if len(process_name) > 100:
+                    process_name = process_name[:100] + '...'
+                ui.label(f'Название: {process_name}').classes('text-lg font-semibold mb-3 break-words')
                 
                 # Описание
                 task_description = variables.get('taskDescription', '')
                 if task_description:
                     ui.label('Описание:').classes('text-sm font-semibold mb-1')
-                    ui.label(task_description).classes('text-sm mb-3 text-gray-600')
+                    ui.label(task_description).classes('text-sm mb-3 text-gray-600 break-words')
                 
                 # Статус процесса
                 ui.label('Статус: Активен').classes('text-sm font-medium text-green-600 mb-3')
@@ -351,44 +369,49 @@ def show_process_details(process_id, details_container):
                 
                 # Бизнес-ключ
                 if process_info.get('businessKey'):
-                    ui.label(f'Бизнес-ключ: {process_info["businessKey"]}').classes('text-xs text-gray-500 mt-2')
+                    business_key = str(process_info.get('businessKey'))
+                    if len(business_key) > 50:
+                        business_key = business_key[:50] + '...'
+                    ui.label(f'Бизнес-ключ: {business_key}').classes('text-xs text-gray-500 mt-2 break-all')
         
     except Exception as e:
         ui.notify(f'Ошибка при получении деталей процесса: {str(e)}', type='error')
         logger.error(f"Ошибка в show_process_details: {e}", exc_info=True)
 
-def show_process_history(process_id, details_container):
+async def show_process_history(process_id, details_container):
     """Показывает историю завершенного процесса справа"""
     try:
-        camunda_client = get_camunda_client()
+        camunda_client = await create_camunda_client()
         
         # Получаем историческую информацию о процессе
-        history_process = camunda_client.get_history_process_instance_by_id(process_id)
+        history_process = await camunda_client.get_history_process_instance_by_id(process_id)
         if not history_process:
             ui.notify('История процесса не найдена', type='warning')
             return
         
         # Получаем расширенную информацию
-        process_info = camunda_client.get_process_with_variables(process_id, is_active=False)
+        process_info = await camunda_client.get_process_with_variables(process_id, is_active=False)
         variables = process_info.get('variables', {}) if process_info else {}
         
         # Очищаем контейнер деталей
         details_container.clear()
         
         with details_container:
-            with ui.card().classes('p-6 w-full'):
+            with ui.card().classes('p-6 w-full max-w-full'):
                 ui.label('История процесса').classes('text-xl font-bold mb-4')
                 
                 # Основная информация о процессе
                 ui.label('Информация о процессе').classes('text-lg font-semibold mb-2')
-                ui.label(f'ID процесса: {process_id}').classes('text-sm font-mono text-gray-600 mb-1')
+                ui.label(f'ID процесса: {process_id}').classes('text-sm font-mono text-gray-600 mb-1 break-all')
                 
                 process_key = history_process.get('processDefinitionKey', 'Неизвестно')
-                ui.label(f'Ключ процесса: {process_key}').classes('text-sm mb-1')
+                ui.label(f'Ключ процесса: {process_key}').classes('text-sm mb-1 break-words')
                 
-                # Название процесса
+                # Название процесса - с обрезкой и переносом
                 process_name = variables.get('taskName') or variables.get('documentName') or process_key
-                ui.label(f'Название: {process_name}').classes('text-lg font-semibold mb-3')
+                if len(process_name) > 100:
+                    process_name = process_name[:100] + '...'
+                ui.label(f'Название: {process_name}').classes('text-lg font-semibold mb-3 break-words')
                 
                 # Даты
                 from utils.date_utils import format_date_russian
@@ -438,7 +461,10 @@ def show_process_history(process_id, details_container):
                 
                 # Бизнес-ключ
                 if history_process.get('businessKey'):
-                    ui.label(f'Бизнес-ключ: {history_process["businessKey"]}').classes('text-xs text-gray-500 mt-3')
+                    business_key = str(history_process.get('businessKey'))
+                    if len(business_key) > 50:
+                        business_key = business_key[:50] + '...'
+                    ui.label(f'Бизнес-ключ: {history_process["businessKey"]}').classes('text-xs text-gray-500 mt-3 break-all')
         
     except Exception as e:
         ui.notify(f'Ошибка при получении истории процесса: {str(e)}', type='error')
