@@ -1,5 +1,6 @@
 from math import log
 from nicegui import ui
+from nicegui import context
 from services.camunda_connector import create_camunda_client
 from services.mayan_connector import MayanClient
 from config.settings import config
@@ -29,6 +30,8 @@ import tempfile
 import json
 import pytz
 from components.document_viewer import show_document_viewer
+from components.gantt_chart import create_gantt_chart
+import urllib.parse
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +53,9 @@ _certificates_cache = []
 _document_for_signing = None
 _signature_result_handler = None
 
+# Добавляем глобальную переменную для хранения pending task_id
+_pending_task_id = None
+
 
 async def get_mayan_client() -> MayanClient:
     """Получает клиент Mayan EDMS с учетными данными текущего пользователя"""
@@ -67,6 +73,38 @@ def _is_valid_username(username: str) -> bool:
 def content() -> None:
     """Основная страница завершения задач"""
     ui.label('Завершение задач').classes('text-2xl font-bold mb-6')
+    
+    # Проверяем query параметры для открытия конкретной задачи
+    # Используем правильный способ получения query параметров в NiceGUI
+    try:
+        # Получаем query параметры из URL
+        if hasattr(context, 'client') and context.client and hasattr(context.client, 'request'):
+            request = context.client.request
+            if hasattr(request, 'query_params'):
+                query_params = request.query_params
+                task_id = query_params.get('task_id', '')
+            else:
+                # Альтернативный способ - из URL
+                url = str(request.url) if hasattr(request, 'url') else ''
+                if '?' in url:
+                    query_string = url.split('?')[1]
+                    params = urllib.parse.parse_qs(query_string)
+                    task_id = params.get('task_id', [''])[0]
+                else:
+                    task_id = ''
+        else:
+            task_id = ''
+        
+        if task_id:
+            logger.info(f"Получен task_id из query параметров: {task_id}")
+            # Сохраняем task_id в глобальную переменную для использования после инициализации
+            global _pending_task_id
+            _pending_task_id = task_id
+            # Используем таймер с небольшой задержкой, чтобы дождаться инициализации всех компонентов
+            ui.timer(0.5, lambda: open_task_by_id(_pending_task_id), once=True)
+    except Exception as e:
+        logger.warning(f"Не удалось получить query параметры: {e}")
+        _pending_task_id = None
     
     # Создаем табы
     with ui.tabs().classes('w-full') as tabs:
@@ -91,6 +129,30 @@ def content() -> None:
     global _tabs, _task_details_tab
     _tabs = tabs
     _task_details_tab = task_details_tab
+
+async def open_task_by_id(task_id: str):
+    """Открывает задачу по ID на вкладке деталей"""
+    global _tabs, _task_details_tab, _details_container
+    
+    if not task_id:
+        logger.warning("open_task_by_id вызван без task_id")
+        return
+    
+    logger.info(f"Открываем задачу по ID: {task_id}")
+    
+    # Ждем инициализации компонентов
+    if _details_container is None:
+        logger.warning("_details_container еще не инициализирован, повторная попытка через 0.3 сек")
+        ui.timer(0.3, lambda: open_task_by_id(task_id), once=True)
+        return
+    
+    # Переключаемся на вкладку деталей
+    if _tabs and _task_details_tab:
+        _tabs.value = _task_details_tab
+        logger.info("Переключились на вкладку деталей задачи")
+    
+    # Загружаем детали задачи
+    await load_task_details(task_id)
 
 def create_active_tasks_section():
     """Создает секцию с активными задачами"""
@@ -179,6 +241,23 @@ async def load_active_tasks(header_container=None):
             if header_container:
                 with header_container:
                     ui.label(f'Найдено {len(tasks)} активных задач:').classes('text-lg font-semibold')
+            
+            # Добавляем диаграмму Ганта перед карточками задач
+            # Фильтруем задачи, у которых есть дедлайн
+            tasks_with_due = [task for task in tasks if hasattr(task, 'due') and task.due]
+            if tasks_with_due:
+                create_gantt_chart(
+                    tasks_with_due, 
+                    title='Диаграмма Ганта активных задач',
+                    name_field='name',
+                    due_field='due',
+                    id_field='id',
+                    process_instance_id_field='process_instance_id'
+                )
+            # else:
+            #     # Показываем сообщение, если нет задач с дедлайнами
+            #     with _tasks_container:
+            #         ui.label('⚠️ Нет задач с установленным сроком исполнения для отображения на диаграмме Ганта').classes('text-orange-600 text-sm mb-2 p-2 bg-orange-50 rounded')
             
             # Добавляем карточки задач в основной контейнер
             for task in tasks:
@@ -755,6 +834,7 @@ async def load_task_details(task_id: str):
     global _details_container
     
     if _details_container is None:
+        logger.warning("_details_container не инициализирован")
         return
         
     if not task_id:
@@ -767,11 +847,13 @@ async def load_task_details(task_id: str):
         ui.label('Загрузка деталей...').classes('text-gray-600')
         
         try:
-            # Получаем задачу по ID
-            camunda_client = create_camunda_client()
-            task = camunda_client.get_task_by_id(task_id)
+            # Получаем задачу по ID - используем асинхронный клиент
+            camunda_client = await create_camunda_client()  # ИСПРАВЛЕНО: await
+            task = await camunda_client.get_task_by_id(task_id)  # ИСПРАВЛЕНО: await
+            
             if not task:
                 ui.label('Задача не найдена').classes('text-red-600')
+                logger.warning(f"Задача {task_id} не найдена")
                 return
             
             # Отображаем детали задачи
@@ -793,13 +875,18 @@ async def load_task_details(task_id: str):
             
             # Пытаемся получить переменные (с обработкой ошибок)
             try:
-                variables = camunda_client.get_task_completion_variables(task_id)
+                variables = await camunda_client.get_task_variables(task_id)  # ИСПРАВЛЕНО: await и правильный метод
                 if variables:
                     with ui.card().classes('p-4 bg-blue-50 mt-4'):
                         ui.label('Переменные задачи').classes('text-lg font-semibold mb-3')
                         
                         for key, value in variables.items():
-                            ui.label(f'{key}: {value}').classes('text-sm mb-1')
+                            # Обрабатываем формат переменных Camunda
+                            if isinstance(value, dict) and 'value' in value:
+                                display_value = value['value']
+                            else:
+                                display_value = value
+                            ui.label(f'{key}: {display_value}').classes('text-sm mb-1')
             except Exception as e:
                 logger.warning(f"Не удалось получить переменные задачи {task_id}: {e}")
                 with ui.card().classes('p-4 bg-yellow-50 mt-4'):
@@ -2277,7 +2364,7 @@ async def load_and_display_document(document_id: str, container: ui.column):
         with container:
             ui.label(f'Ошибка при загрузке документа: {str(e)}').classes('text-red-600')
 
-def load_document_content_for_signing(document_id: str, content_container: ui.html):
+async def load_document_content_for_signing(document_id: str, content_container: ui.html):
     """Загружает содержимое документа для подписания"""
     try:
         logger.info(f"Загружаем документ для подписания: {document_id}")
@@ -2300,8 +2387,8 @@ def load_document_content_for_signing(document_id: str, content_container: ui.ht
             return
         
         # Получаем документ из Mayan EDMS
-        mayan_client = get_mayan_client()
-        document = mayan_client.get_document(document_id)  # ← ИСПРАВЛЕНО: используем правильный метод
+        mayan_client = await get_mayan_client()  # ДОБАВИТЬ await
+        document = await mayan_client.get_document(document_id)
         
         if document:
             # Получаем содержимое документа
@@ -2473,7 +2560,7 @@ async def submit_task_completion(task, status, comment, dialog):
         result_files = []
         if _uploaded_files:
             try:
-                mayan_client = get_mayan_client()
+                mayan_client = await get_mayan_client()  # ДОБАВИТЬ await
                 for file_info in _uploaded_files:
                     mayan_result = mayan_client.upload_document_result(
                         task_id=task.id,

@@ -1866,7 +1866,8 @@ class CamundaClient:
     async def start_document_signing_process(self, document_id: str, document_name: str, 
                                     signer_list: List[str], business_key: str = None,
                                     role_names: List[str] = None,
-                                    creator_username: Optional[str] = None) -> Optional[str]:
+                                    creator_username: Optional[str] = None,
+                                    due_date: Optional[str] = None) -> Optional[str]:  # ДОБАВИТЬ ПАРАМЕТР
         """Запускает процесс подписания документа
         
         Args:
@@ -1875,6 +1876,8 @@ class CamundaClient:
             signer_list: Список пользователей-подписантов
             business_key: Бизнес-ключ процесса
             role_names: Список названий ролей для предоставления доступа (опционально)
+            creator_username: Имя пользователя-создателя
+            due_date: Срок исполнения в формате ISO (YYYY-MM-DDTHH:MM:SS.fff+0000)  # ДОБАВИТЬ ОПИСАНИЕ
         """
         try:
             # Подготавливаем переменные в правильном формате для Camunda
@@ -1887,6 +1890,11 @@ class CamundaClient:
                     'value': document_name,
                     'type': 'String'
                 },
+                # ДОБАВИТЬ dueDate если передан
+                **({'dueDate': {
+                    'value': due_date,
+                    'type': 'Date'
+                }} if due_date else {}),
                 'signerList': {
                     'value': json.dumps(signer_list),
                     'type': 'Object',
@@ -1991,7 +1999,8 @@ class CamundaClient:
                                                document_content: str,
                                                assignee_list: List[str],
                                                business_key: Optional[str] = None,
-                                               creator_username: Optional[str] = None) -> Optional[str]:
+                                               creator_username: Optional[str] = None,
+                                               due_date: Optional[str] = None) -> Optional[str]:  # ДОБАВИТЬ ПАРАМЕТР
         """
         Запускает процесс ознакомления с документом для нескольких пользователей
         с использованием Multi-Instance (один процесс, несколько параллельных задач)
@@ -2001,6 +2010,8 @@ class CamundaClient:
             document_content: Содержимое документа
             assignee_list: Список пользователей для ознакомления
             business_key: Бизнес-ключ процесса
+            creator_username: Имя пользователя-создателя
+            due_date: Срок исполнения в формате ISO (YYYY-MM-DDTHH:MM:SS.fff+0000)  # ДОБАВИТЬ ОПИСАНИЕ
             
         Returns:
             ID экземпляра процесса или None при ошибке
@@ -2011,7 +2022,7 @@ class CamundaClient:
                 'taskName': f'Ознакомиться с документом: {document_name}',
                 'taskDescription': f'Необходимо ознакомиться с документом: {document_name}\n\nСодержимое:\n{document_content}',
                 'priority': 2,
-                'dueDate': '2025-09-29T23:59:59.000+0000',
+                'dueDate': due_date or '2025-09-29T23:59:59.000+0000',  # ИСПОЛЬЗОВАТЬ ПЕРЕДАННЫЙ due_date
                 'documentName': document_name,
                 'documentContent': document_content,
                 

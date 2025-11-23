@@ -3,6 +3,9 @@ from message import message
 from nicegui import ui, events
 from ldap_users import get_users, get_groups, users_filter
 from services.camunda_connector import CamundaClient
+from auth.middleware import get_current_user
+from services.document_access_manager import document_access_manager
+from services.mayan_connector import MayanClient
 from config.settings import config
 from datetime import datetime, timezone
 import time
@@ -396,8 +399,7 @@ class ClassExample:
                                 ui.label('Роли для предоставления доступа к документу:').classes('font-bold mb-2')
                                 
                                 # Получаем доступные роли из Mayan EDMS
-                                from services.document_access_manager import document_access_manager
-                                from services.mayan_connector import MayanClient
+
                                 
                                 try:
                                     # Используем системный клиент для получения ролей
@@ -444,10 +446,7 @@ class ClassExample:
                                         # Показываем индикатор загрузки
                                         with document_results_container:
                                             ui.label('Поиск документов...').classes('text-sm text-gray-600 text-center py-4')
-                                        
-                                        # Импортируем необходимые модули
-                                        from services.mayan_connector import MayanClient
-                                        
+                                                                                
                                         # Получаем клиент Mayan EDMS
                                         mayan_client = await MayanClient.create_with_session_user()
                                         
@@ -708,7 +707,6 @@ class ClassExample:
                         process_id = None
                         if process_key == 'DocumentReviewProcessMultiInstance':
                             # Получаем текущего пользователя для передачи creator_username
-                            from auth.middleware import get_current_user
                             current_user = get_current_user()
                             creator_username = current_user.username if current_user else None
                             
@@ -717,7 +715,8 @@ class ClassExample:
                                 document_content=task_description.strip(),
                                 assignee_list=assignee_list,
                                 business_key=f"batch_{int(time.time())}",
-                                creator_username=creator_username  # Добавить эту строку
+                                creator_username=creator_username,
+                                due_date=due_date_str  # ДОБАВИТЬ ЭТУ СТРОКУ
                             )
                         elif process_key == 'DocumentSigningProcess':
                             # Специальная обработка для процесса подписания документов
@@ -749,12 +748,13 @@ class ClassExample:
                                 signer_list=assignee_list,
                                 role_names=selected_roles,  # Передаем выбранные роли
                                 business_key=f"signing_{int(time.time())}",
-                                creator_username=creator_username  # Добавить эту строку
+                                creator_username=creator_username,  # Добавить эту строку
+                                due_date=due_date_str  # Добавляем due_date в переменные процесса
                             )
                         else:
                             # Для других процессов используем универсальный метод
                             # Получаем текущего пользователя для передачи creator_username
-                            from auth.middleware import get_current_user
+                            
                             current_user = get_current_user()
                             creator_username = current_user.username if current_user else None
                             

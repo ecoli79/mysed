@@ -1,13 +1,17 @@
 from message import message
 from nicegui import ui
 from models import Task
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from services.camunda_connector import CamundaClient
 from auth.middleware import get_current_user
 from config.settings import config
 from utils import validate_username, format_due_date, create_task_detail_data
 import theme
 import logging
+from components.gantt_chart import create_gantt_chart
+from models import GroupedHistoryTask, CamundaHistoryTask
+from utils.date_utils import format_date_russian
+
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +51,10 @@ async def create_tasks_page(login: str):
         if period_select:
             period_select.set_visibility(show_finished)
         
+        # Показываем/скрываем диаграмму Ганта (только для активных задач)
+        if gantt_container:
+            gantt_container.set_visibility(not show_finished)
+        
         try:
             logger.info(f"Начинаем обновление задач для пользователя {current_login}, show_finished={show_finished}")
             
@@ -75,7 +83,6 @@ async def create_tasks_page(login: str):
             max_results = 500  # Ограничение по количеству
             
             if show_finished:
-                from datetime import timedelta
                 # Используем выбранный период или 7 дней по умолчанию
                 days = period_select.value if period_select and period_select.value else 7
                 # Вычисляем дату N дней назад
@@ -90,12 +97,25 @@ async def create_tasks_page(login: str):
                 user_tasks = await camunda_client.get_completed_tasks_grouped(assignee=current_login)
                 # Фильтруем по дате вручную, если нужно
                 if finished_after:
-                    from datetime import datetime
                     try:
                         finished_date = datetime.fromisoformat(finished_after.replace('+0000', '+00:00'))
-                        user_tasks = [task for task in user_tasks 
-                                     if hasattr(task, 'endTime') and task.endTime 
-                                     and datetime.fromisoformat(task.endTime.replace('Z', '+00:00')) >= finished_date]
+                        # Исправляем: используем end_time вместо endTime
+                        filtered_tasks = []
+                        for task in user_tasks:
+                            end_time = getattr(task, 'end_time', None)
+                            if end_time:
+                                try:
+                                    # Парсим дату завершения задачи
+                                    task_end_date = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+                                    if task_end_date >= finished_date:
+                                        filtered_tasks.append(task)
+                                except:
+                                    # Если не удалось распарсить, включаем задачу
+                                    filtered_tasks.append(task)
+                            else:
+                                # Если нет end_time, включаем задачу
+                                filtered_tasks.append(task)
+                        user_tasks = filtered_tasks
                     except Exception as e:
                         logger.warning(f'Ошибка фильтрации по дате: {e}')
                 # Ограничиваем количество результатов
@@ -111,30 +131,183 @@ async def create_tasks_page(login: str):
             
             for task in user_tasks:
                 # Логируем каждую задачу для отладки
-                logger.debug(f"Обрабатываем задачу: {task.id} - {task.name}")
+                task_id = getattr(task, 'id', 'unknown')
+                task_name = getattr(task, 'name', 'unknown')
+                logger.debug(f"Обрабатываем задачу: {task_id} - {task_name}")
+                
+                # Проверяем тип задачи для правильной обработки
+                
                 
                 # Форматируем дату окончания
                 due_date = getattr(task, 'due', '')
+                
+                # Если у задачи нет due, пытаемся получить из переменных процесса
+                if not due_date and hasattr(task, 'process_instance_id') and task.process_instance_id:
+                    try:
+                        # Получаем только dueDate из переменных процесса
+                        # Для завершенных задач используем исторические переменные
+                        if show_finished:
+                            process_variables = await camunda_client.get_history_process_instance_variables_by_name(
+                                task.process_instance_id,
+                                ['dueDate']
+                            )
+                        else:
+                            process_variables = await camunda_client.get_process_instance_variables_by_name(
+                                task.process_instance_id,
+                                ['dueDate']
+                            )
+                        due_date_raw = process_variables.get('dueDate')
+                        
+                        # Обрабатываем разные форматы переменных Camunda
+                        if due_date_raw:
+                            if isinstance(due_date_raw, dict) and 'value' in due_date_raw:
+                                due_date = due_date_raw['value']
+                            elif isinstance(due_date_raw, str):
+                                due_date = due_date_raw
+                            else:
+                                due_date = str(due_date_raw) if due_date_raw else ''
+                    except Exception as e:
+                        logger.warning(f"Не удалось получить dueDate из переменных процесса {task.process_instance_id}: {e}")
+                
                 if due_date:
                     try:
-                        due_date = format_due_date(due_date)
+                        due_date = format_date_russian(due_date)
                     except (ValueError, TypeError, OSError) as e:
                         logger.warning(f"Не удалось отформатировать дату {due_date}: {e}")
                         # Оставляем исходное значение если не удалось распарсить
                 
+                # Получаем поля задачи - используем прямые атрибуты как на странице завершения задач
+                start_time = getattr(task, 'start_time', '')
+                end_time = getattr(task, 'end_time', '')
+                
+                # Форматируем даты для отображения (если они уже не отформатированы)
+                if start_time:
+                    try:
+                        # Проверяем, не отформатирована ли уже дата
+                        if 'T' in str(start_time) or len(str(start_time)) > 20:
+                            start_time = format_date_russian(start_time)
+                    except:
+                        pass
+                
+                if end_time:
+                    try:
+                        # Проверяем, не отформатирована ли уже дата
+                        if 'T' in str(end_time) or len(str(end_time)) > 20:
+                            end_time = format_date_russian(end_time)
+                    except:
+                        pass
+                
+                # Получаем длительность
+                duration_formatted = getattr(task, 'duration_formatted', '')
+                if not duration_formatted and hasattr(task, 'duration') and task.duration:
+                    # Форматируем длительность из миллисекунд
+                    duration_sec = task.duration / 1000
+                    if duration_sec < 60:
+                        duration_formatted = f'{duration_sec:.1f} сек'
+                    elif duration_sec < 3600:
+                        duration_formatted = f'{duration_sec/60:.1f} мин'
+                    else:
+                        duration_formatted = f'{duration_sec/3600:.1f} ч'
+                
+                # Получаем delete_reason для завершенных задач
+                delete_reason = getattr(task, 'delete_reason', '')
+                if not delete_reason and hasattr(task, 'deleteReason'):
+                    delete_reason = task.deleteReason
+                
+                # Форматируем статус
+                if delete_reason == 'completed':
+                    delete_reason = 'Завершена'
+                elif delete_reason == 'cancelled':
+                    delete_reason = 'Отменена'
+                elif isinstance(task, GroupedHistoryTask):
+                    # Для группированных задач проверяем статус
+                    if task.completed_users >= task.total_users:
+                        delete_reason = 'Завершена'
+                    else:
+                        delete_reason = f'В процессе ({task.completed_users}/{task.total_users})'
+                elif not delete_reason:
+                    delete_reason = 'Активна' if not show_finished else 'Завершена'
+                
                 task_data = {
                     'name': getattr(task, 'name', ''),
                     'description': getattr(task, 'description', ''),
-                    'start_time': getattr(task, 'start_time', ''),
+                    'start_time': start_time,
                     'due_date': due_date,
-                    'end_time': getattr(task, 'end_time', ''),
-                    'duration_formatted': getattr(task, 'duration_formatted', ''),
-                    'delete_reason': getattr(task, 'delete_reason', ''),
+                    'end_time': end_time,
+                    'duration_formatted': duration_formatted,
+                    'delete_reason': delete_reason,
                 }
                 tasks.append(task_data)
                 logger.debug(f"Добавлена задача в список: {task_data['name']}")
 
             logger.info(f"Обработано {len(tasks)} задач для отображения")
+            
+            # ДОБАВИТЬ: Обновляем диаграмму Ганта для активных задач
+            if not show_finished and user_tasks and gantt_container:
+                gantt_container.clear()
+                tasks_for_gantt = []
+                
+                # Получаем dueDate из переменных процесса для задач без поля due
+                for task in user_tasks:
+                    due_date = getattr(task, 'due', None)
+                    task_name = getattr(task, 'name', '')  # Название задачи по умолчанию
+                    
+                    # Если у задачи нет due, пытаемся получить из переменных процесса
+                    # Также получаем название из переменных процесса для единообразия
+                    if (not due_date or not task_name) and hasattr(task, 'process_instance_id') and task.process_instance_id:
+                        try:
+                            # Получаем dueDate и название из переменных процесса
+                            process_variables = await camunda_client.get_process_instance_variables_by_name(
+                                task.process_instance_id,
+                                ['dueDate', 'taskName', 'documentName']
+                            )
+                            
+                            # Получаем dueDate
+                            if not due_date:
+                                due_date_raw = process_variables.get('dueDate')
+                                if due_date_raw:
+                                    if isinstance(due_date_raw, dict) and 'value' in due_date_raw:
+                                        due_date = due_date_raw['value']
+                                    elif isinstance(due_date_raw, str):
+                                        due_date = due_date_raw
+                                    else:
+                                        due_date = str(due_date_raw) if due_date_raw else None
+                            
+                            # Получаем название из переменных процесса (приоритет: taskName, documentName)
+                            if not task_name or task_name in ['Подписать документ', 'Ознакомиться с документом']:
+                                task_name_from_vars = (
+                                    process_variables.get('taskName') or 
+                                    process_variables.get('documentName') or 
+                                    task_name
+                                )
+                                # Обрабатываем формат переменных Camunda
+                                if isinstance(task_name_from_vars, dict) and 'value' in task_name_from_vars:
+                                    task_name = task_name_from_vars['value']
+                                elif isinstance(task_name_from_vars, str):
+                                    task_name = task_name_from_vars
+                                else:
+                                    task_name = str(task_name_from_vars) if task_name_from_vars else task_name
+                                    
+                        except Exception as e:
+                            logger.warning(f"Не удалось получить переменные процесса {task.process_instance_id}: {e}")
+                    
+                    if due_date:
+                        tasks_for_gantt.append({
+                            'name': task_name,  # ИСПРАВЛЕНО: используем название из переменных процесса
+                            'due': due_date,
+                            'id': getattr(task, 'id', ''),
+                            'process_instance_id': getattr(task, 'process_instance_id', '')
+                        })
+                
+                with gantt_container:
+                    create_gantt_chart(
+                        tasks_for_gantt if tasks_for_gantt else [],
+                        title='Активные задачи со сроками',
+                        name_field='name',
+                        due_field='due',
+                        id_field='id',  # ДОБАВИТЬ
+                        process_instance_id_field='process_instance_id'  # ДОБАВИТЬ
+                    )
             
             # Обновляем данные в таблице
             if tasks_grid:
@@ -228,7 +401,10 @@ async def create_tasks_page(login: str):
             ).classes('mr-4')
             period_select.set_visibility(False)
 
-        
+        # ДОБАВИТЬ: Контейнер для диаграммы Ганта (только для активных задач)
+        gantt_container = ui.column().classes('w-full mb-4')
+        gantt_container.set_visibility(False)  # Скрываем по умолчанию
+
         # Основная таблица задач
         tasks_grid = ui.aggrid({
             'columnDefs': [

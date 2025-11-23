@@ -5,6 +5,7 @@ from config.settings import config
 import logging
 from typing import Optional, List, Dict, Any
 import json
+from components.gantt_chart import create_gantt_chart, parse_task_deadline, prepare_tasks_for_gantt
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,58 @@ def content():
     global _details_container
     _details_container = None
     
+    # Переменные для управления отображением завершенных процессов
+    show_completed = False
+    period_days = 7
+    
+    async def refresh_processes():
+        """Обновляет список процессов с учетом фильтров"""
+        nonlocal show_completed, period_days
+        await load_my_processes(
+            processes_container, 
+            completed_processes_container,
+            details_container,
+            gantt_container,  # ДОБАВИТЬ
+            current_user.username,
+            show_completed=show_completed,
+            days=period_days
+        )
+    
+    async def toggle_completed():
+        """Переключает отображение завершенных процессов"""
+        nonlocal show_completed
+        show_completed = not show_completed
+        
+        # Сразу обновляем видимость контейнера завершенных процессов
+        if show_completed:
+            completed_processes_container.set_visibility(True)
+        else:
+            completed_processes_container.set_visibility(False)
+            # Очищаем контейнер при скрытии
+            completed_processes_container.clear()
+        
+        # Обновляем видимость фильтра периода
+        if period_select:
+            period_select.set_visibility(show_completed)
+        
+        # Обновляем текст кнопки
+        if show_completed:
+            show_completed_button.text = 'Скрыть завершенные'
+            show_completed_button.icon = 'visibility_off'
+        else:
+            show_completed_button.text = 'Показать завершенные'
+            show_completed_button.icon = 'visibility'
+        
+        # Вызываем асинхронную функцию обновления
+        await refresh_processes()
+    
+    def on_period_change(e):
+        """Обработчик изменения периода"""
+        nonlocal period_days
+        period_days = e.value
+        if show_completed:
+            refresh_processes()
+    
     with ui.column().classes('w-full p-4'):
         with ui.row().classes('w-full items-center justify-between mb-4'):
             # Визуально разделяем статический текст и данные пользователя
@@ -111,60 +164,208 @@ def content():
                         ui.icon('badge').classes('text-gray-600 text-lg')
                         ui.label(current_user.username).classes('text-xl font-bold text-gray-800')
             
-            ui.button('Обновить', icon='refresh', on_click=lambda: load_my_processes(processes_container, details_container, current_user.username)).classes('bg-blue-500 text-white')
+            with ui.row().classes('items-center gap-2'):
+                # Кнопка показа/скрытия завершенных процессов
+                show_completed_button = ui.button(
+                    'Показать завершенные',
+                    icon='visibility',
+                    on_click=toggle_completed
+                ).classes('bg-gray-500 text-white')
+                
+                # Фильтр по дням (скрыт по умолчанию)
+                period_select = ui.select(
+                    {
+                        7: 'Последние 7 дней',
+                        30: 'Последние 30 дней',
+                        90: 'Последние 90 дней',
+                        180: 'Последние 180 дней'
+                    },
+                    value=7,
+                    label='Период',
+                    on_change=on_period_change
+                ).classes('mr-4')
+                period_select.set_visibility(False)
+                
+                ui.button(
+                    'Обновить', 
+                    icon='refresh', 
+                    on_click=refresh_processes
+                ).classes('bg-blue-500 text-white')
+        
+        # Создаем структуру: диаграмма Ганта сверху на всю ширину, под ней процессы и детали
+        # Контейнер для диаграммы Ганта (на всю ширину)
+        gantt_container = ui.column().classes('w-full mb-4')
         
         # Создаем разделенную структуру: слева процессы, справа детали
         with ui.row().classes('w-full gap-4'):
-            # Левая колонка - список процессов
-            with ui.column().classes('flex-1'):
+            # Левая колонка - список процессов (занимает всю доступную ширину)
+            with ui.column().classes('flex-1 min-w-0'):
                 processes_container = ui.column().classes('w-full')
+                # Контейнер для завершенных процессов (скрыт по умолчанию)
+                completed_processes_container = ui.column().classes('w-full')
+                completed_processes_container.set_visibility(False)
             
             # Правая колонка - детали процесса
             with ui.column().classes('w-1/3 min-w-[400px]'):
                 details_container = ui.column().classes('w-full')
                 _details_container = details_container
-                
         
         # Загружаем процессы
-        ui.timer(0.1, lambda: load_my_processes(processes_container, details_container, current_user.username), once=True)
+        ui.timer(0.1, lambda: refresh_processes(), once=True)
 
-async def load_my_processes(processes_container, details_container, creator_username):
+async def load_my_processes(processes_container, completed_processes_container, details_container, gantt_container, creator_username, show_completed: bool = False, days: int = 7):
     """Загружает процессы созданные пользователем"""
+    from datetime import datetime, timezone, timedelta
+    
     try:
         # ОЧИЩАЕМ КОНТЕЙНЕРЫ ПЕРЕД ЗАГРУЗКОЙ
         processes_container.clear()
+        completed_processes_container.clear()
         details_container.clear()  # Очищаем блок с деталями процесса
+        gantt_container.clear()  # Очищаем контейнер диаграммы
         
         camunda_client = await create_camunda_client()
         
         # Получаем активные процессы
         active_processes = await camunda_client.get_processes_by_creator(creator_username, active_only=True)
         
-        # Получаем завершенные процессы
-        completed_processes = await camunda_client.get_processes_by_creator(creator_username, active_only=False)
+        # Получаем завершенные процессы только если нужно их показать
+        completed_processes = []
+        if show_completed:
+            completed_processes = await camunda_client.get_processes_by_creator(creator_username, active_only=False)
+            
+            # ИСКЛЮЧАЕМ АКТИВНЫЕ ПРОЦЕССЫ ИЗ ЗАВЕРШЕННЫХ (если они там есть)
+            active_process_ids = {p['id'] for p in active_processes}
+            completed_processes = [p for p in completed_processes if p.get('id') not in active_process_ids]
+            
+            # Фильтруем по дате завершения
+            if days:
+                try:
+                    # Вычисляем дату N дней назад
+                    days_ago = datetime.now(timezone.utc) - timedelta(days=days)
+                    
+                    filtered_completed = []
+                    for process in completed_processes:
+                        end_time = process.get('endTime', '')
+                        if end_time:
+                            try:
+                                # Парсим дату завершения процесса
+                                process_end_date = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+                                if process_end_date >= days_ago:
+                                    filtered_completed.append(process)
+                            except Exception as e:
+                                logger.warning(f'Ошибка парсинга даты завершения процесса {process.get("id", "unknown")}: {e}')
+                                # Если не удалось распарсить, включаем процесс
+                                filtered_completed.append(process)
+                        else:
+                            # Если нет endTime, включаем процесс
+                            filtered_completed.append(process)
+                    
+                    completed_processes = filtered_completed
+                    logger.info(f"Отфильтровано завершенных процессов за последние {days} дней: {len(completed_processes)}")
+                except Exception as e:
+                    logger.warning(f'Ошибка фильтрации завершенных процессов по дате: {e}')
         
-        # ИСКЛЮЧАЕМ АКТИВНЫЕ ПРОЦЕССЫ ИЗ ЗАВЕРШЕННЫХ (если они там есть)
-        active_process_ids = {p['id'] for p in active_processes}
-        completed_processes = [p for p in completed_processes if p.get('id') not in active_process_ids]
+        # Подготавливаем задачи для диаграммы Ганта из активных процессов
+        tasks_for_gantt = []
+        for process in active_processes:
+            variables = process.get('variables', {})
+            process_id = process.get('id', '')
+            
+            # Обрабатываем разные форматы переменных Camunda
+            due_date_raw = variables.get('dueDate')
+            due_date = ''
+            
+            if due_date_raw:
+                # Если переменная - это словарь с полем 'value' (стандартный формат Camunda)
+                if isinstance(due_date_raw, dict):
+                    due_date = due_date_raw.get('value', '')
+                # Если переменная - это строка
+                elif isinstance(due_date_raw, str):
+                    due_date = due_date_raw
+                else:
+                    due_date = str(due_date_raw)
+            
+            if due_date:
+                process_name = (variables.get('taskName') or 
+                               variables.get('documentName') or 
+                               process.get('processDefinitionKey', 'Неизвестно'))
+                
+                # Получаем активную задачу для процесса, чтобы использовать её ID для ссылки
+                task_id = ''
+                try:
+                    # Получаем активные задачи для процесса
+                    endpoint = f'task?processInstanceId={process_id}'
+                    response = await camunda_client._make_request('GET', endpoint)
+                    response.raise_for_status()
+                    tasks = response.json()
+                    
+                    # Берем первую активную задачу
+                    if tasks and len(tasks) > 0:
+                        task_id = tasks[0].get('id', '')
+                        logger.debug(f"Найдена задача {task_id} для процесса {process_id}")
+                except Exception as e:
+                    logger.warning(f"Не удалось получить задачу для процесса {process_id}: {e}")
+                    # Если не удалось получить задачу, используем process_instance_id как fallback
+                    task_id = ''
+                
+                tasks_for_gantt.append({
+                    'name': process_name,
+                    'due': due_date,
+                    'id': task_id if task_id else process_id,  # ИСПРАВЛЕНО: используем task_id если есть
+                    'process_instance_id': process_id
+                })
         
+        # Добавляем диаграмму Ганта в отдельный контейнер (на всю ширину)
+        with gantt_container:
+            create_gantt_chart(
+                tasks_for_gantt if tasks_for_gantt else [],
+                title='Сроки по запущенным мной проектам:',
+                name_field='name',
+                due_field='due',
+                id_field='id',
+                process_instance_id_field='process_instance_id'
+            )
+            
+            # Добавляем отладочную информацию (можно убрать после проверки)
+            if not tasks_for_gantt and active_processes:
+                logger.info(f"Диаграмма Ганта: найдено {len(active_processes)} процессов, но ни у одного нет дедлайна")
+                # Показываем информацию о переменных для отладки
+                if active_processes:
+                    sample_process = active_processes[0]
+                    sample_variables = sample_process.get('variables', {})
+                    logger.debug(f"Пример переменных процесса: {list(sample_variables.keys())}")
+        
+        # Активные процессы в processes_container
         with processes_container:
-            # Активные процессы
             if active_processes:
-                ui.label('Активные процессы').classes('text-lg font-semibold mt-4 mb-2')
+                ui.label('Активные процессы').classes('text-lg font-semibold mb-2')
                 for process in active_processes:
                     create_process_card(process, is_active=True, details_container=details_container)
             
-            # Завершенные процессы
-            if completed_processes:
-                ui.label('Завершенные процессы').classes('text-lg font-semibold mt-4 mb-2')
-                for process in completed_processes:
-                    create_process_card(process, is_active=False, details_container=details_container)
+            if not active_processes and not show_completed:
+                ui.label('У вас нет активных процессов').classes('text-gray-500 text-center mt-8')
+        
+        # Завершенные процессы отображаем в отдельном контейнере
+        if show_completed:
+            completed_processes_container.set_visibility(True)
+            with completed_processes_container:
+                if completed_processes:
+                    ui.label('Завершенные процессы').classes('text-lg font-semibold mt-4 mb-2')
+                    for process in completed_processes:
+                        create_process_card(process, is_active=False, details_container=details_container)
+                else:
+                    ui.label('Нет завершенных процессов за выбранный период').classes('text-gray-500 text-center mt-4')
+        else:
+            # Скрываем и очищаем контейнер завершенных процессов
+            completed_processes_container.set_visibility(False)
+            completed_processes_container.clear()
             
-            if not active_processes and not completed_processes:
-                ui.label('У вас нет созданных процессов').classes('text-gray-500 text-center mt-8')
     except Exception as e:
         processes_container.clear()
+        completed_processes_container.clear()
         details_container.clear()  # Также очищаем при ошибке
+        gantt_container.clear()  # Очищаем диаграмму при ошибке
         with processes_container:
             ui.label(f'Ошибка при загрузке процессов: {str(e)}').classes('text-red-600')
         logger.error(f"Ошибка при загрузке процессов: {e}", exc_info=True)
