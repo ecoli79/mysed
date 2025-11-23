@@ -32,6 +32,7 @@ import pytz
 from components.document_viewer import show_document_viewer
 from components.gantt_chart import create_gantt_chart
 import urllib.parse
+import asyncio
 
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ _uploaded_files_container: Optional[ui.column] = None
 _uploaded_files: List[Dict[str, Any]] = []
 _tabs: Optional[ui.tabs] = None  # Добавляем ссылку на табы
 _task_details_tab: Optional[ui.tab] = None  # Добавляем ссылку на вкладку деталей
+_active_tasks_tab: Optional[ui.tab] = None  # Добавляем ссылку на вкладку активных задач
 _tasks_header_container: Optional[ui.column] = None  # Добавляем переменную для заголовка с количеством задач
 _certificate_select_global = None
 _selected_certificate = None
@@ -55,6 +57,10 @@ _signature_result_handler = None
 
 # Добавляем глобальную переменную для хранения pending task_id
 _pending_task_id = None
+# Добавляем глобальную переменную для хранения ID выбранной задачи
+_selected_task_id: Optional[str] = None
+
+_task_cards = {}
 
 
 async def get_mayan_client() -> MayanClient:
@@ -126,13 +132,14 @@ def content() -> None:
             create_task_details_section()
     
     # Сохраняем ссылку на табы для использования в других функциях
-    global _tabs, _task_details_tab
+    global _tabs, _task_details_tab, _active_tasks_tab
     _tabs = tabs
     _task_details_tab = task_details_tab
+    _active_tasks_tab = active_tasks_tab
 
 async def open_task_by_id(task_id: str):
-    """Открывает задачу по ID на вкладке деталей"""
-    global _tabs, _task_details_tab, _details_container
+    """Открывает задачу по ID на вкладке активных задач"""
+    global _tabs, _active_tasks_tab, _tasks_container, _tasks_header_container
     
     if not task_id:
         logger.warning("open_task_by_id вызван без task_id")
@@ -141,18 +148,18 @@ async def open_task_by_id(task_id: str):
     logger.info(f"Открываем задачу по ID: {task_id}")
     
     # Ждем инициализации компонентов
-    if _details_container is None:
-        logger.warning("_details_container еще не инициализирован, повторная попытка через 0.3 сек")
+    if _tasks_container is None:
+        logger.warning("_tasks_container еще не инициализирован, повторная попытка через 0.3 сек")
         ui.timer(0.3, lambda: open_task_by_id(task_id), once=True)
         return
     
-    # Переключаемся на вкладку деталей
-    if _tabs and _task_details_tab:
-        _tabs.value = _task_details_tab
-        logger.info("Переключились на вкладку деталей задачи")
+    # Переключаемся на вкладку активных задач
+    if _tabs and _active_tasks_tab:
+        _tabs.value = _active_tasks_tab
+        logger.info("Переключились на вкладку активных задач")
     
-    # Загружаем детали задачи
-    await load_task_details(task_id)
+    # Загружаем активные задачи и находим нужную
+    await load_active_tasks(_tasks_header_container, target_task_id=task_id)
 
 def create_active_tasks_section():
     """Создает секцию с активными задачами"""
@@ -198,15 +205,16 @@ def create_active_tasks_section():
         # Скрываем блок деталей по умолчанию
         _task_details_column.set_visibility(False)
 
-async def load_active_tasks(header_container=None):
+async def load_active_tasks(header_container=None, target_task_id: Optional[str] = None):
     """Загружает и отображает активные задачи пользователя"""
-    global _tasks_container
+    global _tasks_container, _task_cards
     
     if _tasks_container is None:
         return
     
-    # Очищаем контейнеры
+    # Очищаем контейнеры и словарь карточек
     _tasks_container.clear()
+    _task_cards.clear()
     if header_container:
         header_container.clear()
     
@@ -236,6 +244,10 @@ async def load_active_tasks(header_container=None):
             filter_completed=True
         )
         
+        # Нормализуем target_task_id для сравнения (приводим к строке)
+        target_task_id_str = str(target_task_id).strip() if target_task_id else None
+        logger.info(f"Ищем задачу с ID: {target_task_id_str}")
+        
         if tasks:
             # Добавляем заголовок с количеством задач в отдельный контейнер
             if header_container:
@@ -254,19 +266,149 @@ async def load_active_tasks(header_container=None):
                     id_field='id',
                     process_instance_id_field='process_instance_id'
                 )
-            # else:
-            #     # Показываем сообщение, если нет задач с дедлайнами
-            #     with _tasks_container:
-            #         ui.label('⚠️ Нет задач с установленным сроком исполнения для отображения на диаграмме Ганта').classes('text-orange-600 text-sm mb-2 p-2 bg-orange-50 rounded')
+            
+            # Переменная для хранения найденной задачи
+            found_task = None
             
             # Добавляем карточки задач в основной контейнер
             for task in tasks:
                 await create_task_card_with_progress(task)
+                
+                # Проверяем, является ли это задача, которую нужно открыть
+                # Приводим все ID к строкам для надежного сравнения
+                if target_task_id_str:
+                    task_id_str = str(getattr(task, 'id', '')).strip()
+                    process_id_str = str(getattr(task, 'process_instance_id', '')).strip()
+                    
+                    logger.debug(f"Сравниваем: task_id={task_id_str}, process_id={process_id_str}, target={target_task_id_str}")
+                    
+                    if task_id_str == target_task_id_str or process_id_str == target_task_id_str:
+                        found_task = task
+                        logger.info(f"Найдена задача в списке: task_id={task_id_str}, process_id={process_id_str}")
+                        break
+            
+            # Если нашли задачу в списке, показываем её детали
+            if found_task:
+                logger.info(f"Показываем детали найденной задачи {found_task.id}")
+                # Вызываем напрямую, а не через ui.timer, чтобы сохранить контекст
+                await show_task_details(found_task)
+            elif target_task_id_str:
+                # Если задача не найдена в списке, пробуем загрузить её напрямую по ID
+                logger.info(f"Задача {target_task_id_str} не найдена в списке активных задач, пробуем загрузить напрямую")
+                try:
+                    # Пробуем загрузить задачу напрямую
+                    direct_task = await camunda_client.get_task_by_id(target_task_id_str)
+                    if direct_task:
+                        logger.info(f"Задача {target_task_id_str} найдена напрямую, показываем детали")
+                        # Используем небольшую задержку, чтобы UI успел обновиться
+                        ui.timer(0.1, lambda: show_task_details(direct_task), once=True)
+                    else:
+                        # Если не нашли как активную, пробуем найти по process_instance_id
+                        logger.info(f"Задача {target_task_id_str} не найдена как активная, пробуем найти задачи процесса")
+                        try:
+                            # Получаем задачи процесса
+                            endpoint = f'task?processInstanceId={target_task_id_str}'
+                            response = await camunda_client._make_request('GET', endpoint)
+                            response.raise_for_status()
+                            process_tasks = response.json()
+                            
+                            if process_tasks and len(process_tasks) > 0:
+                                # Берем первую задачу процесса
+                                task_data = process_tasks[0]
+                                from models import CamundaTask
+                                process_task = CamundaTask(
+                                    id=task_data['id'],
+                                    name=task_data.get('name', ''),
+                                    assignee=task_data.get('assignee'),
+                                    start_time=task_data.get('created', ''),
+                                    due=task_data.get('due'),
+                                    follow_up=task_data.get('followUp'),
+                                    delegation_state=task_data.get('delegationState'),
+                                    description=task_data.get('description'),
+                                    execution_id=task_data.get('executionId', ''),
+                                    owner=task_data.get('owner'),
+                                    parent_task_id=task_data.get('parentTaskId'),
+                                    priority=task_data.get('priority', 0),
+                                    process_definition_id=task_data.get('processDefinitionId', ''),
+                                    process_instance_id=task_data.get('processInstanceId', ''),
+                                    task_definition_key=task_data.get('taskDefinitionKey', ''),
+                                    case_execution_id=task_data.get('caseExecutionId'),
+                                    case_instance_id=task_data.get('caseInstanceId'),
+                                    case_definition_id=task_data.get('caseDefinitionId'),
+                                    suspended=task_data.get('suspended', False),
+                                    form_key=task_data.get('formKey'),
+                                    tenant_id=task_data.get('tenantId')
+                                )
+                                logger.info(f"Найдена задача процесса {target_task_id_str}, показываем детали")
+                                ui.timer(0.1, lambda: show_task_details(process_task), once=True)
+                            else:
+                                logger.warning(f"Задача {target_task_id_str} не найдена ни в списке, ни напрямую")
+                                ui.notify(f'Задача {target_task_id_str} не найдена в ваших активных задачах', type='warning')
+                        except Exception as e2:
+                            logger.warning(f"Не удалось найти задачу по process_instance_id {target_task_id_str}: {e2}")
+                            ui.notify(f'Задача {target_task_id_str} не найдена', type='warning')
+                except Exception as e:
+                    logger.error(f"Ошибка при загрузке задачи {target_task_id_str} напрямую: {e}", exc_info=True)
+                    ui.notify(f'Ошибка при загрузке задачи: {str(e)}', type='error')
         else:
             # Показываем сообщение об отсутствии задач
             if header_container:
                 with header_container:
                     ui.label('Нет активных задач').classes('text-gray-500')
+            
+            # Если есть target_task_id, но нет задач в списке, пробуем загрузить напрямую
+            if target_task_id_str:
+                logger.info(f"Нет активных задач, но есть target_task_id={target_task_id_str}, пробуем загрузить напрямую")
+                try:
+                    direct_task = await camunda_client.get_task_by_id(target_task_id_str)
+                    if direct_task:
+                        logger.info(f"Задача {target_task_id_str} найдена напрямую, показываем детали")
+                        ui.timer(0.1, lambda: show_task_details(direct_task), once=True)
+                    else:
+                        # Пробуем найти по process_instance_id
+                        try:
+                            endpoint = f'task?processInstanceId={target_task_id_str}'
+                            response = await camunda_client._make_request('GET', endpoint)
+                            response.raise_for_status()
+                            process_tasks = response.json()
+                            
+                            if process_tasks and len(process_tasks) > 0:
+                                task_data = process_tasks[0]
+                                from models import CamundaTask
+                                process_task = CamundaTask(
+                                    id=task_data['id'],
+                                    name=task_data.get('name', ''),
+                                    assignee=task_data.get('assignee'),
+                                    start_time=task_data.get('created', ''),
+                                    due=task_data.get('due'),
+                                    follow_up=task_data.get('followUp'),
+                                    delegation_state=task_data.get('delegationState'),
+                                    description=task_data.get('description'),
+                                    execution_id=task_data.get('executionId', ''),
+                                    owner=task_data.get('owner'),
+                                    parent_task_id=task_data.get('parentTaskId'),
+                                    priority=task_data.get('priority', 0),
+                                    process_definition_id=task_data.get('processDefinitionId', ''),
+                                    process_instance_id=task_data.get('processInstanceId', ''),
+                                    task_definition_key=task_data.get('taskDefinitionKey', ''),
+                                    case_execution_id=task_data.get('caseExecutionId'),
+                                    case_instance_id=task_data.get('caseInstanceId'),
+                                    case_definition_id=task_data.get('caseDefinitionId'),
+                                    suspended=task_data.get('suspended', False),
+                                    form_key=task_data.get('formKey'),
+                                    tenant_id=task_data.get('tenantId')
+                                )
+                                logger.info(f"Найдена задача процесса {target_task_id_str}, показываем детали")
+                                ui.timer(0.1, lambda: show_task_details(process_task), once=True)
+                            else:
+                                logger.warning(f"Задача {target_task_id_str} не найдена")
+                                ui.notify(f'Задача {target_task_id_str} не найдена', type='warning')
+                        except Exception as e2:
+                            logger.warning(f"Не удалось найти задачу по process_instance_id {target_task_id_str}: {e2}")
+                            ui.notify(f'Задача {target_task_id_str} не найдена', type='warning')
+                except Exception as e:
+                    logger.error(f"Ошибка при загрузке задачи {target_task_id_str} напрямую: {e}", exc_info=True)
+                    ui.notify(f'Ошибка при загрузке задачи: {str(e)}', type='error')
             
     except Exception as e:
         logger.error(f"Ошибка при загрузке активных задач: {e}", exc_info=True)
@@ -276,13 +418,49 @@ async def load_active_tasks(header_container=None):
 
 async def create_task_card_with_progress(task):
     """Создает карточку задачи с информацией о прогрессе"""
-    global _tasks_container
+    global _tasks_container, _selected_task_id, _task_cards
     
     if _tasks_container is None:
         return
+    
+    # Определяем, является ли эта задача выбранной
+    task_id_str = str(getattr(task, 'id', ''))
+    process_id_str = str(getattr(task, 'process_instance_id', ''))
+    is_selected = _selected_task_id and (
+        task_id_str == _selected_task_id or 
+        process_id_str == _selected_task_id
+    )
+    
+    # Выбираем стили в зависимости от того, выбрана ли задача
+    if is_selected:
+        border_class = 'border-l-4 border-blue-600'
+        bg_class = 'bg-blue-50'
+        border_style = 'border-2 border-blue-600'
+        shadow_class = 'shadow-lg'
+    else:
+        border_class = 'border-l-4 border-blue-500'
+        bg_class = ''
+        border_style = 'border border-gray-200'
+        shadow_class = ''
         
     with _tasks_container:
-        with ui.card().classes('p-4 mb-4 border-l-4 border-blue-500'):
+        # Создаем карточку с условными стилями и data-атрибутами
+        card = ui.card().classes(f'p-4 mb-4 w-full max-w-full {border_class} {bg_class} {border_style} {shadow_class}')
+        # Добавляем data-атрибуты для поиска через JavaScript
+        card.props(f'data-task-id="{task_id_str}" data-process-id="{process_id_str}"')
+        
+        # Сохраняем ссылку на карточку для обновления стилей
+        indicator_row = None
+        
+        # ОБРАТИТЕ ВНИМАНИЕ: оборачиваем содержимое в with card:
+        with card:
+            # Добавляем индикатор выбранной задачи
+            if is_selected:
+                indicator_row = ui.row().classes('w-full items-center gap-2 mb-2')
+                with indicator_row:
+                    ui.icon('check_circle').classes('text-blue-600 text-lg')
+                    ui.label('Выбрано').classes('text-blue-600 font-semibold text-sm')
+            
             with ui.row().classes('w-full justify-between items-start'):
                 with ui.column().classes('flex-1'):
                     ui.label(task.name).classes('text-lg font-semibold')
@@ -315,6 +493,7 @@ async def create_task_card_with_progress(task):
                         logger.warning(f"Не удалось получить информацию о прогрессе для задачи {task.id}: {e}")
                         ui.label('Информация о прогрессе недоступна').classes('text-sm text-gray-500')
                 
+                # ПРАВАЯ КОЛОНКА С КНОПКАМИ - вынесена из левой колонки
                 with ui.column().classes('gap-2'):
                     ui.button(
                         'Завершить задачу',
@@ -327,6 +506,14 @@ async def create_task_card_with_progress(task):
                         icon='info',
                         on_click=lambda t=task: show_task_details(t)
                     ).classes('bg-blue-500 text-white')
+            
+        # Сохраняем ссылку на карточку и индикатор
+        _task_cards[task_id_str] = {
+            'card': card,
+            'indicator': indicator_row,
+            'task_id': task_id_str,
+            'process_id': process_id_str
+        }
 
 def create_task_card(task):
     """Создает карточку задачи"""
@@ -2609,11 +2796,59 @@ async def submit_task_completion(task, status, comment, dialog):
 
 async def show_task_details(task):
     """Показывает детали задачи в правом блоке"""
-    global _task_details_sidebar, _task_details_column
+    global _task_details_sidebar, _task_details_column, _selected_task_id
     
     if _task_details_sidebar is None or _task_details_column is None:
         ui.notify('Ошибка: контейнер деталей не инициализирован', type='error')
         return
+    
+    # Обновляем выбранную задачу
+    task_id_str = str(getattr(task, 'id', ''))
+    process_id_str = str(getattr(task, 'process_instance_id', ''))
+    
+    # Сохраняем ID выбранной задачи (приоритет task_id, если есть, иначе process_instance_id)
+    old_selected_id = _selected_task_id
+    _selected_task_id = task_id_str if task_id_str else process_id_str
+    
+    # Обновляем стили карточек без перезагрузки списка
+    # Используем JavaScript для обновления стилей напрямую
+    if old_selected_id != _selected_task_id:
+        logger.info(f"Обновляем выделение: старая задача={old_selected_id}, новая задача={_selected_task_id}")
+        
+        # Обновляем стили через JavaScript
+        # Находим карточки по data-атрибутам и обновляем их классы
+        update_script = f"""
+        // Убираем выделение со старой карточки
+        if ('{old_selected_id}') {{
+            const oldCards = document.querySelectorAll('[data-task-id="{old_selected_id}"], [data-process-id="{old_selected_id}"]');
+            oldCards.forEach(card => {{
+                card.classList.remove('border-l-4', 'border-blue-600', 'border-2', 'shadow-lg', 'bg-blue-50');
+                card.classList.add('border-l-4', 'border-blue-500', 'border', 'border-gray-200');
+                // Удаляем индикатор
+                const indicator = card.querySelector('[data-indicator="true"]');
+                if (indicator) indicator.remove();
+            }});
+        }}
+        
+        // Добавляем выделение новой карточке
+        if ('{_selected_task_id}') {{
+            const newCards = document.querySelectorAll('[data-task-id="{_selected_task_id}"], [data-process-id="{_selected_task_id}"]');
+            newCards.forEach(card => {{
+                card.classList.remove('border-l-4', 'border-blue-500', 'border', 'border-gray-200');
+                card.classList.add('border-l-4', 'border-blue-600', 'border-2', 'border-blue-600', 'shadow-lg', 'bg-blue-50');
+                // Добавляем индикатор, если его нет
+                if (!card.querySelector('[data-indicator="true"]')) {{
+                    const indicator = document.createElement('div');
+                    indicator.setAttribute('data-indicator', 'true');
+                    indicator.className = 'flex items-center gap-2 mb-2 w-full';
+                    indicator.innerHTML = '<span class="material-icons text-blue-600 text-lg">check_circle</span><span class="text-blue-600 font-semibold text-sm">Выбрано</span>';
+                    card.insertBefore(indicator, card.firstChild);
+                }}
+            }});
+        }}
+        """
+        
+        ui.run_javascript(update_script)
     
     # Показываем правый блок с деталями
     _task_details_column.set_visibility(True)

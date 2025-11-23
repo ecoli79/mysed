@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 
 # Глобальная переменная для контейнера деталей процесса
 _details_container = None
+# Глобальная переменная для хранения ID выбранного процесса
+_selected_process_id: Optional[str] = None
+# Словарь для хранения ссылок на карточки процессов (process_id -> card_info)
+_process_cards: Dict[str, Dict[str, Any]] = {}
 
 def get_camunda_client() -> CamundaClient:
     """Получает клиент Camunda с проверкой конфигурации"""
@@ -215,6 +219,8 @@ def content():
 
 async def load_my_processes(processes_container, completed_processes_container, details_container, gantt_container, creator_username, show_completed: bool = False, days: int = 7):
     """Загружает процессы созданные пользователем"""
+    global _process_cards
+    
     from datetime import datetime, timezone, timedelta
     
     try:
@@ -223,6 +229,7 @@ async def load_my_processes(processes_container, completed_processes_container, 
         completed_processes_container.clear()
         details_container.clear()  # Очищаем блок с деталями процесса
         gantt_container.clear()  # Очищаем контейнер диаграммы
+        _process_cards.clear()  # Очищаем словарь карточек
         
         camunda_client = await create_camunda_client()
         
@@ -374,13 +381,41 @@ async def load_my_processes(processes_container, completed_processes_container, 
 def create_process_card(process, is_active=True, details_container=None):
     """Создает карточку процесса с расширенной информацией"""
     from utils.date_utils import format_date_russian
+    global _selected_process_id, _process_cards
     
-    status_color = 'border-green-500' if is_active else 'border-gray-500'
+    process_id = process.get('id', 'Неизвестно')
+    
+    # Определяем, является ли этот процесс выбранным
+    is_selected = _selected_process_id and (process_id == _selected_process_id)
+    
+    # Выбираем стили в зависимости от того, выбран ли процесс
+    if is_active:
+        if is_selected:
+            status_color = 'border-blue-600'
+            bg_class = 'bg-blue-50'
+            border_style = 'border-2 border-blue-600'
+            shadow_class = 'shadow-lg'
+        else:
+            status_color = 'border-green-500'
+            bg_class = ''
+            border_style = 'border border-gray-200'
+            shadow_class = ''
+    else:
+        if is_selected:
+            status_color = 'border-blue-600'
+            bg_class = 'bg-blue-50'
+            border_style = 'border-2 border-blue-600'
+            shadow_class = 'shadow-lg'
+        else:
+            status_color = 'border-gray-500'
+            bg_class = ''
+            border_style = 'border border-gray-200'
+            shadow_class = ''
+    
     status_text = 'Активен' if is_active else 'Завершен'
     
     # Извлекаем переменные процесса
     variables = process.get('variables', {})
-    process_id = process.get('id', 'Неизвестно')
     
     # Получаем название процесса
     process_name = (variables.get('taskName') or 
@@ -418,7 +453,22 @@ def create_process_card(process, is_active=True, details_container=None):
     if len(display_process_id) > 40:
         display_process_id = display_process_id[:40] + '...'
     
-    with ui.card().classes(f'mb-3 p-4 border-l-4 {status_color} w-full max-w-full'):
+    # Создаем карточку с условными стилями и data-атрибутами
+    card = ui.card().classes(f'mb-3 p-4 border-l-4 {status_color} w-full max-w-full {bg_class} {border_style} {shadow_class}')
+    # Добавляем data-атрибуты для поиска через JavaScript
+    card.props(f'data-process-id="{process_id}"')
+    
+    # Сохраняем ссылку на карточку
+    indicator_row = None
+    
+    with card:
+        # Добавляем индикатор выбранного процесса
+        if is_selected:
+            indicator_row = ui.row().classes('w-full items-center gap-2 mb-2')
+            with indicator_row:
+                ui.icon('check_circle').classes('text-blue-600 text-lg')
+                ui.label('Выбрано').classes('text-blue-600 font-semibold text-sm')
+        
         with ui.row().classes('items-start justify-between w-full gap-4'):
             with ui.column().classes('flex-1 min-w-0'):
                 # Название процесса - с переносом текста
@@ -477,9 +527,66 @@ def create_process_card(process, is_active=True, details_container=None):
                     ui.button('Просмотр', icon='visibility', on_click=lambda pid=process_id, det_container=details_container: show_process_details(pid, det_container)).classes('bg-blue-500 text-white whitespace-nowrap')
                 else:
                     ui.button('История', icon='history', on_click=lambda pid=process_id, det_container=details_container: show_process_history(pid, det_container)).classes('bg-gray-500 text-white whitespace-nowrap')
+    
+    # Сохраняем ссылку на карточку
+    _process_cards[process_id] = {
+        'card': card,
+        'indicator': indicator_row,
+        'process_id': process_id,
+        'is_active': is_active
+    }
 
 async def show_process_details(process_id, details_container):
     """Показывает детали активного процесса справа"""
+    global _selected_process_id
+    
+    # Обновляем выбранный процесс
+    old_selected_id = _selected_process_id
+    _selected_process_id = process_id
+    
+    # Обновляем стили карточек без перезагрузки списка
+    if old_selected_id != _selected_process_id:
+        logger.info(f"Обновляем выделение процесса: старая задача={old_selected_id}, новая задача={_selected_process_id}")
+        
+        # Обновляем стили через JavaScript
+        update_script = f"""
+        // Убираем выделение со старой карточки
+        if ('{old_selected_id}') {{
+            const oldCards = document.querySelectorAll('[data-process-id="{old_selected_id}"]');
+            oldCards.forEach(card => {{
+                card.classList.remove('border-l-4', 'border-blue-600', 'border-2', 'border-blue-600', 'shadow-lg', 'bg-blue-50');
+                // Восстанавливаем оригинальные стили в зависимости от типа процесса
+                if (card.classList.contains('border-green-500')) {{
+                    card.classList.add('border-l-4', 'border-green-500', 'border', 'border-gray-200');
+                }} else {{
+                    card.classList.add('border-l-4', 'border-gray-500', 'border', 'border-gray-200');
+                }}
+                // Удаляем индикатор
+                const indicator = card.querySelector('[data-indicator="true"]');
+                if (indicator) indicator.remove();
+            }});
+        }}
+        
+        // Добавляем выделение новой карточке
+        if ('{_selected_process_id}') {{
+            const newCards = document.querySelectorAll('[data-process-id="{_selected_process_id}"]');
+            newCards.forEach(card => {{
+                card.classList.remove('border-l-4', 'border-green-500', 'border-gray-500', 'border', 'border-gray-200');
+                card.classList.add('border-l-4', 'border-blue-600', 'border-2', 'border-blue-600', 'shadow-lg', 'bg-blue-50');
+                // Добавляем индикатор, если его нет
+                if (!card.querySelector('[data-indicator="true"]')) {{
+                    const indicator = document.createElement('div');
+                    indicator.setAttribute('data-indicator', 'true');
+                    indicator.className = 'flex items-center gap-2 mb-2 w-full';
+                    indicator.innerHTML = '<span class="material-icons text-blue-600 text-lg">check_circle</span><span class="text-blue-600 font-semibold text-sm">Выбрано</span>';
+                    card.insertBefore(indicator, card.firstChild);
+                }}
+            }});
+        }}
+        """
+        
+        ui.run_javascript(update_script)
+    
     try:
         camunda_client = await create_camunda_client()
         
@@ -581,6 +688,55 @@ async def show_process_details(process_id, details_container):
 
 async def show_process_history(process_id, details_container):
     """Показывает историю завершенного процесса справа"""
+    global _selected_process_id
+    
+    # Обновляем выбранный процесс
+    old_selected_id = _selected_process_id
+    _selected_process_id = process_id
+    
+    # Обновляем стили карточек без перезагрузки списка
+    if old_selected_id != _selected_process_id:
+        logger.info(f"Обновляем выделение процесса: старая задача={old_selected_id}, новая задача={_selected_process_id}")
+        
+        # Обновляем стили через JavaScript (тот же код, что и в show_process_details)
+        update_script = f"""
+        // Убираем выделение со старой карточки
+        if ('{old_selected_id}') {{
+            const oldCards = document.querySelectorAll('[data-process-id="{old_selected_id}"]');
+            oldCards.forEach(card => {{
+                card.classList.remove('border-l-4', 'border-blue-600', 'border-2', 'border-blue-600', 'shadow-lg', 'bg-blue-50');
+                // Восстанавливаем оригинальные стили в зависимости от типа процесса
+                if (card.classList.contains('border-green-500')) {{
+                    card.classList.add('border-l-4', 'border-green-500', 'border', 'border-gray-200');
+                }} else {{
+                    card.classList.add('border-l-4', 'border-gray-500', 'border', 'border-gray-200');
+                }}
+                // Удаляем индикатор
+                const indicator = card.querySelector('[data-indicator="true"]');
+                if (indicator) indicator.remove();
+            }});
+        }}
+        
+        // Добавляем выделение новой карточке
+        if ('{_selected_process_id}') {{
+            const newCards = document.querySelectorAll('[data-process-id="{_selected_process_id}"]');
+            newCards.forEach(card => {{
+                card.classList.remove('border-l-4', 'border-green-500', 'border-gray-500', 'border', 'border-gray-200');
+                card.classList.add('border-l-4', 'border-blue-600', 'border-2', 'border-blue-600', 'shadow-lg', 'bg-blue-50');
+                // Добавляем индикатор, если его нет
+                if (!card.querySelector('[data-indicator="true"]')) {{
+                    const indicator = document.createElement('div');
+                    indicator.setAttribute('data-indicator', 'true');
+                    indicator.className = 'flex items-center gap-2 mb-2 w-full';
+                    indicator.innerHTML = '<span class="material-icons text-blue-600 text-lg">check_circle</span><span class="text-blue-600 font-semibold text-sm">Выбрано</span>';
+                    card.insertBefore(indicator, card.firstChild);
+                }}
+            }});
+        }}
+        """
+        
+        ui.run_javascript(update_script)
+    
     try:
         camunda_client = await create_camunda_client()
         
