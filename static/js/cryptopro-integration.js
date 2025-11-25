@@ -442,7 +442,7 @@ window.nicegui_handle_event = async function(event_name, event_data) {
                 
                 // Заголовок
                 const title = document.createElement('div');
-                title.textContent = '🔐 Выберите сертификат для подписания:';
+                title.textContent = 'Выберите сертификат для подписания:';
                 title.style.fontWeight = 'bold';
                 title.style.fontSize = '16px';
                 title.style.marginBottom = '10px';
@@ -501,31 +501,297 @@ window.nicegui_handle_event = async function(event_name, event_data) {
                 fillSelectWithCertificates(tempSelect, result.options);
                 
             } else {
-                // Создаем select в области сертификатов
-                const tempSelect = document.createElement('select');
-                tempSelect.id = 'temp-certificates-select';
-                tempSelect.style.width = '100%';
-                tempSelect.style.padding = '8px';
-                tempSelect.style.margin = '10px 0';
-                tempSelect.style.border = '2px solid #4CAF50';
-                tempSelect.style.borderRadius = '4px';
-                tempSelect.style.backgroundColor = 'white';
-                tempSelect.style.fontSize = '14px';
+                // Создаем список карточек сертификатов вместо select
+                const certificatesList = document.createElement('div');
+                certificatesList.className = 'certificates-list';
+                certificatesList.style.width = '100%';
+                certificatesList.style.margin = '12px 0';
                 
-                // Добавляем заголовок
-                const title = document.createElement('div');
-                title.textContent = 'Доступные сертификаты:';
-                title.style.fontWeight = 'bold';
-                title.style.marginBottom = '5px';
-                title.style.color = '#4CAF50';
-                
-                certArea.appendChild(title);
-                certArea.appendChild(tempSelect);
-                
-                // Заполняем select
-                fillSelectWithCertificates(tempSelect, result.options);
-            }
+               // Заголовок
+               const title = document.createElement('div');
+               title.textContent = 'Доступные сертификаты:';
+               title.style.fontWeight = '600';
+               title.style.fontSize = '14px';
+               title.style.marginBottom = '12px';
+               title.style.color = '#374151';
+               title.style.fontFamily = 'system-ui, -apple-system, sans-serif';
+               
+               // Поле поиска
+               const searchContainer = document.createElement('div');
+               searchContainer.style.marginBottom = '12px';
+               searchContainer.style.position = 'relative';
+               
+               const searchInput = document.createElement('input');
+               searchInput.type = 'text';
+               searchInput.placeholder = 'Поиск по имени...';
+               searchInput.style.width = '100%';
+               searchInput.style.padding = '10px 40px 10px 16px';
+               searchInput.style.border = '2px solid #e5e7eb';
+               searchInput.style.borderRadius = '8px';
+               searchInput.style.fontSize = '14px';
+               searchInput.style.fontFamily = 'system-ui, -apple-system, sans-serif';
+               searchInput.style.outline = 'none';
+               searchInput.style.transition = 'border-color 0.2s ease';
+               
+               // Иконка поиска
+               const searchIcon = document.createElement('div');
+               searchIcon.innerHTML = '🔍';
+               searchIcon.style.position = 'absolute';
+               searchIcon.style.right = '12px';
+               searchIcon.style.top = '50%';
+               searchIcon.style.transform = 'translateY(-50%)';
+               searchIcon.style.pointerEvents = 'none';
+               searchIcon.style.fontSize = '16px';
+               
+               searchInput.addEventListener('focus', function() {
+                   this.style.borderColor = '#3b82f6';
+               });
+               
+               searchInput.addEventListener('blur', function() {
+                   this.style.borderColor = '#e5e7eb';
+               });
+               
+               searchContainer.appendChild(searchInput);
+               searchContainer.appendChild(searchIcon);
+               
+               // Контейнер для карточек
+               const cardsContainer = document.createElement('div');
+               cardsContainer.style.display = 'flex';
+               cardsContainer.style.flexDirection = 'column';
+               cardsContainer.style.gap = '10px';
+               cardsContainer.style.maxHeight = '400px';
+               cardsContainer.style.overflowY = 'auto';
+               cardsContainer.style.paddingRight = '4px';
+               
+               // Стили для скроллбара
+               cardsContainer.style.scrollbarWidth = 'thin';
+               cardsContainer.style.scrollbarColor = '#cbd5e1 #f1f5f9';
+               
+               // Получаем полные данные сертификатов
+               const certificates = result.certificates || [];
+               
+               // Функция для извлечения CN из строки
+               const extractCN = (str) => {
+                   if (!str) return '';
+                   const cnMatch = str.match(/CN=([^,]+)/);
+                   if (cnMatch) {
+                       return cnMatch[1].replace(/^["']|["']$/g, '').trim();
+                   }
+                   return '';
+               };
+
+               // Фильтруем истекшие сертификаты и сортируем по дате выпуска
+               const now = new Date();
+               const validCertificates = certificates
+                   .map((cert, originalIndex) => ({
+                       ...cert,
+                       originalIndex: originalIndex  // Сохраняем оригинальный индекс в массиве
+                   }))
+                   .filter(cert => {
+                       if (!cert.validTo) return false;
+                       const validToDate = new Date(cert.validTo);
+                       if (isNaN(validToDate.getTime())) return false;
+                       return validToDate > now && cert.isValid !== false;
+                   })
+                   .sort((a, b) => {
+                       // Сортируем по дате выпуска (validFrom) - сначала более новые
+                       const dateA = new Date(a.validFrom);
+                       const dateB = new Date(b.validFrom);
+                       return dateB - dateA; // Более новые первыми
+                   });
+               
+               // Функция для создания карточек
+               const createCertificateCards = (certsToShow) => {
+                   // Очищаем контейнер
+                   cardsContainer.innerHTML = '';
+                   
+                   if (certsToShow.length === 0) {
+                       const emptyMessage = document.createElement('div');
+                       emptyMessage.style.padding = '20px';
+                       emptyMessage.style.textAlign = 'center';
+                       emptyMessage.style.color = '#9ca3af';
+                       emptyMessage.style.fontSize = '14px';
+                       emptyMessage.textContent = 'Сертификаты не найдены';
+                       cardsContainer.appendChild(emptyMessage);
+                       return;
+                   }
+                   
+                   certsToShow.forEach((cert, displayIndex) => {
+                       const validToDate = new Date(cert.validTo);
+                       const validFromDate = new Date(cert.validFrom);
+                       
+                       const card = document.createElement('div');
+                       card.className = 'certificate-card';
+                       // Используем оригинальный индекс из исходного массива
+                       card.dataset.index = cert.originalIndex;
+                       card.dataset.value = cert.originalIndex.toString();
+                       
+                       // Базовые стили карточки
+                       card.style.padding = '16px';
+                       card.style.border = '2px solid #e5e7eb';
+                       card.style.borderRadius = '8px';
+                       card.style.backgroundColor = '#ffffff';
+                       card.style.cursor = 'pointer';
+                       card.style.transition = 'all 0.2s ease-in-out';
+                       card.style.position = 'relative';
+                       card.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
+                       
+                       // Форматируем даты
+                       const formatDate = (date) => {
+                           return date.toLocaleDateString('ru-RU', {
+                               day: '2-digit',
+                               month: '2-digit',
+                               year: 'numeric'
+                           });
+                       };
+                       
+                       const validToStr = formatDate(validToDate);
+                       const validFromStr = formatDate(validFromDate);
+                       
+                       // Иконка статуса (всегда зеленая, так как показываем только действительные)
+                       const statusIcon = document.createElement('div');
+                       statusIcon.style.position = 'absolute';
+                       statusIcon.style.top = '12px';
+                       statusIcon.style.right = '12px';
+                       statusIcon.style.width = '24px';
+                       statusIcon.style.height = '24px';
+                       statusIcon.style.borderRadius = '50%';
+                       statusIcon.style.display = 'flex';
+                       statusIcon.style.alignItems = 'center';
+                       statusIcon.style.justifyContent = 'center';
+                       statusIcon.style.fontSize = '14px';
+                       statusIcon.innerHTML = '✓';
+                       statusIcon.style.backgroundColor = '#d1fae5';
+                       statusIcon.style.color = '#059669';
+                       
+                       // CN владельца сертификата
+                       const ownerCN = extractCN(cert.subject);
+                       const nameDiv = document.createElement('div');
+                       nameDiv.style.fontWeight = '600';
+                       nameDiv.style.fontSize = '15px';
+                       nameDiv.style.color = '#1f2937';
+                       nameDiv.style.marginBottom = '8px';
+                       nameDiv.style.paddingRight = '30px';
+                       nameDiv.style.lineHeight = '1.4';
+                       nameDiv.style.wordWrap = 'break-word';
+                       nameDiv.textContent = ownerCN;
+                       
+                       // Срок действия
+                       const validityDiv = document.createElement('div');
+                       validityDiv.style.fontSize = '13px';
+                       validityDiv.style.color = '#6b7280';
+                       validityDiv.style.marginBottom = '4px';
+                       
+                       const validityLabel = document.createElement('span');
+                       validityLabel.textContent = 'Действителен: ';
+                       validityLabel.style.fontWeight = '500';
+                       
+                       const validityDates = document.createElement('span');
+                       validityDates.textContent = `${validFromStr} - ${validToStr}`;
+                       
+                       validityDiv.appendChild(validityLabel);
+                       validityDiv.appendChild(validityDates);
+                       
+                       // CN издателя
+                       const issuerCN = extractCN(cert.issuer);
+                       const issuerDiv = document.createElement('div');
+                       issuerDiv.style.fontSize = '12px';
+                       issuerDiv.style.color = '#9ca3af';
+                       issuerDiv.style.marginTop = '4px';
+                       issuerDiv.style.wordWrap = 'break-word';
+                       issuerDiv.textContent = `Издатель: ${issuerCN}`;
+                       
+                       // Собираем карточку
+                       card.appendChild(statusIcon);
+                       card.appendChild(nameDiv);
+                       card.appendChild(validityDiv);
+                       card.appendChild(issuerDiv);
+                       
+                       // Эффекты при наведении
+                       card.addEventListener('mouseenter', function() {
+                           this.style.borderColor = '#3b82f6';
+                           this.style.backgroundColor = '#eff6ff';
+                           this.style.boxShadow = '0 4px 6px rgba(59, 130, 246, 0.15)';
+                           this.style.transform = 'translateY(-2px)';
+                       });
+                       
+                       card.addEventListener('mouseleave', function() {
+                           if (!this.classList.contains('selected')) {
+                               this.style.borderColor = '#e5e7eb';
+                               this.style.backgroundColor = '#ffffff';
+                               this.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
+                               this.style.transform = 'translateY(0)';
+                           }
+                       });
+                       
+                       // Обработчик выбора
+                       card.addEventListener('click', function() {
+                           // Убираем выделение с других карточек
+                           cardsContainer.querySelectorAll('.certificate-card').forEach(c => {
+                               c.classList.remove('selected');
+                               c.style.borderColor = '#e5e7eb';
+                               c.style.backgroundColor = '#ffffff';
+                               c.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
+                           });
+                           
+                           // Выделяем выбранную карточку
+                           this.classList.add('selected');
+                           this.style.borderColor = '#3b82f6';
+                           this.style.backgroundColor = '#dbeafe';
+                           this.style.boxShadow = '0 4px 12px rgba(59, 130, 246, 0.25)';
+
+                           // Получаем данные выбранного сертификата
+                           const selectedIndex = parseInt(this.dataset.value);
+                           // Используем оригинальный индекс для поиска в исходном массиве
+                           const selectedCert = certificates[selectedIndex] || cert;
+                           const ownerCN = extractCN(selectedCert.subject);
+                           
+                           // Визуальная обратная связь
+                           setTimeout(() => {
+                               this.style.transform = 'scale(0.98)';
+                               setTimeout(() => {
+                                   this.style.transform = 'scale(1)';
+                               }, 100);
+                           }, 0);
+                           
+                           // Отправляем событие с правильным индексом
+                           window.nicegui_handle_event('certificate_selected', {
+                               value: selectedIndex.toString(),
+                               text: ownerCN,
+                               certificate: selectedCert
+                           });
+                       });
+                       
+                       cardsContainer.appendChild(card);
+                   });
+               };
+               
+               // Обработчик поиска
+               searchInput.addEventListener('input', function() {
+                   const searchText = this.value.toLowerCase().trim();
+                   
+                   if (searchText === '') {
+                       createCertificateCards(validCertificates);
+                   } else {
+                       const filtered = validCertificates.filter(cert => {
+                           const ownerCN = extractCN(cert.subject).toLowerCase();
+                           const issuerCN = extractCN(cert.issuer).toLowerCase();
+                           return ownerCN.includes(searchText) || issuerCN.includes(searchText);
+                       });
+                       createCertificateCards(filtered);
+                   }
+               });
+            // Создаем начальный список
+            createCertificateCards(validCertificates);
+
+            // Собираем все вместе
+            certificatesList.appendChild(title);
+            certificatesList.appendChild(searchContainer);
+            certificatesList.appendChild(cardsContainer);
             
+            certArea.appendChild(certificatesList);
+            }  
+             
         } else if (result.action === 'certificate_selected') {
             console.log('Сертификат выбран:', result.selected);
             
@@ -583,12 +849,14 @@ function fillSelectWithCertificates(selectElement, options) {
     // Очищаем существующие опции
     selectElement.innerHTML = '';
     
-    // Добавляем placeholder
+    // Добавляем placeholder с улучшенным стилем
     const placeholderOption = document.createElement('option');
     placeholderOption.value = '';
     placeholderOption.textContent = 'Выберите сертификат...';
     placeholderOption.disabled = true;
     placeholderOption.selected = true;
+    placeholderOption.style.color = '#9ca3af';
+    placeholderOption.style.fontStyle = 'italic';
     selectElement.appendChild(placeholderOption);
     
     // Добавляем сертификаты
@@ -596,6 +864,8 @@ function fillSelectWithCertificates(selectElement, options) {
         const option = document.createElement('option');
         option.value = value;
         option.textContent = text;
+        option.style.padding = '10px';
+        option.style.color = '#1f2937';
         selectElement.appendChild(option);
         console.log('Добавлена опция:', value, '->', text);
     }
@@ -605,6 +875,15 @@ function fillSelectWithCertificates(selectElement, options) {
         const selectedValue = this.value;
         const selectedText = this.options[this.selectedIndex].text;
         console.log('Выбран сертификат:', selectedValue, '->', selectedText);
+        
+        // Визуальная обратная связь при выборе
+        if (selectedValue) {
+            this.style.backgroundColor = '#eff6ff';
+            this.style.borderColor = '#2563eb';
+            setTimeout(() => {
+                this.style.backgroundColor = '#ffffff';
+            }, 200);
+        }
         
         // Отправляем событие о выборе сертификата
         window.nicegui_handle_event('certificate_selected', {

@@ -90,20 +90,45 @@ async def handle_cryptopro_event(request: Request):
         elif event_name == 'certificate_selected':
             value = event_data.get('value', '')
             text = event_data.get('text', '')
+            certificate = event_data.get('certificate', {})
             logger.info(f"Выбран сертификат: {value} -> {text}")
             
-            # ИСПРАВЛЕНИЕ: Используем правильный индекс для JavaScript
-            cert_index = int(value) if value.isdigit() else 0
+            # ИСПРАВЛЕНИЕ: value - это индекс в массиве certificates (0, 1, 2...)
+            # Используем его для доступа к кэшу сертификатов
+            array_index = int(value) if value.isdigit() else 0
+            
+            # Получаем сертификат из кэша по индексу массива
+            selected_cert_from_cache = None
+            if array_index < len(_certificates_cache):
+                selected_cert_from_cache = _certificates_cache[array_index]
+            elif certificate:
+                # Если сертификат пришел напрямую, используем его
+                selected_cert_from_cache = certificate
+            
+            # Используем сертификат из кэша или переданный напрямую
+            final_certificate = selected_cert_from_cache or certificate or None
+            
+            if not final_certificate:
+                logger.error(f"Не удалось найти сертификат по индексу {array_index}")
+                return {
+                    "status": "error",
+                    "message": f"Сертификат не найден по индексу {array_index}"
+                }
+            
+            # Реальный индекс КриптоПро берем из самого сертификата
+            cryptopro_index = final_certificate.get('index', array_index + 1)
             
             # Обновляем глобальную переменную с выбранным сертификатом
             _selected_certificate = {
                 'value': value,
                 'text': text,
-                'certificate': _certificates_cache[cert_index] if cert_index < len(_certificates_cache) else None,
-                'js_index': cert_index  # JavaScript индекс (соответствует позиции в global_selectbox_container)
+                'certificate': final_certificate,
+                'js_index': cryptopro_index  # Реальный индекс КриптоПро для подписания
             }
             
-            logger.info(f"DEBUG: Обновлен _selected_certificate = {_selected_certificate}")
+            logger.info(f"DEBUG: Обновлен _selected_certificate. Индекс массива: {array_index}, Индекс КриптоПро: {cryptopro_index}")
+            logger.info(f"DEBUG: Сертификат: {final_certificate.get('subject', 'Неизвестно')}")
+            logger.info(f"DEBUG: Действителен: {final_certificate.get('isValid', 'Неизвестно')}")
             
             return {
                 "status": "success",

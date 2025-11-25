@@ -1778,10 +1778,29 @@ def sign_document_with_certificate(task, data_to_sign, signing_fields_container,
             ui.notify('Данные сертификата не найдены!', type='error')
             return
         
+        # Проверяем действительность сертификата
+        is_valid = certificate_data.get('isValid', True)
+        
+        if not is_valid:
+            ui.notify('⚠️ Внимание: Выбранный сертификат недействителен!', type='warning')
+            # Продолжаем, но предупреждаем пользователя
+        
         # Получаем РЕАЛЬНЫЙ индекс сертификата в КриптоПро
-        cryptopro_index = certificate_data.get('index', 1)
+        cryptopro_index = certificate_data.get('index', selected_cert.get('js_index', 1))
         
         logger.info(f"Используем РЕАЛЬНЫЙ индекс КриптоПро: {cryptopro_index}")
+        logger.info(f"Сертификат: {certificate_data.get('subject', 'Неизвестно')}")
+        logger.info(f"Действителен: {is_valid}")
+        
+        # Показываем информацию о сертификате
+        ui.notify(f'Подписание с сертификатом: {certificate_data.get("subject", "Неизвестно")}', type='info')
+            # Продолжаем, но предупреждаем пользователя
+        
+        # Получаем РЕАЛЬНЫЙ индекс сертификата в КриптоПро
+        cryptopro_index = certificate_data.get('index', selected_cert.get('js_index', 1))
+        
+        logger.info(f"Используем РЕАЛЬНЫЙ индекс КриптоПро: {cryptopro_index}")
+        logger.info(f"Сертификат: {certificate_data.get('subject', 'Неизвестно')}")
         
         # Показываем информацию о сертификате
         ui.notify(f'Подписание с сертификатом: {certificate_data.get("subject", "Неизвестно")}', type='info')
@@ -2774,8 +2793,8 @@ async def submit_task_completion(task, status, comment, dialog):
         # Завершаем задачу в Camunda (упрощенная версия)
         camunda_client = await create_camunda_client()
         
-        # Используем простой метод завершения задачи
-        success = camunda_client.complete_task_with_user_data(
+        # ИСПРАВЛЕНИЕ: Добавляем await перед вызовом async функции
+        success = await camunda_client.complete_task_with_user_data(
             task_id=task.id,
             status=status,
             comment=comment or '',
@@ -2786,7 +2805,7 @@ async def submit_task_completion(task, status, comment, dialog):
             ui.notify('Задача успешно завершена!', type='success')
             dialog.close()
             # Обновляем список задач
-            load_active_tasks(_tasks_header_container)
+            await load_active_tasks(_tasks_header_container)
         else:
             ui.notify('Ошибка при завершении задачи', type='error')
             
@@ -3018,7 +3037,7 @@ async def show_task_details(task):
                                     raise ValueError("Document ID пустой")
                                 
                                 # Получаем URL документа
-                                document_url = mayan_client.get_document_file_url(doc_id_str)
+                                document_url = await mayan_client.get_document_file_url(doc_id_str)
                                 
                                 if document_url:
                                     with ui.row().classes('w-full mt-3 gap-2'):
@@ -3029,7 +3048,7 @@ async def show_task_details(task):
                                         ).classes('bg-green-500 text-white')
                                         
                                         # Добавляем кнопку для просмотра, если есть preview URL
-                                        preview_url = mayan_client.get_document_preview_url(doc_id_str)
+                                        preview_url = await mayan_client.get_document_preview_url(doc_id_str)
                                         if preview_url:
                                             ui.button(
                                                 'Просмотр документа',
