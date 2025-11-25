@@ -359,7 +359,6 @@ class MayanClient:
             
             logger.info(f'MayanClient: Отправляем запрос на создание токена для {username}')
             logger.info(f'MayanClient: URL: {urljoin(self.api_url, endpoint)}')
-            logger.info(f'MayanClient: Payload: {payload}')
             
             # Создаем запрос БЕЗ Basic Auth, так как endpoint сам аутентифицирует пользователя
             url = urljoin(self.api_url, endpoint)

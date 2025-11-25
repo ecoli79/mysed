@@ -51,13 +51,49 @@ class LDAPAuthenticator:
             user_entry = conn.entries[0]
             
             # Проверяем группы пользователя
+            # В OpenLDAP с posixGroup нужно искать группы, где memberUid содержит username
             groups = []
+            
+            # Извлекаем группу из DN, если пользователь находится внутри группы
+            # Например, из "cn=Денис Имполитов,cn=admins,dc=permgp7,dc=ru" извлекаем "admins"
+            user_dn = str(user_entry.entry_dn)
+            dn_parts = user_dn.split(',')
+            for part in dn_parts:
+                if part.startswith('cn=') and part != f'cn={user_entry.cn.value}':
+                    # Это не имя пользователя, а группа
+                    group_name = part.split('=')[1]
+                    if group_name not in groups:
+                        groups.append(group_name)
+                        logger.debug(f'Извлечена группа из DN для пользователя {username}: {group_name}')
+            
+            # Сначала пробуем получить группы через memberOf (для groupOfNames)
             if hasattr(user_entry, 'memberOf') and user_entry.memberOf:
                 for group_dn in user_entry.memberOf:
-                    # Извлекаем CN из DN (например, из "cn=Managers,ou=Roles,dc=permgp7,dc=ru" получаем "Managers")
                     group_name = str(group_dn).split(',')[0].split('=')[1]
-                    groups.append(group_name)
+                    if group_name not in groups:
+                        groups.append(group_name)
             
+            # Дополнительно ищем группы posixGroup, где memberUid содержит username
+            try:
+                group_search_filter = f'(&(objectClass=posixGroup)(memberUid={username}))'
+                conn.search(
+                    self.base_dn,
+                    group_search_filter,
+                    SUBTREE,
+                    attributes=['cn']
+                )
+                
+                for group_entry in conn.entries:
+                    if hasattr(group_entry, 'cn') and group_entry.cn:
+                        group_name = group_entry.cn.value
+                        if group_name not in groups:
+                            groups.append(group_name)
+                            logger.debug(f'Найдена группа posixGroup для пользователя {username}: {group_name}')
+            except Exception as e:
+                logger.warning(f'Ошибка при поиске групп posixGroup для пользователя {username}: {e}')
+            
+            logger.info(f'Пользователь {username} состоит в группах: {groups}')
+
             # Попытка аутентификации пользователя
             # Используем DN пользователя из результата поиска
             user_dn = str(user_entry.entry_dn)

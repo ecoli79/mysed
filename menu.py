@@ -12,23 +12,39 @@
 #     ui.link('Подписание документов', '/document_signing').classes('text-white hover:text-blue-200')
 
 from typing import List, Tuple
+import logging
 from nicegui import ui
 from models import UserSession
 
+logger = logging.getLogger(__name__)
+
 def menu(user: UserSession) -> None:
-    links: List[Tuple[str, str, bool]] = [
-        ('Мои задачи', '/', False),
-        ('Запустить новый процесс', '/task-assignment', False),
-        ('Завершение задач', '/task_completion', False),
-        ('Документы Mayan EDMS', '/mayan_documents', False),
-        ('Поиск документов', '/mayan_documents_search', True),  # True = подраздел
-        ('Загрузка документов', '/mayan_documents_upload', True),  # True = подраздел
-        ('Запущенные мной процессы', '/my_processes', False),
-        ('Управление шаблонами процессов', '/process_templates', False),
-        ('Подписание документов', '/document_signing', False),
+    # Проверяем, является ли пользователь администратором
+    # Нормализуем группы: убираем пробелы и приводим к нижнему регистру
+    user_groups_normalized = [group.strip().lower() for group in user.groups]
+    is_admin = 'admins' in user_groups_normalized
+    
+    # Отладочный вывод (можно убрать после проверки)
+    logger.debug(f'Пользователь {user.username}: группы = {user.groups}, is_admin = {is_admin}')
+    
+    # Структура: (текст, url, is_submenu, admin_only)
+    links: List[Tuple[str, str, bool, bool]] = [
+        ('Мои задачи', '/', False, False),
+        ('Запустить новый процесс', '/task-assignment', False, False),
+        ('Завершение задач', '/task_completion', False, False),
+        ('Документы Mayan EDMS', '/mayan_documents', False, False),
+        ('Поиск документов', '/mayan_documents_search', True, False),  # True = подраздел
+        ('Загрузка документов', '/mayan_documents_upload', True, False),  # True = подраздел
+        ('Запущенные мной процессы', '/my_processes', False, False),
+        ('Подписание документов', '/document_signing', False, False),
+        ('Управление шаблонами процессов', '/process_templates', False, True),  # Только для админов
     ]
     with ui.column().classes('gap-1'):
-        for text, url, is_submenu in links:
+        for text, url, is_submenu, admin_only in links:
+            # Пропускаем ссылки, доступные только админам, если пользователь не админ
+            if admin_only and not is_admin:
+                continue
+                
             if is_submenu:
                 # Подраздел с отступом
                 ui.link(text, url).classes(

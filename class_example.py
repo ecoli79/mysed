@@ -576,8 +576,242 @@ class ClassExample:
                                 refresh_btn.on_click(lambda: search_and_display_documents_for_task(''))
                                 
                                 reset_btn.on_click(lambda: reset_search())
+                            
+                            elif process_template_select.value and ('DocumentReviewProcess' in process_template_select.value or 'Ознаком' in process_template_select.value):
+                                # Поля для ознакомления с документом
+                                ui.label('Параметры ознакомления с документом:').classes('font-bold mb-2')
+                                
+                                # Секция выбора документа из Mayan EDMS
+                                selected_doc_label_review = ui.label('Документ не выбран').classes('text-sm text-gray-500 mb-2')
+                                
+                                with ui.column().classes('w-full mb-4 p-3 bg-blue-50 rounded border'):
+                                    ui.label('Выбор документа из Mayan EDMS:').classes('font-semibold mb-2')
+                                    
+                                    # Поиск документа
+                                    document_search_input_review = ui.input(
+                                        label='Поиск документа',
+                                        placeholder='Введите название документа для поиска...',
+                                        value=''
+                                    ).classes('w-full mb-2')
+                                    
+                                    # Кнопки поиска
+                                    with ui.row().classes('w-full mb-2 gap-2'):
+                                        search_btn_review = ui.button(
+                                            'Поиск документов',
+                                            icon='search',
+                                            on_click=lambda: None  # Будет обновлено ниже
+                                        ).classes('bg-blue-500 text-white')
+                                        
+                                        refresh_btn_review = ui.button(
+                                            'Показать последние',
+                                            icon='refresh',
+                                            on_click=lambda: None  # Будет обновлено ниже
+                                        ).classes('bg-gray-500 text-white')
+                                        
+                                        reset_btn_review = ui.button(
+                                            'Сбросить поиск',
+                                            icon='clear',
+                                            on_click=lambda: None  # Будет обновлено ниже
+                                        ).classes('bg-orange-500 text-white')
+                                    
+                                    # Контейнер для результатов поиска
+                                    document_results_container_review = ui.column().classes('w-full max-h-64 overflow-y-auto border rounded p-2 bg-white')
+                                
+                                # Объявляем поля для document_id и document_name до функций
+                                document_id_input = ui.input(
+                                    label='ID документа в Mayan EDMS',
+                                    placeholder='Заполнится автоматически при выборе документа',
+                                    value=''
+                                ).classes('w-full mb-2')
+                                
+                                document_name_input = ui.input(
+                                    label='Название документа',
+                                    placeholder='Заполнится автоматически при выборе документа',
+                                    value=''
+                                ).classes('w-full mb-2')
+                                
+                                # Добавляем выбор ролей для предоставления доступа к документу
+                                ui.label('Роли для предоставления доступа к документу:').classes('font-bold mb-2')
+                                
+                                # Получаем доступные роли из Mayan EDMS
+                                try:
+                                    # Используем системный клиент для получения ролей
+                                    system_client = await MayanClient.create_default()
+                                    roles = await system_client.get_roles(page=1, page_size=1000)
+                                    
+                                    # Создаем словарь role_label -> role_label для выбора
+                                    role_options = {}
+                                    for role in roles:
+                                        role_label = role.get('label')
+                                        if role_label:
+                                            role_options[role_label] = role_label
+                                    
+                                    roles_select = ui.select(
+                                        options=role_options,
+                                        label='Выберите роли (можно выбрать несколько)',
+                                        multiple=True,
+                                        value=[],
+                                        with_input=True
+                                    ).classes('w-full mb-2')
+                                    
+                                    if not role_options:
+                                        ui.label('Роли не найдены в системе').classes('text-sm text-orange-500 mb-2')
+                                        roles_select = None
+                                    
+                                except Exception as e:
+                                    logger.error(f'Ошибка при загрузке ролей: {e}', exc_info=True)
+                                    ui.label(f'Ошибка загрузки ролей: {str(e)}').classes('text-sm text-red-500 mb-2')
+                                    roles_select = None
+                                
+                                # Информационное сообщение
+                                ui.label('Выберите роли, которым будет предоставлен доступ к документу для ознакомления').classes('text-xs text-gray-600 mb-2')
+                                
+                                # Определяем функции после объявления всех переменных
+                                async def search_and_display_documents_for_review(query: str = ''):
+                                    """Ищет и отображает документы из Mayan EDMS для выбора"""
+                                    try:
+                                        # Если query не передан, берем из поля ввода
+                                        if not query and hasattr(document_search_input_review, 'value'):
+                                            query = document_search_input_review.value or ''
+                                        
+                                        document_results_container_review.clear()
+                                        
+                                        # Показываем индикатор загрузки
+                                        with document_results_container_review:
+                                            ui.label('Поиск документов...').classes('text-sm text-gray-600 text-center py-4')
+                                                                                
+                                        # Получаем клиент Mayan EDMS
+                                        mayan_client = await MayanClient.create_with_session_user()
+                                        
+                                        # Выполняем поиск
+                                        query = query.strip() if query else ''
+                                        
+                                        if query:
+                                            logger.info(f"Выполняем поиск документов по запросу: '{query}'")
+                                            documents = await mayan_client.search_documents(query, page=1, page_size=20)
+                                            logger.info(f"Найдено документов: {len(documents)}")
+                                        else:
+                                            # Если запрос пустой, показываем последние документы
+                                            logger.info("Запрос пустой, показываем последние документы")
+                                            documents = await mayan_client.get_documents(page=1, page_size=20)
+                                        
+                                        # Очищаем контейнер перед показом результатов
+                                        document_results_container_review.clear()
+                                        
+                                        if not documents:
+                                            with document_results_container_review:
+                                                ui.label('Документы не найдены').classes('text-sm text-gray-500 text-center py-4')
+                                            return
+                                        
+                                        # Отображаем найденные документы
+                                        with document_results_container_review:
+                                            ui.label(f'Найдено документов: {len(documents)}').classes('text-sm font-semibold mb-2')
+                                            
+                                            for doc in documents:
+                                                with ui.card().classes('mb-2 p-3 cursor-pointer hover:bg-blue-50 border-l-4 border-blue-200 transition-colors'):
+                                                    with ui.row().classes('items-center w-full'):
+                                                        ui.icon('description').classes('text-blue-500 mr-2 text-xl')
+                                                        
+                                                        with ui.column().classes('flex-1'):
+                                                            ui.label(doc.label).classes('text-sm font-semibold')
+                                                            if hasattr(doc, 'file_latest_filename') and doc.file_latest_filename:
+                                                                ui.label(f'Файл: {doc.file_latest_filename}').classes('text-xs text-gray-600')
+                                                            if hasattr(doc, 'file_latest_size') and doc.file_latest_size:
+                                                                size_kb = doc.file_latest_size / 1024
+                                                                size_mb = size_kb / 1024
+                                                                if size_mb >= 1:
+                                                                    ui.label(f'Размер: {size_mb:.1f} МБ').classes('text-xs text-gray-600')
+                                                                else:
+                                                                    ui.label(f'Размер: {size_kb:.1f} КБ').classes('text-xs text-gray-600')
+                                                        
+                                                        ui.label(f'ID: {doc.document_id}').classes('text-xs text-gray-500 font-mono mr-2')
+                                                        
+                                                        # Кнопка выбора документа
+                                                        ui.button(
+                                                            'Выбрать',
+                                                            icon='check',
+                                                            on_click=lambda d=doc: select_document_for_review(d)
+                                                        ).classes('bg-green-500 text-white')
+                                        
+                                    except Exception as e:
+                                        logger.error(f"Ошибка при поиске документов: {e}", exc_info=True)
+                                        document_results_container_review.clear()
+                                        with document_results_container_review:
+                                            ui.label(f'Ошибка при поиске: {str(e)}').classes('text-sm text-red-600 text-center py-4')
+                                
+                                # Добавляем обработчик Enter для поля поиска (после определения функции)
+                                document_search_input_review.on('keydown.enter', lambda: search_and_display_documents_for_review(document_search_input_review.value))
+                                
+                                def select_document_for_review(doc):
+                                    """Выбирает документ и автоматически заполняет поля формы"""
+                                    try:
+                                        # Заполняем поля формы автоматически
+                                        document_id_input.value = str(doc.document_id)
+                                        document_name_input.value = doc.label
+                                        
+                                        # Обновляем метку выбранного документа
+                                        selected_doc_label_review.text = f'✓ Выбран: {doc.label} (ID: {doc.document_id})'
+                                        selected_doc_label_review.classes('text-sm text-green-600 font-semibold mb-2')
+                                        
+                                        # Показываем уведомление
+                                        ui.notify(f'Выбран документ: {doc.label} (ID: {doc.document_id})', type='positive')
+                                        
+                                        # Сворачиваем результаты поиска и показываем подтверждение
+                                        document_results_container_review.clear()
+                                        with document_results_container_review:
+                                            with ui.card().classes('p-3 bg-green-50 border-l-4 border-green-500'):
+                                                with ui.row().classes('items-center'):
+                                                    ui.icon('check_circle').classes('text-green-500 mr-2 text-xl')
+                                                    with ui.column().classes('flex-1'):
+                                                        ui.label(f'Выбран документ: {doc.label}').classes('text-sm font-semibold')
+                                                        ui.label(f'ID: {doc.document_id}').classes('text-xs text-gray-600')
+                                                        if hasattr(doc, 'file_latest_filename') and doc.file_latest_filename:
+                                                            ui.label(f'Файл: {doc.file_latest_filename}').classes('text-xs text-gray-600')
+                                                
+                                                # Кнопка для изменения выбора
+                                                ui.button(
+                                                    'Выбрать другой документ',
+                                                    icon='refresh',
+                                                    on_click=lambda: search_and_display_documents_for_review(document_search_input_review.value)
+                                                ).classes('mt-2 bg-blue-500 text-white')
+                                    
+                                    except Exception as e:
+                                        logger.error(f"Ошибка при выборе документа: {e}", exc_info=True)
+                                        ui.notify(f'Ошибка при выборе документа: {str(e)}', type='negative')
+                                
+                                def reset_search_review():
+                                    """Сбрасывает поиск и очищает все поля"""
+                                    try:
+                                        # Очищаем поле поиска
+                                        document_search_input_review.value = ''
+                                        
+                                        # Очищаем контейнер результатов
+                                        document_results_container_review.clear()
+                                        
+                                        # Сбрасываем выбранный документ
+                                        selected_doc_label_review.text = 'Документ не выбран'
+                                        selected_doc_label_review.classes('text-sm text-gray-500 mb-2')
+                                        
+                                        # Очищаем поля документа
+                                        document_id_input.value = ''
+                                        document_name_input.value = ''
+                                        
+                                        ui.notify('Поиск сброшен', type='info')
+                                    
+                                    except Exception as e:
+                                        logger.error(f"Ошибка при сбросе поиска: {e}", exc_info=True)
+                                        ui.notify(f'Ошибка при сбросе: {str(e)}', type='negative')
+                                
+                                # Обновляем обработчики кнопок
+                                search_btn_review.on_click(lambda: search_and_display_documents_for_review(document_search_input_review.value))
+                                
+                                # Для кнопки "Показать последние" передаем пустой запрос явно
+                                refresh_btn_review.on_click(lambda: search_and_display_documents_for_review(''))
+                                
+                                reset_btn_review.on_click(lambda: reset_search_review())
+                            
                             else:
-                                # Если это не процесс подписания, создаем пустые значения
+                                # Если это не процесс подписания или ознакомления, создаем пустые значения
                                 document_id_input = None
                                 document_name_input = None
                                 roles_select = None
@@ -705,32 +939,61 @@ class ClassExample:
                         
                         # Выбираем метод запуска в зависимости от типа процесса
                         process_id = None
-                        if process_key == 'DocumentReviewProcessMultiInstance':
-                            # Получаем текущего пользователя для передачи creator_username
-                            current_user = get_current_user()
-                            creator_username = current_user.username if current_user else None
+                        if process_key == 'DocumentReviewProcessMultiInstance' or (process_key and 'DocumentReviewProcess' in process_key):
+                            # Проверяем наличие document_id
+                            if not document_id or not document_id.strip():
+                                ui.notify('ID документа обязателен для процесса ознакомления!', type='error')
+                                return
+                            
+                            # Получаем информацию о документе из Mayan EDMS
+                            try:
+                                mayan_client = await MayanClient.create_with_session_user()
+                                document_info = await mayan_client.get_document_info_for_review(document_id.strip())
+                                
+                                if not document_info:
+                                    ui.notify('Ошибка при получении информации о документе', type='error')
+                                    return
+                                
+                                document_name_for_review = document_info.get("label", document_name.strip() if document_name else task_name.strip())
+                                document_content = document_info.get("content", task_description.strip() if task_description else "Содержимое недоступно")
+                                
+                            except Exception as e:
+                                logger.error(f"Ошибка при получении информации о документе: {e}", exc_info=True)
+                                ui.notify(f'Ошибка при получении информации о документе: {str(e)}', type='error')
+                                return
+                            
+                            # Валидация ролей (может быть пустым списком, но должно быть списком)
+                            if selected_roles is None:
+                                selected_roles = []
+                            
+                            # Преобразуем в список, если это не список
+                            if isinstance(selected_roles, str):
+                                selected_roles = [selected_roles] if selected_roles else []
                             
                             process_id = await camunda_client.start_document_review_process_multi_instance(
-                                document_name=task_name.strip(),
-                                document_content=task_description.strip(),
+                                document_id=document_id.strip(),
+                                document_name=document_name_for_review,
+                                document_content=document_content,
                                 assignee_list=assignee_list,
                                 business_key=f"batch_{int(time.time())}",
                                 creator_username=creator_username,
-                                due_date=due_date_str  # ДОБАВИТЬ ЭТУ СТРОКУ
+                                due_date=due_date_str,
+                                role_names=selected_roles,
+                                process_definition_key=process_key  # Передаем реальный ключ процесса из выбранного шаблона
                             )
-                        elif process_key == 'DocumentSigningProcess':
+                        elif process_key == 'DocumentSigningProcess' or (process_key and 'DocumentSigningProcess' in process_key):
                             # Специальная обработка для процесса подписания документов
                             # Используем специальные поля для подписания документов
-                            if not document_id.strip():
+                            if not document_id or not document_id.strip():
                                 ui.notify('ID документа обязателен для процесса подписания!', type='error')
                                 return
                             
-                            if not document_name.strip():
+                            if not document_name or not document_name.strip():
                                 ui.notify('Название документа обязательно для процесса подписания!', type='error')
                                 return
                             
                             # Проверяем, что document_id является числовым
-                            if not document_id.isdigit():
+                            if not document_id.strip().isdigit():
                                 ui.notify('ID документа должен быть числовым значением!', type='error')
                                 return
                             
@@ -746,10 +1009,12 @@ class ClassExample:
                                 document_id=document_id.strip(),
                                 document_name=document_name.strip(),
                                 signer_list=assignee_list,
-                                role_names=selected_roles,  # Передаем выбранные роли
+                                role_names=selected_roles,
                                 business_key=f"signing_{int(time.time())}",
-                                creator_username=creator_username,  # Добавить эту строку
-                                due_date=due_date_str  # Добавляем due_date в переменные процесса
+                                creator_username=creator_username,
+                                due_date=due_date_str,
+                                task_name=task_name.strip(),
+                                task_description=task_description.strip()
                             )
                         else:
                             # Для других процессов используем универсальный метод
@@ -758,12 +1023,18 @@ class ClassExample:
                             current_user = get_current_user()
                             creator_username = current_user.username if current_user else None
                             
+                            # Преобразуем process_variables в правильный формат для start_process
+                            variables_dict = {}
+                            for key, var_data in process_variables.items():
+                                if isinstance(var_data, dict) and 'value' in var_data:
+                                    variables_dict[key] = var_data['value']
+                                else:
+                                    variables_dict[key] = var_data
+                            
                             process_id = await camunda_client.start_process(
                                 process_definition_key=process_key,
-                                assignee_list=assignee_list,
-                                additional_variables=process_variables,
-                                business_key=f"batch_{int(time.time())}",
-                                creator_username=creator_username  # Добавить эту строку
+                                variables=variables_dict,
+                                business_key=f"batch_{int(time.time())}"
                             )
                         
                         print(f"Результат запуска процесса: {process_id}")

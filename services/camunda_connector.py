@@ -443,29 +443,95 @@ class CamundaClient:
     
     async def start_process(self, process_definition_key: str, 
                           variables: Optional[Dict[str, Any]] = None,
-                          business_key: Optional[str] = None) -> Optional[str]:
-        """Запускает процесс"""
+                          business_key: Optional[str] = None,
+                          validate: bool = True) -> Optional[str]:
+        """
+        Запускает процесс
+        
+        Args:
+            process_definition_key: Ключ определения процесса
+            variables: Переменные процесса
+            business_key: Бизнес-ключ процесса
+            validate: Проверять ли существование процесса перед запуском
+            
+        Returns:
+            ID экземпляра процесса или None при ошибке
+        """
+        # Валидация существования процесса
+        if validate:
+            exists, error_msg = await self.validate_process_exists(process_definition_key)
+            if not exists:
+                logger.error(f"Не удалось запустить процесс: {error_msg}")
+                return None
+        
         endpoint = f'process-definition/key/{process_definition_key}/start'
         
         payload = {}
         if variables:
-            payload['variables'] = self._prepare_variables(variables)
+            prepared_vars = self._prepare_variables(variables)
+            payload['variables'] = prepared_vars
+            # Логируем переменные для отладки (без чувствительных данных)
+            logger.debug(f"Переменные процесса {process_definition_key}: {list(prepared_vars.keys())}")
         if business_key:
             payload['businessKey'] = business_key
         
         try:
+            # Логируем запрос для отладки
+            logger.info(f"Запуск процесса {process_definition_key} с {len(payload.get('variables', {}))} переменными")
+            
             response = await self._make_request('POST', endpoint, json=payload)
             response.raise_for_status()
             result = response.json()
-            return result.get('id')
+            process_id = result.get('id')
+            logger.info(f"Процесс {process_definition_key} успешно запущен, ID: {process_id}")
+            return process_id
         except httpx.HTTPError as e:
-            logger.error(f"Ошибка при запуске процесса {process_definition_key}: {e}")
+            error_msg = f"Ошибка при запуске процесса {process_definition_key}"
+            
+            # Получаем детали ошибки от Camunda
+            error_details = None
+            if hasattr(e, 'response') and e.response is not None:
+                status_code = e.response.status_code
+                error_msg += f": HTTP {status_code}"
+                
+                # Пытаемся получить детали ошибки из ответа
+                try:
+                    if e.response.text:
+                        error_details = e.response.text
+                        logger.error(f"Детали ошибки от Camunda: {error_details}")
+                except:
+                    pass
+                
+                if status_code == 404:
+                    error_msg += ": процесс не найден в Camunda"
+                elif status_code == 400:
+                    error_msg += ": некорректный запрос"
+                    if error_details:
+                        error_msg += f" - {error_details}"
+            
+            logger.error(f"{error_msg}: {e}")
+            
+            # Логируем payload для отладки (без чувствительных данных)
+            if variables:
+                logger.debug(f"Payload переменных (ключи): {list(variables.keys())}")
+            
             return None
 
     def _format_variable(self, value: Any) -> Dict[str, Any]:
         """Форматирует переменную в формат Camunda API"""
+        # Если переменная уже в правильном формате, возвращаем как есть
         if isinstance(value, dict) and 'value' in value and 'type' in value:
             return value
+        elif isinstance(value, list):
+            # Для списков используем тип Object с JSON-строкой для Multi-Instance коллекций
+            return {
+                'value': json.dumps(value),
+                'type': 'Object',
+                'valueInfo': {
+                    'serializationDataFormat': 'application/json',
+                    'objectTypeName': 'java.util.ArrayList'
+                }
+            }
         elif isinstance(value, str):
             return {'value': value, 'type': 'String'}
         elif isinstance(value, bool):
@@ -474,8 +540,16 @@ class CamundaClient:
             return {'value': value, 'type': 'Integer'}
         elif isinstance(value, float):
             return {'value': value, 'type': 'Double'}
-        elif isinstance(value, (list, dict)):
-            return {'value': json.dumps(value), 'type': 'String'}
+        elif isinstance(value, dict):
+            # Для словарей используем тип Object с JSON-строкой
+            return {
+                'value': json.dumps(value),
+                'type': 'Object',
+                'valueInfo': {
+                    'serializationDataFormat': 'application/json',
+                    'objectTypeName': 'java.util.HashMap'
+                }
+            }
         else:
             return {'value': str(value), 'type': 'String'}
 
@@ -1867,7 +1941,9 @@ class CamundaClient:
                                     signer_list: List[str], business_key: str = None,
                                     role_names: List[str] = None,
                                     creator_username: Optional[str] = None,
-                                    due_date: Optional[str] = None) -> Optional[str]:  # ДОБАВИТЬ ПАРАМЕТР
+                                    due_date: Optional[str] = None,
+                                    task_name: Optional[str] = None,  # ДОБАВИТЬ
+                                    task_description: Optional[str] = None) -> Optional[str]:  # ДОБАВИТЬ
         """Запускает процесс подписания документа
         
         Args:
@@ -1877,7 +1953,9 @@ class CamundaClient:
             business_key: Бизнес-ключ процесса
             role_names: Список названий ролей для предоставления доступа (опционально)
             creator_username: Имя пользователя-создателя
-            due_date: Срок исполнения в формате ISO (YYYY-MM-DDTHH:MM:SS.fff+0000)  # ДОБАВИТЬ ОПИСАНИЕ
+            due_date: Срок исполнения в формате ISO (YYYY-MM-DDTHH:MM:SS.fff+0000)
+            task_name: Название задачи  # ДОБАВИТЬ
+            task_description: Описание задачи  # ДОБАВИТЬ
         """
         try:
             # Подготавливаем переменные в правильном формате для Camunda
@@ -1890,6 +1968,15 @@ class CamundaClient:
                     'value': document_name,
                     'type': 'String'
                 },
+                # ДОБАВИТЬ taskName и taskDescription
+                **({'taskName': {
+                    'value': task_name or document_name,
+                    'type': 'String'
+                }} if task_name else {}),
+                **({'taskDescription': {
+                    'value': task_description or '',
+                    'type': 'String'
+                }} if task_description else {}),
                 # ДОБАВИТЬ dueDate если передан
                 **({'dueDate': {
                     'value': due_date,
@@ -1995,38 +2082,79 @@ class CamundaClient:
             return False
 
     async def start_document_review_process_multi_instance(self, 
+                                               document_id: str,
                                                document_name: str,
                                                document_content: str,
                                                assignee_list: List[str],
                                                business_key: Optional[str] = None,
                                                creator_username: Optional[str] = None,
-                                               due_date: Optional[str] = None) -> Optional[str]:  # ДОБАВИТЬ ПАРАМЕТР
+                                               due_date: Optional[str] = None,
+                                               role_names: Optional[List[str]] = None,
+                                               process_definition_key: Optional[str] = None) -> Optional[str]:
         """
         Запускает процесс ознакомления с документом для нескольких пользователей
         с использованием Multi-Instance (один процесс, несколько параллельных задач)
         
         Args:
+            document_id: ID документа в Mayan EDMS
             document_name: Название документа
             document_content: Содержимое документа
             assignee_list: Список пользователей для ознакомления
             business_key: Бизнес-ключ процесса
             creator_username: Имя пользователя-создателя
-            due_date: Срок исполнения в формате ISO (YYYY-MM-DDTHH:MM:SS.fff+0000)  # ДОБАВИТЬ ОПИСАНИЕ
+            due_date: Срок исполнения в формате ISO (YYYY-MM-DDTHH:MM:SS.fff+0000)
+            role_names: Список названий ролей для предоставления доступа (опционально)
+            process_definition_key: Ключ определения процесса (если не указан, будет выполнен поиск)
             
         Returns:
             ID экземпляра процесса или None при ошибке
         """
         try:
+            # Определяем ключ процесса
+            process_key = process_definition_key
+            
+            # Если ключ не передан, пытаемся найти процесс по паттерну
+            if not process_key:
+                logger.info("Ключ процесса не указан, выполняем поиск по паттерну 'DocumentReview'")
+                process_key = await self.find_process_by_name_pattern('DocumentReview')
+                if not process_key:
+                    # Пробуем альтернативные варианты
+                    alternative_keys = ['DocumentReviewProcessMultiInstance', 'DocumentReviewProcess']
+                    for alt_key in alternative_keys:
+                        exists, _ = await self.validate_process_exists(alt_key)
+                        if exists:
+                            process_key = alt_key
+                            logger.info(f"Найден процесс: {process_key}")
+                            break
+                    
+                    if not process_key:
+                        error_msg = "Не удалось найти процесс ознакомления с документом в Camunda"
+                        logger.error(error_msg)
+                        return None
+            else:
+                # Проверяем существование указанного процесса
+                exists, error_msg = await self.validate_process_exists(process_key)
+                if not exists:
+                    logger.warning(f"Указанный процесс {process_key} не найден, пытаемся найти альтернативный")
+                    # Пытаемся найти альтернативный процесс
+                    process_key = await self.find_process_by_name_pattern('DocumentReview')
+                    if not process_key:
+                        logger.error(f"Не удалось найти процесс ознакомления: {error_msg}")
+                        return None
+            
+            logger.info(f"Используется процесс: {process_key}")
+            
             # Подготавливаем переменные для процесса
             process_variables = {
                 'taskName': f'Ознакомиться с документом: {document_name}',
                 'taskDescription': f'Необходимо ознакомиться с документом: {document_name}\n\nСодержимое:\n{document_content}',
                 'priority': 2,
-                'dueDate': due_date or '2025-09-29T23:59:59.000+0000',  # ИСПОЛЬЗОВАТЬ ПЕРЕДАННЫЙ due_date
+                'dueDate': due_date or '2025-09-29T23:59:59.000+0000',
                 'documentName': document_name,
                 'documentContent': document_content,
+                'mayanDocumentId': document_id,  # Добавляем ID документа
                 
-                # Multi-Instance переменные
+                # Multi-Instance переменные - используем тот же формат, что и для signerList
                 'assigneeList': {
                     'value': json.dumps(assignee_list),
                     'type': 'Object',
@@ -2037,14 +2165,12 @@ class CamundaClient:
                 },
                 
                 # Инициализируем счетчик завершенных ознакомлений
-                'completedReviews': {
-                    'value': 0,
-                    'type': 'Integer'
-                },
+                'completedReviews': 0,
                 
                 # Инициализируем словари для хранения данных пользователей
+                # Используем тип Object с JSON-строкой для HashMap
                 'reviewDates': {
-                    'value': {},
+                    'value': '{}',
                     'type': 'Object',
                     'valueInfo': {
                         'serializationDataFormat': 'application/json',
@@ -2052,7 +2178,7 @@ class CamundaClient:
                     }
                 },
                 'reviewComments': {
-                    'value': {},
+                    'value': '{}',
                     'type': 'Object',
                     'valueInfo': {
                         'serializationDataFormat': 'application/json',
@@ -2060,7 +2186,7 @@ class CamundaClient:
                     }
                 },
                 'reviewStatus': {
-                    'value': {},
+                    'value': '{}',
                     'type': 'Object',
                     'valueInfo': {
                         'serializationDataFormat': 'application/json',
@@ -2068,37 +2194,52 @@ class CamundaClient:
                     }
                 },
                 'userCompleted': {
-                    'value': {},
+                    'value': '{}',
                     'type': 'Object',
                     'valueInfo': {
                         'serializationDataFormat': 'application/json',
                         'objectTypeName': 'java.util.HashMap'
                     }
                 },
-                # Информация о создателе
-                'processCreator': {
-                    'value': creator_username or 'system',
-                    'type': 'String'
-                },
                 
-                'creatorName': {
-                    'value': creator_username or 'Система',
-                    'type': 'String'
-                },
+                # Информация о создателе
+                'processCreator': creator_username or 'system',
+                'creatorName': creator_username or 'Система',
             }
             
             # Запускаем процесс с Multi-Instance
             process_id = await self.start_process(
-                process_definition_key='DocumentReviewProcessMultiInstance',
+                process_definition_key=process_key,
                 variables=process_variables,
-                business_key=business_key
+                business_key=business_key,
+                validate=True  # Включаем валидацию
             )
             
             if process_id:
                 logger.info(f"Запущен Multi-Instance процесс ознакомления с документом '{document_name}' для {len(assignee_list)} пользователей, ID: {process_id}")
                 logger.info(f"Пользователи: {', '.join(assignee_list)}")
-            else:
-                logger.error(f"Ошибка при запуске Multi-Instance процесса ознакомления с документом '{document_name}'")
+                
+                # Предоставляем доступ к документу выбранным ролям
+                if role_names:
+                    try:
+                        from services.document_access_manager import document_access_manager
+                        logger.info(f'Предоставляем доступ к документу {document_id} ролям: {role_names}')
+                        access_granted = await document_access_manager.grant_document_access_to_roles(
+                            document_id=document_id,
+                            document_label=document_name,
+                            role_names=role_names
+                        )
+                        
+                        if access_granted:
+                            logger.info(f'Доступ к документу {document_id} успешно предоставлен ролям {role_names}')
+                        else:
+                            logger.warning(f'Не удалось предоставить доступ к документу {document_id} ролям')
+                            
+                    except Exception as e:
+                        logger.error(f'Ошибка при предоставлении доступа к документу: {e}', exc_info=True)
+                        # Не прерываем выполнение, т.к. процесс уже запущен
+                else:
+                    logger.info(f'Роли не выбраны - доступ к документу {document_id} не будет предоставлен автоматически')
             
             return process_id
             
@@ -2175,6 +2316,52 @@ class CamundaClient:
         except Exception as e:
             logger.error(f"Ошибка при получении процесса {process_id} с переменными: {e}")
             return {}
+
+    async def validate_process_exists(self, process_definition_key: str) -> tuple[bool, Optional[str]]:
+        """
+        Проверяет существование процесса в Camunda
+        
+        Args:
+            process_definition_key: Ключ определения процесса
+            
+        Returns:
+            Кортеж (существует ли процесс, сообщение об ошибке или None)
+        """
+        try:
+            process_def = await self.get_process_definition_by_key(process_definition_key)
+            if process_def:
+                logger.info(f"Процесс {process_definition_key} найден в Camunda (версия {process_def.get('version', 'unknown')})")
+                return True, None
+            else:
+                error_msg = f"Процесс {process_definition_key} не найден в Camunda"
+                logger.warning(error_msg)
+                return False, error_msg
+        except Exception as e:
+            error_msg = f"Ошибка при проверке существования процесса {process_definition_key}: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+
+    async def find_process_by_name_pattern(self, pattern: str) -> Optional[str]:
+        """
+        Ищет процесс по паттерну в названии
+        
+        Args:
+            pattern: Паттерн для поиска (например, 'DocumentReview')
+            
+        Returns:
+            Ключ процесса или None
+        """
+        try:
+            process_definitions = await self.get_active_process_definitions()
+            for process_def in process_definitions:
+                if pattern.lower() in process_def.name.lower() or pattern.lower() in process_def.key.lower():
+                    logger.info(f"Найден процесс по паттерну '{pattern}': {process_def.key} ({process_def.name})")
+                    return process_def.key
+            logger.warning(f"Процесс с паттерном '{pattern}' не найден")
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка при поиске процесса по паттерну '{pattern}': {e}")
+            return None
 
 
 async def create_camunda_client() -> CamundaClient:
