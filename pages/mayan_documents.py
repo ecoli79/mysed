@@ -44,6 +44,9 @@ _mayan_client_cache: Optional[MayanClient] = None
 _token_checked: bool = False
 _token_check_lock = asyncio.Lock()  # Блокировка для предотвращения race conditions
 
+# После строки 36 (после _upload_form_container), добавить:
+_favorites_container: Optional[ui.column] = None
+
 # Исключения
 class UploadError(Exception):
     """Базовое исключение для ошибок загрузки"""
@@ -541,7 +544,7 @@ async def update_file_size(document: MayanDocument, size_label: ui.label):
         logger.error(f"Ошибка при получении количества страниц для документа {document.document_id}: {e}")
         size_label.text = "(ошибка получения страниц)"
 
-def create_document_card(document: MayanDocument, update_cabinet_title_func=None, current_count=None, documents_count_label=None) -> ui.card:
+def create_document_card(document: MayanDocument, update_cabinet_title_func=None, current_count=None, documents_count_label=None, is_favorites_page: bool = False, favorites_count_label: Optional[ui.label] = None) -> ui.card:
     """Создает карточку документа с возможностью предоставления доступа"""
     
     # Временное логирование для отладки
@@ -709,6 +712,30 @@ def create_document_card(document: MayanDocument, update_cabinet_title_func=None
                         lambda doc=document: show_grant_access_dialog(doc)
                     )
                     
+                    # Кнопка избранного
+                    if is_favorites_page:
+                        # На странице избранных сразу показываем, что документ в избранном
+                        favorite_button = ui.button('Удалить из избранного', icon='star', color='amber').classes('text-xs')
+                        
+                        # Обработчик клика для страницы избранных
+                        favorite_button.on_click(lambda doc=document, btn=favorite_button, card_ref=card, count_label_ref=favorites_count_label: toggle_favorite(doc, btn, card_ref, count_label_ref))
+                    else:
+                        # На других страницах проверяем статус асинхронно и показываем кнопку только если документ не в избранном
+                        async def check_and_show_favorite_button():
+                            """Проверяет статус и показывает кнопку только если документ не в избранном"""
+                            try:
+                                is_favorite = await check_favorite_status(document)
+                                if not is_favorite:
+                                    # Документ не в избранном - показываем кнопку
+                                    favorite_button = ui.button('В избранное', icon='star_border', color='amber').classes('text-xs')
+                                    favorite_button.on_click(lambda doc=document, btn=favorite_button: toggle_favorite(doc, btn))
+                            except Exception as e:
+                                logger.warning(f'Ошибка при проверке статуса избранного: {e}')
+                                # В случае ошибки не показываем кнопку
+                        
+                        # Запускаем проверку статуса
+                        ui.timer(0.1, check_and_show_favorite_button, once=True)
+                                        
                     # Кнопка удаления (только для admins и secretar)
                     user_groups_normalized = [group.strip().lower() for group in current_user.groups]
                     is_admin_or_secretar = 'admins' in user_groups_normalized or 'secretar' in user_groups_normalized
@@ -2099,3 +2126,138 @@ async def delete_document(document: MayanDocument, card: ui.card = None):
     except Exception as e:
         logger.error(f'Ошибка при открытии диалога удаления документа: {e}', exc_info=True)
         ui.notify(f'Ошибка: {str(e)}', type='error')
+
+async def toggle_favorite(document: MayanDocument, button: ui.button, card: Optional[ui.card] = None, count_label: Optional[ui.label] = None):
+    """Добавляет или удаляет документ из избранного"""
+    try:
+        client = await get_mayan_client()
+        
+        # Если карточка передана (на странице избранных), мы знаем, что документ в избранном
+        # Не проверяем статус, сразу удаляем
+        if card:
+            # Удаляем из избранного
+            success = await client.remove_document_from_favorites(document.document_id)
+            if success:
+                ui.notify(f'Документ "{document.label}" удален из избранного', type='info')
+                
+                # Обновляем счетчик документов, если он передан
+                if count_label:
+                    try:
+                        # Парсим текущее значение из текста label
+                        label_text = count_label.text
+                        import re
+                        match = re.search(r'Избранные документы\s*\((\d+)\)', label_text)
+                        if match:
+                            current_count = int(match.group(1))
+                            new_count = max(0, current_count - 1)
+                            count_label.text = f'Избранные документы ({new_count})'
+                            logger.info(f'Обновлен счетчик избранных документов: {new_count}')
+                    except Exception as e:
+                        logger.warning(f'Не удалось обновить счетчик: {e}')
+                
+                # Удаляем карточку из UI
+                try:
+                    card.delete()
+                    logger.info(f'Карточка документа {document.document_id} удалена из списка избранных')
+                except Exception as e:
+                    logger.warning(f'Не удалось удалить карточку из UI: {e}')
+                    # Fallback: обновляем весь список
+                    await load_favorite_documents()
+            else:
+                ui.notify('Ошибка при удалении из избранного', type='error')
+        else:
+            # На других страницах проверяем статус и переключаем
+            is_favorite = await client.is_document_in_favorites(document.document_id)
+            
+            if is_favorite:
+                # Удаляем из избранного
+                success = await client.remove_document_from_favorites(document.document_id)
+                if success:
+                    ui.notify(f'Документ "{document.label}" удален из избранного', type='info')
+                    # Обновляем кнопку
+                    button.props('icon=star_border')
+                    button.text = 'В избранное'
+                else:
+                    ui.notify('Ошибка при удалении из избранного', type='error')
+            else:
+                # Добавляем в избранное
+                success = await client.add_document_to_favorites(document.document_id)
+                if success:
+                    ui.notify(f'Документ "{document.label}" добавлен в избранное', type='positive')
+                    # Обновляем кнопку
+                    button.props('icon=star')
+                    button.text = 'В избранном'
+                else:
+                    ui.notify('Ошибка при добавлении в избранное', type='error')
+    except Exception as e:
+        logger.error(f'Ошибка при работе с избранным: {e}', exc_info=True)
+        ui.notify(f'Ошибка: {str(e)}', type='error')
+
+async def check_favorite_status(document: MayanDocument) -> bool:
+    """Проверяет, находится ли документ в избранном"""
+    try:
+        client = await get_mayan_client()
+        return await client.is_document_in_favorites(document.document_id)
+    except Exception as e:
+        logger.warning(f'Ошибка при проверке статуса избранного для документа {document.document_id}: {e}')
+        return False
+
+
+async def load_favorite_documents():
+    """Загружает избранные документы"""
+    global _favorites_container
+    
+    if not _favorites_container:
+        return
+    
+    # Проверяем подключение
+    if not await check_connection():
+        with _favorites_container:
+            ui.label('Нет подключения к серверу Mayan EDMS').classes('text-red-500 text-center py-8')
+            if _auth_error:
+                ui.label(f'Ошибка: {_auth_error}').classes('text-sm text-gray-500 text-center')
+            ui.label(f'Проверьте настройки подключения к серверу: {config.mayan_url}').classes('text-sm text-gray-500 text-center')
+        return
+    
+    try:
+        logger.info("Загружаем избранные документы...")
+        client = await get_mayan_client()
+        documents, total_count = await client.get_favorite_documents(page=1, page_size=100)
+        logger.info(f"Получено избранных документов: {len(documents)} из {total_count}")
+        
+        _favorites_container.clear()
+        
+        if not documents:
+            with _favorites_container:
+                ui.label('У вас нет избранных документов').classes('text-gray-500 text-center py-8')
+            return
+        
+        with _favorites_container:
+            # Создаем label для счетчика документов
+            count_label = ui.label(f'Избранные документы ({total_count})').classes('text-lg font-semibold mb-4')
+            
+            for document in documents:
+                # Передаем флаг, что это страница избранных, и счетчик
+                create_document_card(document, is_favorites_page=True, favorites_count_label=count_label)
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке избранных документов: {e}", exc_info=True)
+        _favorites_container.clear()
+        with _favorites_container:
+            ui.label(f'Ошибка при загрузке избранных документов: {str(e)}').classes('text-red-500 text-center py-8')
+
+# Добавить функцию favorites_content (после функции upload_content, после строки 1880):
+
+def favorites_content() -> None:
+    """Страница избранных документов"""
+    global _favorites_container
+    
+    logger.info("Открыта страница избранных документов")
+    
+    # Секция с избранными документами
+    with ui.row().classes('w-full mb-4'):
+        ui.label('Избранные документы').classes('text-lg font-semibold')
+        ui.button('Обновить', icon='refresh', on_click=load_favorite_documents).classes('ml-auto')
+    
+    _favorites_container = ui.column().classes('w-full')
+    # Загружаем избранные документы только после создания контейнера
+    ui.timer(0.1, load_favorite_documents, once=True)

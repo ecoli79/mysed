@@ -1,16 +1,3 @@
-# from nicegui import ui
-
-
-# def menu() -> None:
-#     ui.link('Мои задачи', '/').classes(replace='text-white')
-#     ui.link('Завершение задач', '/task_completion').classes(replace='text-white')
-#     #ui.link('Ознакомление с документами', '/document_review').classes(replace='text-white')
-#     ui.link('Документы Mayan EDMS', '/mayan_documents').classes(replace='text-white')
-#     ui.link('Запущенные мной процессы', '/my_processes').classes(replace='text-white')
-#     ui.link('Управление шаблонами процессов', '/process_templates').classes(replace='text-white')
-#     ui.link('Назначение задач', '/task-assignment').classes(replace='text-white')
-#     ui.link('Подписание документов', '/document_signing').classes('text-white hover:text-blue-200')
-
 from typing import List, Tuple
 import logging
 from nicegui import ui
@@ -33,8 +20,9 @@ def menu(user: UserSession) -> None:
         ('Запустить новый процесс', '/task-assignment', False, False),
         ('Завершение задач', '/task_completion', False, False),
         ('Документы Mayan EDMS', '/mayan_documents', False, False),
+        ('Избранные документы', '/mayan_documents_favorites', True, False), # True = подраздел
         ('Поиск документов', '/mayan_documents_search', True, False),  # True = подраздел
-        ('Загрузка документов', '/mayan_documents_upload', True, False),  # True = подраздел
+        ('Загрузка документов', '/mayan_documents_upload', True, False), 
         ('Запущенные мной процессы', '/my_processes', False, False),
         ('Подписание документов', '/document_signing', False, False),
         ('Управление шаблонами процессов', '/process_templates', False, True),  # Только для админов

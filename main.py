@@ -129,6 +129,20 @@ def mayan_documents_upload_page_handler() -> None:
         
         ui.timer(0.1, lambda: asyncio.create_task(load_upload_content()), once=True)
 
+# Страница избранных документов Mayan EDMS
+@ui.page('/mayan_documents_favorites')
+@require_auth
+def mayan_documents_favorites_page_handler() -> None:
+    """Обработчик страницы избранных документов Mayan EDMS"""
+    user = get_current_user()
+    logger.info('Открыли страницу избранных документов Mayan EDMS', extra={
+        'component': 'mayan_documents_favorites',
+        'version': '1.0.0',
+        'user': user.username
+    })
+    with theme.frame('Избранные документы'):
+        mayan_documents.favorites_content()
+
 # Страница только для администраторов
 @ui.page('/admin')
 @require_auth

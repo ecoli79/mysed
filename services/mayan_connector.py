@@ -490,7 +490,7 @@ class MayanClient:
                     datetime_created__gte: Optional[str] = None,
                     datetime_created__lte: Optional[str] = None,
                     cabinet_id: Optional[int] = None,
-                    user__id: Optional[int] = None) -> List[MayanDocument]:
+                    user__id: Optional[int] = None) -> tuple[List[MayanDocument], int]:
         """
         Получает список документов из Mayan EDMS
         
@@ -505,7 +505,7 @@ class MayanClient:
             user__id: ID пользователя для фильтрации
             
         Returns:
-            Список документов
+            Кортеж (список документов, общее количество)
         """
         endpoint = 'documents/'
         params = {
@@ -541,8 +541,9 @@ class MayanClient:
             
             data = response.json()
             documents = []
+            total_count = data.get('count', 0)  # Получаем общее количество
             
-            logger.info(f'Получено {len(data.get("results", []))} документов')
+            logger.info(f'Получено {len(data.get("results", []))} документов из {total_count}')
             
             for i, doc_data in enumerate(data.get('results', [])):
                 try:
@@ -652,17 +653,17 @@ class MayanClient:
                     documents.append(document)
                     logger.debug(f'Документ {i+1} создан успешно: {document}')
                 except Exception as e:
-                    logger.error(f'Ошибка при создании документа {i+1}: {e}')
-                    logger.error(f'Данные документа: {doc_data}')
-                    # Пропускаем проблемный документ, но продолжаем обработку остальных
+                    logger.warning(f'Ошибка при парсинге документа {i}: {e}')
                     continue
             
-            logger.info(f'Успешно создано {len(documents)} документов из {len(data.get("results", []))}')
-            return documents
+            return documents, total_count  # Возвращаем кортеж
             
         except httpx.HTTPError as e:
             logger.error(f'Ошибка при получении документов: {e}')
-            return []
+            return [], 0
+        except Exception as e:
+            logger.error(f'Неожиданная ошибка при получении документов: {e}')
+            return [], 0
     
     async def get_document(self, document_id: str) -> Optional[MayanDocument]:
         """
@@ -3543,6 +3544,325 @@ class MayanClient:
         except Exception as e:
             logger.error(f'Неожиданная ошибка при удалении документа {document_id}: {e}')
             return False
+
+    async def add_document_to_favorites(self, document_id: str) -> bool:
+        """
+        Добавляет документ в избранное (favorites)
+        
+        Args:
+            document_id: ID документа
+            
+        Returns:
+            True если добавление успешно, False иначе
+        """
+        endpoint = 'documents/favorites/'
+        
+        logger.info(f'Добавляем документ {document_id} в избранное')
+        
+        try:
+            # Проверяем, не находится ли документ уже в избранном
+            is_favorite = await self.is_document_in_favorites(document_id)
+            if is_favorite:
+                logger.info(f'Документ {document_id} уже находится в избранном, пропускаем добавление')
+                return True  # Возвращаем True, так как документ уже в избранном
+            
+            # Получаем информацию о документе для формирования полной структуры
+            document = await self.get_document(document_id)
+            if not document:
+                logger.error(f'Не удалось получить информацию о документе {document_id}')
+                return False
+            
+            # Формируем JSON согласно структуре API
+            payload = {
+                'document_id': document_id,
+                'document': {
+                    'label': document.label,
+                    'description': document.description or ''
+                }
+            }
+            
+            response = await self._make_request('POST', endpoint, json=payload)
+            response.raise_for_status()
+            logger.info(f'Документ {document_id} успешно добавлен в избранное')
+            return True
+        except httpx.HTTPError as e:
+            # Проверяем, не является ли ошибка конфликтом (документ уже в избранном)
+            if e.response and e.response.status_code == 400:
+                error_text = e.response.text
+                # Проверяем, не говорит ли ошибка о том, что документ уже в избранном
+                if 'already' in error_text.lower() or 'exists' in error_text.lower() or 'duplicate' in error_text.lower():
+                    logger.info(f'Документ {document_id} уже находится в избранном (ошибка 400)')
+                    return True  # Считаем успешным, так как документ уже в избранном
+            
+            logger.error(f'Ошибка при добавлении документа {document_id} в избранное: {e}')
+            if e.response:
+                logger.error(f'Ответ сервера: {e.response.text}')
+                # Попробуем понять, что именно требует API
+                try:
+                    error_data = e.response.json()
+                    logger.error(f'Детали ошибки: {json.dumps(error_data, indent=2, ensure_ascii=False)}')
+                except:
+                    pass
+            return False
+        except Exception as e:
+            logger.error(f'Неожиданная ошибка при добавлении документа {document_id} в избранное: {e}')
+            return False
+
+    async def remove_document_from_favorites(self, document_id: str) -> bool:
+        """
+        Удаляет документ из избранного (favorites)
+        
+        Args:
+            document_id: ID документа
+            
+        Returns:
+            True если удаление успешно, False иначе
+        """
+        logger.info(f'Удаляем документ {document_id} из избранного')
+        
+        # Пробуем несколько способов удаления
+        # Способ 1: Прямое удаление по document_id
+        endpoint1 = f'documents/favorites/{document_id}/'
+        
+        try:
+            response = await self._make_request('DELETE', endpoint1)
+            response.raise_for_status()
+            logger.info(f'Документ {document_id} успешно удален из избранного (способ 1)')
+            return True
+        except httpx.HTTPError as e:
+            if e.response and e.response.status_code == 404:
+                logger.debug(f'Способ 1 не сработал (404), пробуем способ 2...')
+            else:
+                logger.warning(f'Ошибка при удалении через способ 1: {e}')
+        
+        # Способ 2: Получаем список избранных, находим ID записи FavoriteDocument и удаляем по нему
+        try:
+            # Получаем список избранных документов
+            favorites_response = await self._make_request('GET', 'documents/favorites/', params={'page': 1, 'page_size': 100})
+            favorites_response.raise_for_status()
+            favorites_data = favorites_response.json()
+            
+            # Ищем запись FavoriteDocument для данного document_id
+            favorite_id = None
+            for favorite_item in favorites_data.get('results', []):
+                # Проверяем разные варианты структуры ответа
+                doc_data = favorite_item.get('document') if 'document' in favorite_item else favorite_item
+                if doc_data and str(doc_data.get('id')) == str(document_id):
+                    # Нашли запись FavoriteDocument, используем её ID
+                    favorite_id = favorite_item.get('id') or favorite_item.get('pk')
+                    logger.info(f'Найден ID записи FavoriteDocument: {favorite_id} для документа {document_id}')
+                    break
+            
+            if favorite_id:
+                # Удаляем по ID записи FavoriteDocument
+                endpoint2 = f'documents/favorites/{favorite_id}/'
+                response = await self._make_request('DELETE', endpoint2)
+                response.raise_for_status()
+                logger.info(f'Документ {document_id} успешно удален из избранного (способ 2, favorite_id={favorite_id})')
+                return True
+            else:
+                logger.warning(f'Не найдена запись FavoriteDocument для документа {document_id}')
+                # Если не нашли, возможно документ уже не в избранном
+                return True  # Считаем успешным
+        except httpx.HTTPError as e:
+            logger.error(f'Ошибка при удалении документа {document_id} из избранного (способ 2): {e}')
+            if e.response:
+                logger.error(f'Ответ сервера: {e.response.text}')
+            return False
+        except Exception as e:
+            logger.error(f'Неожиданная ошибка при удалении документа {document_id} из избранного: {e}')
+            return False
+
+    async def is_document_in_favorites(self, document_id: str) -> bool:
+        """
+        Проверяет, находится ли документ в избранном
+        
+        Args:
+            document_id: ID документа
+            
+        Returns:
+            True если документ в избранном, False иначе
+        """
+        logger.info(f'Проверяем, находится ли документ {document_id} в избранном')
+        
+        # Используем более надежный способ - проверяем через список избранных документов
+        try:
+            # Получаем список избранных документов
+            favorites_response = await self._make_request('GET', 'documents/favorites/', params={'page': 1, 'page_size': 100})
+            favorites_response.raise_for_status()
+            favorites_data = favorites_response.json()
+            
+            # Проверяем, есть ли документ в списке избранных
+            for favorite_item in favorites_data.get('results', []):
+                doc_data = favorite_item.get('document') if 'document' in favorite_item else favorite_item
+                if doc_data and str(doc_data.get('id')) == str(document_id):
+                    logger.info(f'Документ {document_id} найден в избранном')
+                    return True
+            
+            logger.info(f'Документ {document_id} не найден в избранном')
+            return False
+        except httpx.HTTPError as e:
+            logger.error(f'Ошибка при проверке избранного для документа {document_id}: {e}')
+            if e.response:
+                logger.error(f'Ответ сервера: {e.response.text}')
+            return False
+        except Exception as e:
+            logger.error(f'Неожиданная ошибка при проверке избранного для документа {document_id}: {e}')
+            return False
+
+    async def get_favorite_documents(self, page: int = 1, page_size: int = 20) -> tuple[List[MayanDocument], int]:
+        """
+        Получает список документов из избранного
+        
+        Args:
+            page: Номер страницы
+            page_size: Размер страницы
+            
+        Returns:
+            Кортеж (список документов, общее количество)
+        """
+        endpoint = 'documents/favorites/'
+        params = {
+            'page': page,
+            'page_size': page_size,
+            'ordering': '-datetime_created'
+        }
+        
+        logger.info(f'Получаем избранные документы: страница {page}, размер {page_size}')
+        
+        try:
+            response = await self._make_request('GET', endpoint, params=params)
+            response.raise_for_status()
+            
+            data = response.json()
+            documents = []
+            total_count = data.get('count', 0)
+            
+            logger.info(f'Получено {len(data.get("results", []))} избранных документов из {total_count}')
+            logger.debug(f'Структура ответа favorites API: {json.dumps(data.get("results", [])[:1] if data.get("results") else [], indent=2, ensure_ascii=False)}')
+            
+            # Парсим документы из результатов
+            for i, favorite_item in enumerate(data.get('results', [])):
+                try:
+                    # В ответе favorites API может быть структура с полем document
+                    # или напрямую данные документа
+                    if 'document' in favorite_item:
+                        doc_data = favorite_item['document']
+                        logger.debug(f'Избранный документ {i+1}: найден в поле "document"')
+                    else:
+                        doc_data = favorite_item
+                        logger.debug(f'Избранный документ {i+1}: данные напрямую в элементе')
+                    
+                    # Используем тот же код парсинга, что и в get_documents
+                    # Получаем file_latest из API
+                    file_latest_data = doc_data.get('file_latest', {})
+                    file_latest_filename = file_latest_data.get('filename', '')
+                    
+                    # Проверяем, не является ли это файлом подписи или метаданных
+                    is_signature_file = (file_latest_filename.endswith('.p7s') or 
+                                       'signature_metadata_' in file_latest_filename)
+                    
+                    # Если это файл подписи/метаданных, получаем основной файл из всех файлов документа
+                    if is_signature_file:
+                        logger.debug(f'Документ {doc_data["id"]}: file_latest является файлом подписи/метаданных, ищем основной файл')
+                        
+                        try:
+                            # Получаем все файлы документа напрямую
+                            files_response = await self._make_request('GET', f'documents/{doc_data["id"]}/files/', params={'page': 1, 'page_size': 100})
+                            files_response.raise_for_status()
+                            files_data = files_response.json()
+                            all_files = files_data.get('results', [])
+                            
+                            # Фильтруем файлы: исключаем подписи и метаданные
+                            main_files = []
+                            for file_info in all_files:
+                                filename = file_info.get('filename', '')
+                                if filename.endswith('.p7s') or 'signature_metadata_' in filename:
+                                    continue
+                                main_files.append(file_info)
+                            
+                            if main_files:
+                                # Сортируем по приоритету
+                                def get_sort_key(file_info):
+                                    mimetype = file_info.get('mimetype') or ''
+                                    if mimetype:
+                                        mimetype = str(mimetype).lower()
+                                    else:
+                                        mimetype = ''
+                                    
+                                    priority = 0
+                                    if 'pdf' in mimetype:
+                                        priority = 3
+                                    elif 'image' in mimetype:
+                                        priority = 2
+                                    elif 'office' in mimetype or 'word' in mimetype or 'excel' in mimetype:
+                                        priority = 2
+                                    else:
+                                        priority = 1
+                                    
+                                    file_id = file_info.get('id', 0)
+                                    if isinstance(file_id, str):
+                                        try:
+                                            file_id = int(file_id)
+                                        except:
+                                            file_id = 0
+                                    return (-priority, file_id)
+                                
+                                main_files_sorted = sorted(main_files, key=get_sort_key)
+                                main_file = main_files_sorted[0]
+                                
+                                file_latest_id = str(main_file.get('id', ''))
+                                file_latest_filename = main_file.get('filename', '')
+                                file_latest_mimetype = main_file.get('mimetype', '')
+                                file_latest_size = main_file.get('size', 0)
+                            else:
+                                file_latest_id = file_latest_data.get('id', '')
+                                file_latest_mimetype = file_latest_data.get('mimetype', '')
+                                file_latest_size = file_latest_data.get('size', 0)
+                        except Exception as e:
+                            logger.warning(f'Ошибка при получении основных файлов документа {doc_data["id"]}: {e}')
+                            file_latest_id = file_latest_data.get('id', '')
+                            file_latest_filename = file_latest_data.get('filename', '')
+                            file_latest_mimetype = file_latest_data.get('mimetype', '')
+                            file_latest_size = file_latest_data.get('size', 0)
+                    else:
+                        # Если это не файл подписи/метаданных, используем file_latest как есть
+                        file_latest_id = file_latest_data.get('id', '')
+                        file_latest_filename = file_latest_data.get('filename', '')
+                        file_latest_mimetype = file_latest_data.get('mimetype', '')
+                        file_latest_size = file_latest_data.get('size', 0)
+                    
+                    document = MayanDocument(
+                        document_id=doc_data['id'],
+                        label=doc_data['label'],
+                        description=doc_data.get('description', ''),
+                        file_latest_id=file_latest_id,
+                        file_latest_filename=file_latest_filename,
+                        file_latest_mimetype=file_latest_mimetype,
+                        file_latest_size=file_latest_size,
+                        datetime_created=doc_data.get('datetime_created', ''),
+                        datetime_modified=doc_data.get('datetime_modified', '')
+                    )
+                    documents.append(document)
+                    logger.debug(f'Избранный документ {i+1} создан успешно: {document.label}')
+                except Exception as e:
+                    logger.warning(f'Ошибка при парсинге избранного документа {i}: {e}')
+                    import traceback
+                    logger.debug(f'Traceback: {traceback.format_exc()}')
+                    continue
+            
+            logger.info(f'Успешно создано {len(documents)} избранных документов из {total_count}')
+            return documents, total_count
+        except httpx.HTTPError as e:
+            logger.error(f'Ошибка при получении избранных документов: {e}')
+            if e.response:
+                logger.error(f'Ответ сервера: {e.response.text}')
+            return [], 0
+        except Exception as e:
+            logger.error(f'Неожиданная ошибка при получении избранных документов: {e}')
+            import traceback
+            logger.error(f'Traceback: {traceback.format_exc()}')
+            return [], 0
 
 
 async def get_mayan_client() -> MayanClient:
