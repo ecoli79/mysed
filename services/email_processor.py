@@ -16,34 +16,56 @@ class EmailProcessor:
     def __init__(self, mayan_client: MayanClient):
         self.mayan_client = mayan_client
         self.incoming_document_type_id: Optional[int] = None
-        self._init_document_type()
+        self.incoming_cabinet_id: Optional[int] = None
+        # Инициализация типа документа и кабинета будет выполнена асинхронно при первом использовании
     
-    def _init_document_type(self):
-        """Инициализирует или создает тип документа для входящих вложений"""
+    async def _init_document_type_and_cabinet(self):
+        """Инициализирует тип документа 'Входящие' и кабинет 'Входящие письма'"""
+        if self.incoming_document_type_id is not None and self.incoming_cabinet_id is not None:
+            return  # Уже инициализировано
+        
         try:
             # Получаем список типов документов
-            document_types = self.mayan_client.get_document_types()
+            document_types = await self.mayan_client.get_document_types()
             
-            # Ищем тип "Входящее вложение" или "Входящий документ"
-            incoming_type_name = getattr(config, 'mayan_incoming_document_type', 'Входящее вложение')
+            # Ищем тип документа из конфигурации (по умолчанию "Входящие")
+            incoming_type_name = config.mayan_incoming_document_type
             
             for doc_type in document_types:
                 if doc_type.get('label') == incoming_type_name:
                     self.incoming_document_type_id = doc_type['id']
                     logger.info(f"Найден тип документа для входящих: {incoming_type_name} (ID: {self.incoming_document_type_id})")
-                    return
+                    break
             
-            # Если тип не найден, используем первый доступный или создаем новый
-            if document_types:
-                self.incoming_document_type_id = document_types[0]['id']
-                logger.warning(f"Тип '{incoming_type_name}' не найден, используем '{document_types[0]['label']}' (ID: {self.incoming_document_type_id})")
-            else:
-                logger.error("Не найдено ни одного типа документа в Mayan EDMS")
+            # Если тип не найден, используем первый доступный
+            if self.incoming_document_type_id is None:
+                if document_types:
+                    self.incoming_document_type_id = document_types[0]['id']
+                    logger.warning(f"Тип '{incoming_type_name}' не найден, используем '{document_types[0]['label']}' (ID: {self.incoming_document_type_id})")
+                else:
+                    logger.error("Не найдено ни одного типа документа в Mayan EDMS")
+            
+            # Получаем список кабинетов
+            cabinets = await self.mayan_client.get_cabinets()
+            
+            # Ищем кабинет из конфигурации (по умолчанию "Входящие письма")
+            incoming_cabinet_name = config.mayan_incoming_cabinet
+            
+            for cabinet in cabinets:
+                if cabinet.get('label') == incoming_cabinet_name:
+                    self.incoming_cabinet_id = cabinet['id']
+                    logger.info(f"Найден кабинет для входящих: {incoming_cabinet_name} (ID: {self.incoming_cabinet_id})")
+                    break
+            
+            # Если кабинет не найден, логируем предупреждение
+            if self.incoming_cabinet_id is None:
+                logger.warning(f"Кабинет '{incoming_cabinet_name}' не найден. Документы будут созданы без кабинета.")
+                logger.info(f"Доступные кабинеты: {[c.get('label') for c in cabinets]}")
                 
         except Exception as e:
-            logger.error(f"Ошибка при инициализации типа документа: {e}")
+            logger.error(f"Ошибка при инициализации типа документа и кабинета: {e}")
     
-    def process_email(self, email: IncomingEmail) -> Dict[str, Any]:
+    async def process_email(self, email: IncomingEmail) -> Dict[str, Any]:
         """
         Обрабатывает письмо и сохраняет вложения в Mayan EDMS
         
@@ -66,6 +88,10 @@ class EmailProcessor:
             'errors': []
         }
         
+        # Инициализируем тип документа и кабинет при первом использовании
+        if self.incoming_document_type_id is None or self.incoming_cabinet_id is None:
+            await self._init_document_type_and_cabinet()
+        
         try:
             # Проверяем наличие вложений
             if not email.attachments or len(email.attachments) == 0:
@@ -78,7 +104,7 @@ class EmailProcessor:
             # Обрабатываем каждое вложение как отдельный документ
             for idx, attachment in enumerate(email.attachments):
                 try:
-                    attachment_result = self._process_attachment(
+                    attachment_result = await self._process_attachment(
                         attachment=attachment,
                         email_metadata={
                             'from': email.from_address,
@@ -124,7 +150,7 @@ class EmailProcessor:
             result['errors'].append(error_msg)
             return result
     
-    def _process_attachment(
+    async def _process_attachment(
         self, 
         attachment: Dict[str, Any], 
         email_metadata: Dict[str, Any]
@@ -169,6 +195,15 @@ class EmailProcessor:
                 result['error'] = 'Вложение не содержит данных'
                 return result
             
+            # Проверяем дубликаты перед созданием документа
+            message_id = email_metadata.get('message_id', '')
+            if await self._check_duplicate(message_id, filename):
+                logger.warning(
+                    f"Дубликат обнаружен: вложение '{filename}' из письма {message_id} уже обработано. Пропускаем."
+                )
+                result['error'] = 'Дубликат: документ уже существует'
+                return result
+            
             # Формируем label для документа (Mayan автоматически присвоит номер)
             # Можно использовать имя файла или тему письма
             label = filename
@@ -178,13 +213,15 @@ class EmailProcessor:
             
             # Создаем документ в Mayan EDMS
             # Mayan автоматически присвоит входящий номер согласно настройкам типа документа
-            document_result = self.mayan_client.create_document_with_file(
+            # Документ будет иметь тип "Входящие" и попадет в кабинет "Входящие письма"
+            document_result = await self.mayan_client.create_document_with_file(
                 label=label,
                 description=description,
                 filename=filename,
                 file_content=file_content,
                 mimetype=mimetype,
                 document_type_id=self.incoming_document_type_id,
+                cabinet_id=self.incoming_cabinet_id,
                 language='rus'
             )
             
@@ -193,7 +230,7 @@ class EmailProcessor:
                 
                 # Извлекаем входящий номер из label документа
                 # (Mayan может изменить label при автоматической нумерации)
-                registered_number = self._extract_registered_number(document_id, label)
+                registered_number = await self._extract_registered_number(document_id, label)
                 
                 result['success'] = True
                 result['document_id'] = str(document_id)
@@ -249,7 +286,7 @@ class EmailProcessor:
                 f"Обработано: {datetime.now().isoformat()}"
             )
     
-    def _extract_registered_number(self, document_id: str, original_label: str) -> Optional[str]:
+    async def _extract_registered_number(self, document_id: str, original_label: str) -> Optional[str]:
         """
         Извлекает входящий номер из документа Mayan EDMS
         
@@ -262,7 +299,7 @@ class EmailProcessor:
         """
         try:
             # Получаем актуальную информацию о документе
-            document = self.mayan_client.get_document(document_id)
+            document = await self.mayan_client.get_document(document_id)
             if document:
                 # Mayan может изменить label при автоматической нумерации
                 # Номер может быть в формате: "IN-2024-0001 - filename.pdf"
@@ -291,3 +328,86 @@ class EmailProcessor:
             logger.warning(f"Не удалось извлечь номер из документа {document_id}: {e}")
         
         return None
+    
+    async def _check_duplicate(self, message_id: str, filename: str) -> bool:
+        """
+        Проверяет, существует ли уже документ с таким же message_id и filename
+        
+        Args:
+            message_id: Message-ID письма
+            filename: Имя файла вложения
+        
+        Returns:
+            True если дубликат найден, False иначе
+        """
+        if not message_id or not filename:
+            return False
+        
+        try:
+            # Ищем документы в кабинете "Входящие письма" за последние 90 дней
+            # (чтобы не проверять все документы)
+            from datetime import timedelta
+            date_from = (datetime.now() - timedelta(days=90)).isoformat()
+            
+            # Получаем документы из кабинета
+            documents = await self.mayan_client.get_documents(
+                page=1,
+                page_size=100,
+                cabinet_id=self.incoming_cabinet_id,
+                datetime_created__gte=date_from
+            )
+            
+            # Проверяем каждый документ
+            for doc in documents:
+                try:
+                    # Парсим description (JSON)
+                    if doc.description:
+                        import json
+                        metadata = json.loads(doc.description)
+                        
+                        # Проверяем совпадение message_id и filename
+                        if (metadata.get('email_message_id') == message_id and 
+                            metadata.get('attachment_filename') == filename):
+                            logger.debug(
+                                f"Найден дубликат: документ {doc.id} "
+                                f"(message_id: {message_id}, filename: {filename})"
+                            )
+                            return True
+                except (json.JSONDecodeError, KeyError, AttributeError):
+                    # Если не удалось распарсить, пропускаем
+                    continue
+            
+            # Если не нашли в первой странице, проверяем следующие страницы
+            # (но ограничиваемся разумным количеством)
+            for page in range(2, 6):  # Проверяем до 5 страниц (500 документов)
+                documents = await self.mayan_client.get_documents(
+                    page=page,
+                    page_size=100,
+                    cabinet_id=self.incoming_cabinet_id,
+                    datetime_created__gte=date_from
+                )
+                
+                if not documents:
+                    break
+                
+                for doc in documents:
+                    try:
+                        if doc.description:
+                            import json
+                            metadata = json.loads(doc.description)
+                            if (metadata.get('email_message_id') == message_id and 
+                                metadata.get('attachment_filename') == filename):
+                                logger.debug(
+                                    f"Найден дубликат: документ {doc.id} "
+                                    f"(message_id: {message_id}, filename: {filename})"
+                                )
+                                return True
+                    except (json.JSONDecodeError, KeyError, AttributeError):
+                        continue
+            
+            return False
+            
+        except Exception as e:
+            logger.warning(f"Ошибка при проверке дубликатов: {e}")
+            # В случае ошибки не блокируем создание документа
+            return False

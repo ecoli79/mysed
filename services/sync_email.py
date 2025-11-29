@@ -1,7 +1,7 @@
 import sys
 import os
+import asyncio
 from pathlib import Path
-from services import email_
 
 # Добавляем путь к проекту
 project_path = Path(__file__).parent
@@ -24,13 +24,15 @@ setup_logging()
 logger = get_logger(__name__)
 
 
-def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None) -> dict:
+async def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None, include_read: bool = False) -> dict:
     """
     Синхронизирует входящие письма
     
     Args:
         dry_run: Если True, только проверяет подключение, не обрабатывает письма
         max_emails: Максимальное количество писем для обработки за один запуск
+        include_read: Если True, обрабатывает все письма (включая прочитанные), 
+                     иначе только непрочитанные
     
     Returns:
         Словарь с результатами синхронизации
@@ -72,7 +74,7 @@ def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None) -> dict
         email_validator = EmailValidator.create_default()
         
         # Mayan клиент
-        mayan_client = MayanClient.create_with_user_credentials()
+        mayan_client = await MayanClient.create_with_user_credentials()
         
         # Обработчик писем
         email_processor = EmailProcessor(mayan_client)
@@ -84,7 +86,7 @@ def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None) -> dict
             logger.info("Тестовый режим: проверка подключений...")
             
             # Проверяем подключение к почтовому серверу
-            if email_client.test_connection():
+            if await email_client.test_connection():
                 logger.info("✓ Подключение к почтовому серверу успешно")
             else:
                 logger.error("✗ Не удалось подключиться к почтовому серверу")
@@ -92,7 +94,7 @@ def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None) -> dict
                 return result
             
             # Проверяем подключение к Mayan EDMS
-            if mayan_client.test_connection():
+            if await mayan_client.test_connection():
                 logger.info("✓ Подключение к Mayan EDMS успешно")
             else:
                 logger.error("✗ Не удалось подключиться к Mayan EDMS")
@@ -103,17 +105,26 @@ def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None) -> dict
             result['success'] = True
             return result
         
-        # Получаем новые письма
-        logger.info("Получаем новые письма...")
-        emails = email_client.fetch_unread_emails(max_count=max_emails)
+        # Получаем письма
+        if include_read:
+            logger.info(f"Получаем все письма (включая прочитанные, максимум {max_emails or 'все'})...")
+            emails = await email_client.fetch_emails(max_count=max_emails, unread_only=False)
+            logger.info(f"Найдено {len(emails)} писем (включая прочитанные)")
+        else:
+            logger.info("Получаем непрочитанные письма...")
+            emails = await email_client.fetch_unread_emails(max_count=max_emails)
+            logger.info(f"Найдено {len(emails)} непрочитанных писем")
+        
         result['checked'] = len(emails)
         
-        logger.info(f"Найдено {len(emails)} непрочитанных писем")
-        
         if not emails:
-            logger.info("Новых писем не найдено")
+            logger.info("Писем не найдено")
             result['success'] = True
             return result
+        
+        # Показываем статистику по отправителям
+        logger.info(f"Начинаем обработку {len(emails)} писем...")
+        logger.info(f"Разрешенные отправители: {', '.join(email_validator.allowed_senders) if email_validator.allowed_senders else 'все'}")
         
         # Обрабатываем каждое письмо
         for email in emails:
@@ -123,14 +134,33 @@ def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None) -> dict
                 logger.info(f"  Тема: {email.subject}")
                 
                 # Проверяем отправителя
-                if not email_validator.is_allowed(email.from_address):
-                    logger.warning(f"Письмо от неразрешенного отправителя: {email.from_address}")
-                    # Помечаем как прочитанное, но не обрабатываем
-                    email_client.mark_as_read(email.message_id)
+                # Извлекаем чистый email для логирования
+                clean_email = email_validator.extract_email_address(email.from_address)
+                logger.info(f"  Исходный адрес отправителя: '{email.from_address}'")
+                logger.info(f"  Извлеченный email: '{clean_email}'")
+                logger.info(f"  Разрешенные паттерны: {email_validator.allowed_senders}")
+                
+                is_allowed = email_validator.is_allowed(email.from_address)
+                logger.info(f"  Результат проверки: {'РАЗРЕШЕН' if is_allowed else 'ЗАБЛОКИРОВАН'}")
+                
+                if not is_allowed:
+                    logger.warning(
+                        f"Письмо от неразрешенного отправителя: {email.from_address} "
+                        f"(извлечен: {clean_email})"
+                    )
+                    # Помечаем как прочитанное, но не обрабатываем (только если это непрочитанное письмо)
+                    if not include_read:
+                        await email_client.mark_as_read(email.message_id)
                     continue
                 
+                logger.info(
+                    f"✓ Отправитель разрешен: {email.from_address} "
+                    f"(извлечен: {clean_email}), обрабатываем письмо..."
+                )
+                logger.info(f"  Вложений: {len(email.attachments)}")
+                
                 # Обрабатываем письмо (сохраняем вложения)
-                process_result = email_processor.process_email(email)
+                process_result = await email_processor.process_email(email)
                 
                 if process_result['success']:
                     result['processed'] += 1
@@ -140,9 +170,12 @@ def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None) -> dict
                         f"✓ Письмо обработано успешно. "
                         f"Сохранено вложений: {len(process_result['processed_attachments'])}"
                     )
+                    if process_result.get('registered_numbers'):
+                        logger.info(f"  Присвоены номера: {', '.join(process_result['registered_numbers'])}")
                     
-                    # Помечаем письмо как прочитанное
-                    email_client.mark_as_read(email.message_id)
+                    # Помечаем письмо как прочитанное (только если это непрочитанное письмо)
+                    if not include_read:
+                        await email_client.mark_as_read(email.message_id)
                 else:
                     error_msg = f"Ошибка обработки письма: {', '.join(process_result['errors'])}"
                     logger.error(error_msg)
@@ -187,11 +220,20 @@ def main():
         default=None,
         help='Максимальное количество писем для обработки'
     )
+    parser.add_argument(
+        '--include-read',
+        action='store_true',
+        help='Обрабатывать все письма, включая прочитанные'
+    )
     
     args = parser.parse_args()
     
     try:
-        result = sync_emails(dry_run=args.dry_run, max_emails=args.max_emails)
+        result = asyncio.run(sync_emails(
+            dry_run=args.dry_run, 
+            max_emails=args.max_emails,
+            include_read=args.include_read
+        ))
         
         if result['success']:
             sys.exit(0)

@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 _tasks_container: Optional[ui.column] = None
 _completed_tasks_container: Optional[ui.column] = None
 _details_container: Optional[ui.column] = None
-_task_details_sidebar: Optional[ui.column] = None
-_task_details_column: Optional[ui.column] = None  # Добавляем переменную для контейнера деталей
+#_task_details_sidebar: Optional[ui.column] = None
+#_task_details_column: Optional[ui.column] = None  # Добавляем переменную для контейнера деталей
 _uploaded_files_container: Optional[ui.column] = None
 _uploaded_files: List[Dict[str, Any]] = []
 _tabs: Optional[ui.tabs] = None  # Добавляем ссылку на табы
@@ -163,47 +163,30 @@ async def open_task_by_id(task_id: str):
 
 def create_active_tasks_section():
     """Создает секцию с активными задачами"""
-    global _tasks_container, _task_details_sidebar, _task_details_column, _tasks_header_container
+    global _tasks_container, _tasks_header_container
     
     ui.label('Мои активные задачи').classes('text-xl font-semibold mb-4')
     
-    # Создаем горизонтальный макет с задачами слева и деталями справа
-    with ui.row().classes('w-full gap-4'):
-        # Левая колонка с задачами
-        with ui.column().classes('flex-1'):
-            with ui.card().classes('p-6 w-full'):
-                # Кнопка обновления
-                ui.button(
-                    'Обновить задачи',
-                    icon='refresh',
-                    on_click=lambda: load_active_tasks(_tasks_header_container)
-                ).classes('mb-4 bg-blue-500 text-white')
-                
-                # Контейнер для заголовка с количеством задач
-                _tasks_header_container = ui.column().classes('w-full mb-4')
-                
-                # Контейнер для задач
-                _tasks_container = ui.column().classes('w-full')
-                
-                # Загружаем задачи при открытии страницы
-                async def init_tasks():
-                    await load_active_tasks(_tasks_header_container)
-                
-                ui.timer(0.1, lambda: init_tasks(), once=True)
+    # Создаем контейнер для задач
+    with ui.card().classes('p-6 w-full'):
+        # Кнопка обновления
+        ui.button(
+            'Обновить задачи',
+            icon='refresh',
+            on_click=lambda: load_active_tasks(_tasks_header_container)
+        ).classes('mb-4 bg-blue-500 text-white')
         
-        # Правая колонка с деталями задачи (скрыта по умолчанию)
-        _task_details_column = ui.column().classes('w-1/3')
-        with _task_details_column:
-            with ui.card().classes('p-4 h-full'):
-                ui.label('Детали задачи').classes('text-lg font-semibold mb-4')
-                _task_details_sidebar = ui.column().classes('w-full')
-                
-                # Показываем сообщение по умолчанию
-                with _task_details_sidebar:
-                    ui.label('Выберите задачу для просмотра деталей').classes('text-gray-500 text-center')
+        # Контейнер для заголовка с количеством задач
+        _tasks_header_container = ui.column().classes('w-full mb-4')
         
-        # Скрываем блок деталей по умолчанию
-        _task_details_column.set_visibility(False)
+        # Контейнер для задач
+        _tasks_container = ui.column().classes('w-full')
+        
+        # Загружаем задачи при открытии страницы
+        async def init_tasks():
+            await load_active_tasks(_tasks_header_container)
+        
+        ui.timer(0.1, lambda: init_tasks(), once=True)
 
 async def load_active_tasks(header_container=None, target_task_id: Optional[str] = None):
     """Загружает и отображает активные задачи пользователя"""
@@ -451,6 +434,7 @@ async def create_task_card_with_progress(task):
         
         # Сохраняем ссылку на карточку для обновления стилей
         indicator_row = None
+        details_container = None  # Контейнер для деталей задачи
         
         # ОБРАТИТЕ ВНИМАНИЕ: оборачиваем содержимое в with card:
         with card:
@@ -507,12 +491,17 @@ async def create_task_card_with_progress(task):
                         on_click=lambda t=task: show_task_details(t)
                     ).classes('bg-blue-500 text-white')
             
-        # Сохраняем ссылку на карточку и индикатор
+            # Контейнер для деталей задачи (скрыт по умолчанию)
+            details_container = ui.column().classes('w-full mt-4')
+            details_container.set_visibility(False)
+            
+        # Сохраняем ссылку на карточку, индикатор и контейнер деталей
         _task_cards[task_id_str] = {
             'card': card,
             'indicator': indicator_row,
             'task_id': task_id_str,
-            'process_id': process_id_str
+            'process_id': process_id_str,
+            'details_container': details_container
         }
 
 def create_task_card(task):
@@ -832,11 +821,11 @@ def create_completed_task_card(task):
                             on_click=lambda t=task: show_details(t)
                         ).classes('bg-blue-500 text-white text-xs')
                         
-                        ui.button(
-                            'Просмотр результатов',
-                            icon='folder_open',
-                            on_click=lambda t=task: show_task_results(t)
-                        ).classes('bg-green-500 text-white text-xs')
+                        # ui.button(
+                        #     'Просмотр результатов',
+                        #     icon='folder_open',
+                        #     on_click=lambda t=task: show_task_results(t)
+                        # ).classes('bg-green-500 text-white text-xs')
                 
                 with ui.column().classes('items-end'):
                     ui.label(f'ID: {task.id}').classes('text-xs text-gray-500 font-mono')
@@ -877,109 +866,246 @@ async def show_completed_task_details_in_tab(task):
                 # Если историческая задача не найдена, попробуем получить как активную
                 task_details = await camunda_client.get_task_by_id(task.id)
             
+            # ИСПРАВЛЕНИЕ: Если задача не найдена в Camunda, используем данные из объекта task
             if not task_details:
-                ui.label(f'Задача {task.id} не найдена').classes('text-red-600')
-                ui.label('Возможные причины:').classes('text-sm text-gray-600 mt-2')
-                ui.label('• Задача была удалена из истории').classes('text-sm text-gray-600')
-                ui.label('• Неправильный ID задачи').classes('text-sm text-gray-600')
-                return
+                logger.warning(f"Задача {task.id} не найдена в Camunda, используем данные из объекта задачи")
+                # Используем данные из объекта task (CamundaHistoryTask)
+                task_details = task
             
-            # Проверяем, является ли это частью multi-instance процесса
-            # Получаем все задачи для этого процесса
-            try:
-                user = get_current_user()
-                assignee = user.username if user else None
-                all_process_tasks = await camunda_client.get_completed_tasks_grouped(assignee=assignee)
-                grouped_task = None
-                
-                # Ищем группированную задачу для этого процесса
-                for gt in all_process_tasks:
-                    if isinstance(gt, GroupedHistoryTask) and gt.process_instance_id == task_details.process_instance_id:
-                        grouped_task = gt
-                        break
-                
-                if grouped_task:
-                    # Если нашли группированную задачу, показываем её детали
-                    show_grouped_task_details_in_tab(grouped_task)
-                    return
-                    
-            except Exception as e:
-                logger.warning(f"Не удалось проверить группировку для задачи {task.id}: {e}")
+            # Проверяем, является ли это задачей подписания документа
+            is_signing_task = False
+            if hasattr(task_details, 'name') and task_details.name == "Подписать документ":
+                is_signing_task = True
+            elif hasattr(task, 'name') and task.name == "Подписать документ":
+                is_signing_task = True
             
-            # Основная информация о задаче (обычная задача) - УЛУЧШЕННАЯ ВЕРСИЯ
+            # Основная информация о задаче - только нужные поля
             with ui.card().classes('p-4 bg-green-50 mb-4'):
                 ui.label('Информация о завершенной задаче').classes('text-lg font-semibold mb-3')
                 
-                # Добавляем иконку для обычной задачи
-                with ui.row().classes('items-center gap-2 mb-2'):
-                    ui.icon('person').classes('text-green-600')
-                    ui.label('Обычная задача').classes('text-sm font-medium text-green-600')
+                # Инициатор
+                if hasattr(task_details, 'assignee') and task_details.assignee:
+                    executor_display_name = get_user_display_name(task_details.assignee)
+                    ui.label(f'Инициатор: {executor_display_name}').classes('text-sm mb-2')
                 
-                ui.label(f'Название: {task_details.name}').classes('text-sm mb-2')
-                ui.label(f'ID задачи: {task_details.id}').classes('text-sm mb-2')
-                ui.label(f'ID процесса: {task_details.process_instance_id}').classes('text-sm mb-2')
-                executor_display_name = get_user_display_name(task_details.assignee)
-                ui.label(f'Исполнитель: {executor_display_name}').classes('text-sm mb-2')
-                ui.label(f'Создана: {task_details.start_time}').classes('text-sm mb-2')
+                # Создана
+                if hasattr(task_details, 'start_time') and task_details.start_time:
+                    formatted_start = format_date_russian(task_details.start_time)
+                    ui.label(f'Создана: {formatted_start}').classes('text-sm mb-2')
+                elif hasattr(task_details, 'created') and task_details.created:
+                    formatted_start = format_date_russian(task_details.created)
+                    ui.label(f'Создана: {formatted_start}').classes('text-sm mb-2')
                 
+                # Завершена
                 if hasattr(task_details, 'end_time') and task_details.end_time:
-                    ui.label(f'Завершена: {task_details.end_time}').classes('text-sm mb-2')
+                    formatted_end = format_date_russian(task_details.end_time)
+                    ui.label(f'Завершена: {formatted_end}').classes('text-sm mb-2')
                 
-                # Добавляем длительность выполнения
+                # Длительность
                 if hasattr(task_details, 'duration') and task_details.duration:
                     duration_sec = task_details.duration // 1000
                     duration_formatted = f'{duration_sec // 60} мин {duration_sec % 60} сек'
                     ui.label(f'Длительность: {duration_formatted}').classes('text-sm mb-2')
                 
-                if hasattr(task_details, 'priority'):
-                    ui.label(f'Приоритет: {task_details.priority}').classes('text-sm mb-2')
-                
+                # Статус
                 ui.label(f'Статус: Завершена').classes('text-sm mb-2')
                 
+                # Описание
                 if hasattr(task_details, 'description') and task_details.description:
                     ui.label(f'Описание: {task_details.description}').classes('text-sm mb-2')
                 
-                if hasattr(task_details, 'due') and task_details.due:
-                    ui.label(f'Срок: {task_details.due}').classes('text-sm mb-2')
-                
+                # Причина завершения
                 if hasattr(task_details, 'delete_reason') and task_details.delete_reason:
                     ui.label(f'Причина завершения: {task_details.delete_reason}').classes('text-sm mb-2')
             
-            # Переменные процесса
+            # Переменные процесса - только нужные поля
+            document_id = None
+            document_name = None
             try:
-                process_variables = await camunda_client.get_history_process_instance_variables_by_name(
-                    task_details.process_instance_id,
-                    ['documentName', 'documentContent', 'assigneeList', 'reviewDates', 'reviewComments']
-                )
+                process_instance_id = task_details.process_instance_id if hasattr(task_details, 'process_instance_id') else None
                 
-                if process_variables:
-                    with ui.card().classes('p-4 bg-purple-50 mb-4'):
-                        ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
-                        
-                        for key, value in process_variables.items():
-                            # Форматируем значение для лучшего отображения
-                            formatted_value = format_variable_value(value)
-                            if isinstance(formatted_value, (dict, list)):
-                                ui.label(f'{key}:').classes('text-sm font-medium mb-1')
-                                ui.json_editor({'content': {'json': formatted_value}}).classes('w-full')
-                            else:
-                                ui.label(f'{key}: {formatted_value}').classes('text-sm mb-2')
+                if process_instance_id:
+                    # Для задач подписания добавляем signerList в список запрашиваемых переменных
+                    variable_names = ['documentName', 'documentId', 'reviewDates', 'reviewComments']
+                    if is_signing_task:
+                        variable_names.append('signerList')
+                    
+                    process_variables = await camunda_client.get_history_process_instance_variables_by_name(
+                        process_instance_id,
+                        variable_names
+                    )
+                    
+                    if process_variables:
+                        with ui.card().classes('p-4 bg-purple-50 mb-4'):
+                            ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
+                            
+                            # documentName
+                            if 'documentName' in process_variables:
+                                doc_name = process_variables['documentName']
+                                # Извлекаем значение, если это словарь с 'value'
+                                if isinstance(doc_name, dict) and 'value' in doc_name:
+                                    doc_name = doc_name['value']
+                                document_name = doc_name
+                                ui.label(f'Документ: {doc_name}').classes('text-sm mb-4')
+                            
+                            # Получаем documentId для скачивания документа с подписями
+                            if 'documentId' in process_variables:
+                                doc_id = process_variables['documentId']
+                                # Извлекаем значение, если это словарь с 'value'
+                                if isinstance(doc_id, dict) and 'value' in doc_id:
+                                    doc_id = doc_id['value']
+                                document_id = str(doc_id).strip() if doc_id else None
+                            
+                            # Кнопка для скачивания документа с подписями (только для задач подписания)
+                            if is_signing_task and document_id and document_id != 'НЕ НАЙДЕН':
+                                with ui.row().classes('w-full mb-4 gap-2'):
+                                    async def download_signed():
+                                        await download_signed_document_from_task(document_id, document_name)
+                                    
+                                    ui.button(
+                                        'Скачать документ с подписями',
+                                        icon='download',
+                                        on_click=download_signed
+                                    ).classes('bg-green-600 text-white')
+                            
+                            # Список участников процесса (только для задач подписания)
+                            if is_signing_task and 'signerList' in process_variables:
+                                signer_list = process_variables['signerList']
                                 
+                                logger.info(f"Получен signerList из переменных: {signer_list}, тип: {type(signer_list)}")
+                                
+                                # Извлекаем значение, если это словарь с 'value'
+                                if isinstance(signer_list, dict) and 'value' in signer_list:
+                                    signer_list = signer_list['value']
+                                    logger.info(f"Извлечено значение из словаря: {signer_list}, тип: {type(signer_list)}")
+                                
+                                # Парсим JSON строку, если нужно
+                                if isinstance(signer_list, str):
+                                    try:
+                                        signer_list = json.loads(signer_list)
+                                        logger.info(f"Распарсена JSON строка: {signer_list}, тип: {type(signer_list)}")
+                                    except json.JSONDecodeError as e:
+                                        logger.warning(f"Не удалось распарсить signerList как JSON: {e}, значение: {signer_list}")
+                                        # Если не JSON, возможно это просто строка с одним пользователем
+                                        signer_list = [signer_list] if signer_list else []
+                                
+                                # Если это не список, пытаемся преобразовать
+                                if not isinstance(signer_list, list):
+                                    logger.warning(f"signerList не является списком: {signer_list}, тип: {type(signer_list)}")
+                                    if signer_list:
+                                        # Если это строка или другой тип, создаем список
+                                        signer_list = [str(signer_list)]
+                                    else:
+                                        signer_list = []
+                                
+                                logger.info(f"Итоговый signer_list: {signer_list}, длина: {len(signer_list) if isinstance(signer_list, list) else 'не список'}")
+                                
+                                if signer_list and isinstance(signer_list, list) and len(signer_list) > 0:
+                                    ui.label('Участники процесса:').classes('text-sm font-medium mb-2')
+                                    
+                                    signers_container = ui.column().classes('w-full mb-4')
+                                    with signers_container:
+                                        for i, signer_login in enumerate(signer_list, 1):
+                                            try:
+                                                # Обрабатываем случай, когда элемент списка может быть не строкой
+                                                signer_login_str = str(signer_login).strip()
+                                                if not signer_login_str:
+                                                    continue
+                                                
+                                                user_display_name = get_user_display_name(signer_login_str)
+                                                with ui.row().classes('w-full items-center gap-2 mb-1'):
+                                                    ui.icon('person').classes('text-blue-600 text-sm')
+                                                    ui.label(f'{i}. {user_display_name}').classes('text-sm')
+                                            except Exception as e:
+                                                logger.error(f"Ошибка получения информации о подписанте {signer_login}: {e}")
+                                                with ui.row().classes('w-full items-center gap-2 mb-1'):
+                                                    ui.icon('person').classes('text-gray-400 text-sm')
+                                                    signer_login_str = str(signer_login) if signer_login else 'неизвестно'
+                                                    ui.label(f'{i}. {signer_login_str} (не найден)').classes('text-sm text-gray-600')
+                                else:
+                                    logger.warning(f"signerList пуст или не является списком: {signer_list}")
+                            
+                            # reviewComments и reviewDates - объединяем по пользователям
+                            review_comments = None
+                            review_dates = None
+                            
+                            # Получаем reviewComments
+                            if 'reviewComments' in process_variables:
+                                comments_value = process_variables['reviewComments']
+                                # Извлекаем значение, если это словарь с 'value'
+                                if isinstance(comments_value, dict) and 'value' in comments_value:
+                                    comments_value = comments_value['value']
+                                
+                                # Парсим JSON строку
+                                if isinstance(comments_value, str):
+                                    try:
+                                        review_comments = json.loads(comments_value)
+                                    except json.JSONDecodeError:
+                                        logger.warning("Не удалось распарсить reviewComments")
+                                        review_comments = {}
+                                elif isinstance(comments_value, dict):
+                                    review_comments = comments_value
+                            
+                            # Получаем reviewDates
+                            if 'reviewDates' in process_variables:
+                                dates_value = process_variables['reviewDates']
+                                # Извлекаем значение, если это словарь с 'value'
+                                if isinstance(dates_value, dict) and 'value' in dates_value:
+                                    dates_value = dates_value['value']
+                                
+                                # Парсим JSON строку
+                                if isinstance(dates_value, str):
+                                    try:
+                                        review_dates = json.loads(dates_value)
+                                    except json.JSONDecodeError:
+                                        logger.warning("Не удалось распарсить reviewDates")
+                                        review_dates = {}
+                                elif isinstance(dates_value, dict):
+                                    review_dates = dates_value
+                            
+                            # Объединяем комментарии и даты по пользователям
+                            if review_comments or review_dates:
+                                ui.label('Комментарии пользователей:').classes('text-sm font-medium mb-2')
+                                
+                                # Собираем всех пользователей из обоих словарей
+                                all_users = set()
+                                if review_comments:
+                                    all_users.update(review_comments.keys())
+                                if review_dates:
+                                    all_users.update(review_dates.keys())
+                                
+                                # Отображаем информацию по каждому пользователю
+                                for username in sorted(all_users):
+                                    user_display_name = get_user_display_name(username)
+                                    
+                                    with ui.card().classes('p-3 mb-3 bg-white border-l-4 border-blue-400'):
+                                        ui.label(f'{user_display_name}').classes('text-sm font-semibold mb-2')
+                                        
+                                        # Дата завершения
+                                        if review_dates and username in review_dates:
+                                            date_value = review_dates[username]
+                                            if date_value:
+                                                formatted_date = format_date_russian(date_value)
+                                                ui.label(f'Дата завершения: {formatted_date}').classes('text-xs text-gray-600 mb-1')
+                                        
+                                        # Комментарий
+                                        if review_comments and username in review_comments:
+                                            comment = review_comments[username]
+                                            if comment:
+                                                with ui.card().classes('p-2 bg-yellow-50 border-l-4 border-yellow-400 mt-2'):
+                                                    ui.label('Комментарий:').classes('text-xs font-semibold text-yellow-800 mb-1')
+                                                    ui.label(comment).classes('text-xs text-gray-700 italic')
+                    else:
+                        with ui.card().classes('p-4 bg-gray-50 mb-4'):
+                            ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
+                            ui.label('Переменные процесса недоступны или не найдены').classes('text-sm text-gray-600')
+                else:
+                    logger.warning("process_instance_id не найден для получения переменных процесса")
             except Exception as e:
                 logger.warning(f"Не удалось загрузить переменные процесса: {e}")
-            
-            # История выполнения задачи
-            try:
-                task_history = await camunda_client.get_task_history(task_details.id)
-                if task_history:
-                    with ui.card().classes('p-4 bg-blue-50 mb-4'):
-                        ui.label('История выполнения').classes('text-lg font-semibold mb-3')
-                        for event in task_history:
-                            event_time = event.get('time', 'Неизвестно')
-                            event_type = event.get('type', 'Неизвестно')
-                            ui.label(f'{event_time}: {event_type}').classes('text-sm mb-1')
-            except Exception as e:
-                logger.warning(f"Не удалось загрузить историю задачи: {e}")
+                with ui.card().classes('p-4 bg-gray-50 mb-4'):
+                    ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
+                    ui.label(f'Не удалось загрузить переменные процесса: {str(e)}').classes('text-sm text-gray-600')
                 
         except Exception as e:
             logger.error(f'Ошибка при загрузке деталей завершенной задачи {task.id}: {e}', exc_info=True)
@@ -1028,60 +1154,60 @@ async def load_task_details(task_id: str):
         ui.notify('Введите ID задачи', type='error')
         return
     
-    _details_container.clear()
+    # _details_container.clear()
     
-    with _details_container:
-        ui.label('Загрузка деталей...').classes('text-gray-600')
+    # with _details_container:
+    #     ui.label('Загрузка деталей...').classes('text-gray-600')
         
-        try:
-            # Получаем задачу по ID - используем асинхронный клиент
-            camunda_client = await create_camunda_client()  # ИСПРАВЛЕНО: await
-            task = await camunda_client.get_task_by_id(task_id)  # ИСПРАВЛЕНО: await
+    #     try:
+    #         # Получаем задачу по ID - используем асинхронный клиент
+    #         camunda_client = await create_camunda_client()  # ИСПРАВЛЕНО: await
+    #         task = await camunda_client.get_task_by_id(task_id)  # ИСПРАВЛЕНО: await
             
-            if not task:
-                ui.label('Задача не найдена').classes('text-red-600')
-                logger.warning(f"Задача {task_id} не найдена")
-                return
+    #         if not task:
+    #             ui.label('Задача не найдена').classes('text-red-600')
+    #             logger.warning(f"Задача {task_id} не найдена")
+    #             return
             
-            # Отображаем детали задачи
-            with ui.card().classes('p-4 bg-gray-50'):
-                ui.label('Информация о задаче').classes('text-lg font-semibold mb-3')
+    #         # Отображаем детали задачи
+    #         with ui.card().classes('p-4 bg-gray-50'):
+    #             ui.label('Информация о задаче').classes('text-lg font-semibold mb-3')
                 
-                ui.label(f'Название: {task.name}').classes('text-sm mb-2')
-                ui.label(f'ID: {task.id}').classes('text-sm mb-2')
-                ui.label(f'Исполнитель: {task.assignee or "Не назначен"}').classes('text-sm mb-2')
-                ui.label(f'Создана: {task.start_time}').classes('text-sm mb-2')
-                ui.label(f'Приоритет: {task.priority}').classes('text-sm mb-2')
-                ui.label(f'Статус: {"Активна" if not task.suspended else "Приостановлена"}').classes('text-sm mb-2')
+    #             ui.label(f'Название: {task.name}').classes('text-sm mb-2')
+    #             ui.label(f'ID: {task.id}').classes('text-sm mb-2')
+    #             ui.label(f'Исполнитель: {task.assignee or "Не назначен"}').classes('text-sm mb-2')
+    #             ui.label(f'Создана: {task.start_time}').classes('text-sm mb-2')
+    #             ui.label(f'Приоритет: {task.priority}').classes('text-sm mb-2')
+    #             ui.label(f'Статус: {"Активна" if not task.suspended else "Приостановлена"}').classes('text-sm mb-2')
                 
-                if task.description:
-                    ui.label(f'Описание: {task.description}').classes('text-sm mb-2')
+    #             if task.description:
+    #                 ui.label(f'Описание: {task.description}').classes('text-sm mb-2')
                 
-                if task.due:
-                    ui.label(f'Срок: {task.due}').classes('text-sm mb-2')
+    #             if task.due:
+    #                 ui.label(f'Срок: {task.due}').classes('text-sm mb-2')
             
-            # Пытаемся получить переменные (с обработкой ошибок)
-            try:
-                variables = await camunda_client.get_task_variables(task_id)  # ИСПРАВЛЕНО: await и правильный метод
-                if variables:
-                    with ui.card().classes('p-4 bg-blue-50 mt-4'):
-                        ui.label('Переменные задачи').classes('text-lg font-semibold mb-3')
+    #         # Пытаемся получить переменные (с обработкой ошибок)
+    #         try:
+    #             variables = await camunda_client.get_task_variables(task_id)  # ИСПРАВЛЕНО: await и правильный метод
+    #             if variables:
+    #                 with ui.card().classes('p-4 bg-blue-50 mt-4'):
+    #                     ui.label('Переменные задачи').classes('text-lg font-semibold mb-3')
                         
-                        for key, value in variables.items():
-                            # Обрабатываем формат переменных Camunda
-                            if isinstance(value, dict) and 'value' in value:
-                                display_value = value['value']
-                            else:
-                                display_value = value
-                            ui.label(f'{key}: {display_value}').classes('text-sm mb-1')
-            except Exception as e:
-                logger.warning(f"Не удалось получить переменные задачи {task_id}: {e}")
-                with ui.card().classes('p-4 bg-yellow-50 mt-4'):
-                    ui.label('Переменные задачи недоступны').classes('text-sm text-yellow-600')
+    #                     for key, value in variables.items():
+    #                         # Обрабатываем формат переменных Camunda
+    #                         if isinstance(value, dict) and 'value' in value:
+    #                             display_value = value['value']
+    #                         else:
+    #                             display_value = value
+    #                         ui.label(f'{key}: {display_value}').classes('text-sm mb-1')
+    #         except Exception as e:
+    #             logger.warning(f"Не удалось получить переменные задачи {task_id}: {e}")
+    #             with ui.card().classes('p-4 bg-yellow-50 mt-4'):
+    #                 ui.label('Переменные задачи недоступны').classes('text-sm text-yellow-600')
             
-        except Exception as e:
-            ui.label(f'Ошибка при загрузке деталей: {str(e)}').classes('text-red-600')
-            logger.error(f"Ошибка при загрузке деталей задачи {task_id}: {e}", exc_info=True)
+    #     except Exception as e:
+    #         ui.label(f'Ошибка при загрузке деталей: {str(e)}').classes('text-red-600')
+    #         logger.error(f"Ошибка при загрузке деталей задачи {task_id}: {e}", exc_info=True)
 
 async def complete_task(task):
     """Завершает задачу"""
@@ -2814,12 +2940,8 @@ async def submit_task_completion(task, status, comment, dialog):
         logger.error(f"Ошибка при завершении задачи {task.id}: {e}", exc_info=True)
 
 async def show_task_details(task):
-    """Показывает детали задачи в правом блоке"""
-    global _task_details_sidebar, _task_details_column, _selected_task_id
-    
-    if _task_details_sidebar is None or _task_details_column is None:
-        ui.notify('Ошибка: контейнер деталей не инициализирован', type='error')
-        return
+    """Показывает детали задачи внутри карточки задачи"""
+    global _task_cards, _selected_task_id
     
     # Обновляем выбранную задачу
     task_id_str = str(getattr(task, 'id', ''))
@@ -2829,13 +2951,20 @@ async def show_task_details(task):
     old_selected_id = _selected_task_id
     _selected_task_id = task_id_str if task_id_str else process_id_str
     
+    # Находим карточку задачи
+    task_card_info = _task_cards.get(task_id_str) or _task_cards.get(process_id_str)
+    
+    if not task_card_info or 'details_container' not in task_card_info:
+        ui.notify('Ошибка: карточка задачи не найдена', type='error')
+        return
+    
+    details_container = task_card_info['details_container']
+    
     # Обновляем стили карточек без перезагрузки списка
-    # Используем JavaScript для обновления стилей напрямую
     if old_selected_id != _selected_task_id:
         logger.info(f"Обновляем выделение: старая задача={old_selected_id}, новая задача={_selected_task_id}")
         
         # Обновляем стили через JavaScript
-        # Находим карточки по data-атрибутам и обновляем их классы
         update_script = f"""
         // Убираем выделение со старой карточки
         if ('{old_selected_id}') {{
@@ -2869,13 +2998,13 @@ async def show_task_details(task):
         
         ui.run_javascript(update_script)
     
-    # Показываем правый блок с деталями
-    _task_details_column.set_visibility(True)
+    # Показываем контейнер с деталями
+    details_container.set_visibility(True)
     
     # Очищаем контейнер
-    _task_details_sidebar.clear()
+    details_container.clear()
     
-    with _task_details_sidebar:
+    with details_container:
         ui.label('Загрузка деталей...').classes('text-gray-600')
         
         try:
@@ -2903,22 +3032,6 @@ async def show_task_details(task):
                     is_history_task = True
                 else:
                     logger.warning(f"Задача {task.id} не найдена ни как активная, ни как историческая")
-                    
-                    # Проверяем, существует ли процесс
-                    if hasattr(task, 'process_instance_id') and task.process_instance_id:
-                        logger.info(f"Проверяем процесс {task.process_instance_id}")
-                        
-                        # Проверяем активный процесс
-                        process_info = await camunda_client.get_process_instance_by_id(task.process_instance_id)
-                        if process_info:
-                            logger.info(f"Процесс {task.process_instance_id} найден как активный")
-                        else:
-                            # Проверяем исторический процесс
-                            process_info = await camunda_client.get_history_process_instance_by_id(task.process_instance_id)
-                            if process_info:
-                                logger.info(f"Процесс {task.process_instance_id} найден как исторический")
-                            else:
-                                logger.warning(f"Процесс {task.process_instance_id} не найден")
             
             logger.info(f"Результат получения задачи {task.id}: {task_details is not None}")
             
@@ -2928,84 +3041,24 @@ async def show_task_details(task):
                 ui.label('• Задача была удалена из истории').classes('text-sm text-gray-600')
                 ui.label('• Задача еще не завершена').classes('text-sm text-gray-600')
                 ui.label('• Неправильный ID задачи').classes('text-sm text-gray-600')
-                
-                # Показываем информацию о задаче из списка
-                with ui.card().classes('p-4 bg-yellow-50 mb-4'):
-                    ui.label('Информация из списка задач').classes('text-lg font-semibold mb-3')
-                    ui.label(f'ID задачи: {task.id}').classes('text-sm mb-2')
-                    if hasattr(task, 'name'):
-                        ui.label(f'Название: {task.name}').classes('text-sm mb-2')
-                    if hasattr(task, 'process_instance_id'):
-                        ui.label(f'ID процесса: {task.process_instance_id}').classes('text-sm mb-2')
-                    if hasattr(task, 'assignee'):
-                        ui.label(f'Исполнитель: {task.assignee or "Не назначен"}').classes('text-sm mb-2')
-                    if hasattr(task, 'start_time'):
-                        ui.label(f'Создана: {task.start_time}').classes('text-sm mb-2')
-                    if hasattr(task, 'end_time') and task.end_time:
-                        ui.label(f'Завершена: {task.end_time}').classes('text-sm mb-2')
-                
                 return
             
-            # Основная информация о задаче
-            with ui.card().classes('p-4 bg-blue-50 mb-4'):
-                ui.label('Основная информация').classes('text-lg font-semibold mb-3')
-                
-                ui.label(f'Название: {task_details.name}').classes('text-sm mb-2')
-                ui.label(f'ID задачи: {task_details.id}').classes('text-sm mb-2')
-                ui.label(f'ID процесса: {task_details.process_instance_id}').classes('text-sm mb-2')
-                ui.label(f'Исполнитель: {task_details.assignee or "Не назначен"}').classes('text-sm mb-2')
-                ui.label(f'Создана: {task_details.start_time}').classes('text-sm mb-2')
-                
-                if is_history_task and hasattr(task_details, 'end_time') and task_details.end_time:
-                    ui.label(f'Завершена: {task_details.end_time}').classes('text-sm mb-2')
-                
-                if hasattr(task_details, 'priority'):
-                    ui.label(f'Приоритет: {task_details.priority}').classes('text-sm mb-2')
-                
-                if is_history_task:
-                    ui.label(f'Статус: Завершена').classes('text-sm mb-2')
-                else:
-                    ui.label(f'Статус: {"Активна" if not getattr(task_details, "suspended", False) else "Приостановлена"}').classes('text-sm mb-2')
-                
-                if hasattr(task_details, 'description') and task_details.description:
-                    ui.label(f'Описание: {task_details.description}').classes('text-sm mb-2')
-                
-                if hasattr(task_details, 'due') and task_details.due:
-                    ui.label(f'Срок: {task_details.due}').classes('text-sm mb-2')
-                
-                if is_history_task and hasattr(task_details, 'delete_reason') and task_details.delete_reason:
-                    ui.label(f'Причина завершения: {task_details.delete_reason}').classes('text-sm mb-2')
-            
-            # Переменные задачи (только для активных задач)
-            if not is_history_task:
-                try:
-                    variables = await camunda_client.get_task_variables(task.id)
-                    if variables:
-                        with ui.card().classes('p-4 bg-green-50 mb-4'):
-                            ui.label('Переменные задачи').classes('text-lg font-semibold mb-3')
-                            
-                            for var_name, var_value in variables.items():
-                                if isinstance(var_value, dict) and 'value' in var_value:
-                                    display_value = var_value['value']
-                                    if isinstance(display_value, str) and len(display_value) > 100:
-                                        display_value = display_value[:100] + '...'
-                                    ui.label(f'{var_name}: {display_value}').classes('text-sm mb-1')
-                                else:
-                                    ui.label(f'{var_name}: {var_value}').classes('text-sm mb-1')
-                except Exception as e:
-                    logger.warning(f"Не удалось получить переменные задачи {task.id}: {e}")
-                    ui.label('Переменные задачи недоступны').classes('text-sm text-gray-500')
-            
-            # Переменные процесса
+            # Переменные процесса - показываем только нужные поля
             try:
                 process_variables = await camunda_client.get_process_instance_variables(task_details.process_instance_id)
                 if process_variables:
                     with ui.card().classes('p-4 bg-yellow-50 mb-4'):
                         ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
                         
-                        # Проверяем наличие ID документа для открытия в Mayan EDMS
-                        document_id = None
+                        # Проверяем, является ли это задачей подписания документа
+                        is_signing_task = hasattr(task_details, 'name') and task_details.name == "Подписать документ"
+                        
+                        # Извлекаем нужные переменные
+                        creator_name = None
+                        creator_login = None
                         document_name = None
+                        due_date = None
+                        document_id = None
                         
                         for var_name, var_value in process_variables.items():
                             # Извлекаем значение в зависимости от формата
@@ -3014,19 +3067,45 @@ async def show_task_details(task):
                             else:
                                 actual_value = var_value
                             
-                            # Извлекаем documentId или mayanDocumentId
-                            if var_name in ['documentId', 'mayanDocumentId']:
-                                document_id = actual_value
+                            # Извлекаем нужные переменные
+                            if var_name == 'creatorName':
+                                creator_name = actual_value
+                                creator_login = actual_value  # Сохраняем логин для задач подписания
+                            elif var_name == 'processCreator':
+                                # Альтернативное имя переменной
+                                if not creator_name:
+                                    creator_name = actual_value
+                                    creator_login = actual_value
+                            elif var_name == 'creator':
+                                # Еще одно альтернативное имя
+                                if not creator_name:
+                                    creator_name = actual_value
+                                    creator_login = actual_value
                             elif var_name == 'documentName':
                                 document_name = actual_value
-                            
-                            # Отображаем переменную
-                            display_value = actual_value
-                            if isinstance(display_value, str) and len(display_value) > 100:
-                                display_value = display_value[:100] + '...'
-                            ui.label(f'{var_name}: {display_value}').classes('text-sm mb-1')
+                            elif var_name == 'dueDate':
+                                due_date = actual_value
+                            elif var_name in ['documentId', 'mayanDocumentId']:
+                                document_id = actual_value
                         
-                        # Добавляем кнопку для открытия документа в Mayan EDMS, если documentId найден
+                        # Отображаем только нужные переменные
+                        if creator_name:
+                            # Для задач подписания документа показываем полные данные пользователя
+                            if is_signing_task and creator_login:
+                                creator_display_name = get_user_display_name(creator_login)
+                                ui.label(f'Создатель: {creator_display_name}').classes('text-sm mb-2')
+                            else:
+                                ui.label(f'Создатель: {creator_name}').classes('text-sm mb-2')
+                        
+                        if document_name:
+                            ui.label(f'Документ: {document_name}').classes('text-sm mb-2')
+                        
+                        if due_date:
+                            # Форматируем дату
+                            formatted_date = format_date_russian(due_date)
+                            ui.label(f'Срок: {formatted_date}').classes('text-sm mb-2')
+                        
+                        # Добавляем кнопки для работы с документом, если documentId найден
                         if document_id:
                             try:
                                 mayan_client = await MayanClient.create_with_session_user()
@@ -3043,7 +3122,7 @@ async def show_task_details(task):
                                     with ui.row().classes('w-full mt-3 gap-2'):
                                         ui.button(
                                             'Скачать документ',
-                                            icon='open_in_new',
+                                            icon='download',
                                             on_click=lambda doc_id=doc_id_str, doc_name=document_name: download_document_from_task(doc_id, doc_name)
                                         ).classes('bg-green-500 text-white')
                                         
@@ -3056,11 +3135,6 @@ async def show_task_details(task):
                                                 on_click=lambda doc_id=doc_id_str: open_document_preview(doc_id)
                                             ).classes('bg-blue-500 text-white')
                                     
-                                    if document_name:
-                                        ui.label(f'Документ: {document_name}').classes('text-xs text-gray-600 mt-1')
-                                else:
-                                    ui.label(f'Не удалось получить URL документа (ID: {doc_id_str})').classes('text-xs text-orange-600 mt-1')
-                                    
                             except Exception as e:
                                 logger.error(f"Ошибка при получении URL документа {document_id}: {e}", exc_info=True)
                                 ui.label(f'Ошибка при открытии документа: {str(e)}').classes('text-xs text-red-600 mt-1')
@@ -3069,59 +3143,33 @@ async def show_task_details(task):
                 logger.warning(f"Не удалось получить переменные процесса {task_details.process_instance_id}: {e}")
                 ui.label('Переменные процесса недоступны').classes('text-sm text-gray-500')
             
-            # Кнопки действий (только для активных задач)
-            if not is_history_task:
-                with ui.column().classes('w-full gap-2'):
-                    ui.button(
-                        'Завершить задачу',
-                        icon='check',
-                        on_click=lambda t=task: complete_task(t)
-                    ).classes('w-full bg-green-500 text-white')
-                    
-                    ui.button(
-                        'Обновить детали',
-                        icon='refresh',
-                        on_click=lambda t=task: show_task_details(t)
-                    ).classes('w-full bg-blue-500 text-white')
-                    
-                    ui.button(
-                        'Скрыть детали',
-                        icon='close',
-                        on_click=hide_task_details
-                    ).classes('w-full bg-gray-500 text-white')
-            else:
-                # Для исторических задач только кнопки просмотра
-                with ui.column().classes('w-full gap-2'):
-                    ui.button(
-                        'Обновить детали',
-                        icon='refresh',
-                        on_click=lambda t=task: show_task_details(t)
-                    ).classes('w-full bg-blue-500 text-white')
-                    
-                    ui.button(
-                        'Скрыть детали',
-                        icon='close',
-                        on_click=hide_task_details
-                    ).classes('w-full bg-gray-500 text-white')
+            # Кнопка для скрытия деталей
+            with ui.row().classes('w-full mt-3'):
+                ui.button(
+                    'Скрыть детали',
+                    icon='close',
+                    on_click=lambda: hide_task_details_in_card(task_id_str, process_id_str)
+                ).classes('bg-gray-500 text-white')
             
         except Exception as e:
             ui.label(f'Ошибка при загрузке деталей: {str(e)}').classes('text-red-600')
             logger.error(f"Ошибка при загрузке деталей задачи {task.id}: {e}", exc_info=True)
 
 def hide_task_details():
-    """Скрывает блок с деталями задачи"""
-    global _task_details_column
+    """Скрывает блок с деталями задачи (устаревшая функция, оставлена для совместимости)"""
+    # Функция больше не используется, так как детали теперь внутри карточек
+    pass
+
+def hide_task_details_in_card(task_id_str: str, process_id_str: str):
+    """Скрывает детали задачи внутри карточки"""
+    global _task_cards
     
-    if _task_details_column is None:
-        return
+    # Находим карточку задачи
+    task_card_info = _task_cards.get(task_id_str) or _task_cards.get(process_id_str)
     
-    # Скрываем блок деталей
-    _task_details_column.set_visibility(False)
-    
-    # Находим родительский контейнер и скрываем его
-    details_column = _task_details_sidebar.parent
-    if details_column:
-        details_column.set_visibility(False)
+    if task_card_info and 'details_container' in task_card_info:
+        details_container = task_card_info['details_container']
+        details_container.set_visibility(False)
 
 def show_task_results(task):
     """Показывает результаты задачи"""
@@ -3283,3 +3331,41 @@ def get_user_display_name(username: str) -> str:
     except Exception as e:
         logger.warning(f"Не удалось получить данные пользователя {username} из LDAP: {e}")
         return username
+
+async def download_signed_document_from_task(document_id: str, document_name: str = None):
+    """Скачивает документ с подписями из Mayan EDMS"""
+    try:
+        ui.notify('Создание итогового документа с подписями...', type='info')
+        
+        signature_manager = SignatureManager()
+        signed_pdf = await signature_manager.create_signed_document_pdf(str(document_id))
+        
+        if signed_pdf:
+            # Создаем имя файла
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if document_name:
+                # Убираем расширение из имени документа, если есть
+                base_name = document_name.rsplit('.', 1)[0] if '.' in document_name else document_name
+                filename = f"signed_{base_name.replace(' ', '_')}_{timestamp}.pdf"
+            else:
+                filename = f"signed_document_{document_id}_{timestamp}.pdf"
+            
+            # Создаем временный файл для скачивания
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as temp_file:
+                temp_file.write(signed_pdf)
+                temp_path = temp_file.name
+            
+            # Открываем файл для скачивания
+            ui.download(temp_path, filename)
+            
+            # Удаляем временный файл через некоторое время
+            ui.timer(5.0, lambda path=temp_path: os.unlink(path) if os.path.exists(path) else None, once=True)
+            
+            ui.notify(f'Файл "{filename}" подготовлен для скачивания', type='success')
+            logger.info(f'Итоговый документ {document_id} подготовлен для скачивания как {filename}')
+        else:
+            ui.notify('Не удалось создать документ с подписями', type='warning')
+            
+    except Exception as e:
+        logger.error(f'Ошибка скачивания документа с подписями: {e}', exc_info=True)
+        ui.notify(f'Ошибка: {str(e)}', type='error')

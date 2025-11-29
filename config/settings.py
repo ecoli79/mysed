@@ -93,6 +93,8 @@ class AppConfig(BaseSettings):
     mayan_username: str = Field(default="", env="MAYAN_USERNAME")
     mayan_password: str = Field(default="", env="MAYAN_PASSWORD")
     mayan_api_token: str = Field(default="", env="MAYAN_API_TOKEN")
+    mayan_incoming_document_type: str = Field(default="Входящие", env="MAYAN_INCOMING_DOCUMENT_TYPE")
+    mayan_incoming_cabinet: str = Field(default="Входящие письма", env="MAYAN_INCOMING_CABINET")
 
     # Настройки почтового сервера
     email_server: str = Field(default="", env="EMAIL_SERVER")

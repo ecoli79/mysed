@@ -43,7 +43,8 @@ class MayanClient:
     """Асинхронный клиент для работы с Mayan EDMS REST API"""
     
     def __init__(self, base_url: str, username: str = '', password: str = '', 
-                 api_token: str = '', verify_ssl: bool = False):
+                 api_token: str = '', verify_ssl: bool = False, 
+                 token_refresh_callback: Optional[callable] = None):
         """
         Инициализация клиента Mayan EDMS
         
@@ -53,12 +54,15 @@ class MayanClient:
             password: Пароль для аутентификации (если не используется токен)
             api_token: API токен для аутентификации (приоритет над username/password)
             verify_ssl: Проверять ли SSL сертификаты
+            token_refresh_callback: Callback функция для обновления токена при истечении
         """
         self.base_url = base_url.rstrip('/')
         self.api_url = urljoin(self.base_url, '/api/v4/')
         self.verify_ssl = verify_ssl
         self.documentSearchModelPk = None
         self.documentSearchModelUrl = None
+        self.token_refresh_callback = token_refresh_callback
+        self.api_token = api_token  # Сохраняем токен для доступа
                 
         logger.info(f'Инициализация MayanClient для {self.base_url}')
         
@@ -133,6 +137,26 @@ class MayanClient:
             # Проверяем на ошибки аутентификации
             if response.status_code == 401:
                 logger.error('MayanClient: Ошибка аутентификации: токен или учетные данные недействительны')
+                
+                # Пытаемся обновить токен через callback, если он есть
+                if self.token_refresh_callback:
+                    try:
+                        logger.info('MayanClient: Пытаемся обновить токен через callback...')
+                        new_token = await self.token_refresh_callback()
+                        if new_token:
+                            # Обновляем токен в клиенте
+                            self.api_token = new_token
+                            self.client.headers['Authorization'] = f'Token {new_token}'
+                            logger.info('MayanClient: Токен обновлен, повторяем запрос...')
+                            
+                            # Повторяем запрос с новым токеном
+                            response = await self.client.request(method, url, **kwargs)
+                            if response.status_code == 200:
+                                return response
+                            # Если все еще 401, выбрасываем исключение
+                    except Exception as e:
+                        logger.error(f'MayanClient: Ошибка при обновлении токена через callback: {e}')
+                
                 # Выбрасываем специальное исключение для истекшего токена
                 raise MayanTokenExpiredError('API токен Mayan EDMS истек или недействителен')
             elif response.status_code == 403:
@@ -3484,6 +3508,40 @@ class MayanClient:
             return False
         except Exception as e:
             logger.warning(f'MayanClient: Ошибка при проверке токена: {e}')
+            return False
+
+    async def delete_document(self, document_id: str) -> bool:
+        """
+        Удаляет документ из Mayan EDMS
+        Endpoint: DELETE /api/v4/documents/{document_id}/
+        
+        Args:
+            document_id: ID документа для удаления
+            
+        Returns:
+            True если документ успешно удален, False иначе
+        """
+        endpoint = f'documents/{document_id}/'
+        
+        logger.info(f'Удаляем документ с ID: {document_id}')
+        
+        try:
+            response = await self._make_request('DELETE', endpoint)
+            
+            # Статус 202 (Accepted) означает, что запрос принят и обрабатывается асинхронно
+            if response.status_code in [200, 202, 204]:
+                logger.info(f'Документ {document_id} успешно удален (статус: {response.status_code})')
+                return True
+            else:
+                logger.error(f'Ошибка удаления документа {document_id}: {response.status_code}')
+                logger.error(f'Ответ сервера: {response.text}')
+                return False
+                
+        except httpx.HTTPError as e:
+            logger.error(f'Ошибка при удалении документа {document_id}: {e}')
+            return False
+        except Exception as e:
+            logger.error(f'Неожиданная ошибка при удалении документа {document_id}: {e}')
             return False
 
 

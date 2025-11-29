@@ -229,19 +229,87 @@ class EmailClient:
     async def _parse_email_imap(self, msg_num: str) -> Optional[IncomingEmail]:
         """Парсит письмо из IMAP"""
         try:
-            # Получаем письмо
-            result, data = await self.connection.fetch(msg_num, '(RFC822)')
+            # Получаем письмо - используем BODY.PEEK[] чтобы не помечать как прочитанное
+            result, data = await self.connection.fetch(msg_num, '(BODY.PEEK[])')
             if result != 'OK':
+                logger.warning(f"Не удалось получить письмо {msg_num}: результат {result}")
                 return None
             
-            # Парсим email
-            raw_email = data[0][1]
+            # Парсим email - структура данных от aioimaplib может быть разной
+            # data может быть списком: [b'1 FETCH...', b'...', b'...', b'...'] где последние элементы - само письмо
+            if not data or len(data) == 0:
+                logger.warning(f"Пустой ответ для письма {msg_num}")
+                return None
+            
+            raw_email = None
+            
+            # Ищем самый большой bytes или bytearray объект в data (это должно быть само письмо)
+            # Пропускаем первый элемент, так как там обычно заголовок
+            for item in data[1:]:
+                if isinstance(item, (bytes, bytearray)) and len(item) > 1000:  # Минимальный размер письма
+                    # Преобразуем bytearray в bytes
+                    raw_email = bytes(item) if isinstance(item, bytearray) else item
+                    break
+            
+            # Если не нашли в последующих элементах, проверяем первый элемент
+            if raw_email is None:
+                first_item = data[0]
+                
+                if isinstance(first_item, tuple) and len(first_item) >= 2:
+                    # Структура: (b'1', (b'RFC822', b'...')) или (b'1', b'...')
+                    second_item = first_item[1]
+                    if isinstance(second_item, tuple) and len(second_item) >= 2:
+                        # Вложенный кортеж: (b'RFC822', b'...')
+                        raw_email = second_item[1]
+                    elif isinstance(second_item, (bytes, bytearray)) and len(second_item) > 1000:
+                        # Прямой bytes/bytearray: (b'1', b'...')
+                        raw_email = bytes(second_item) if isinstance(second_item, bytearray) else second_item
+                elif isinstance(first_item, list) and len(first_item) > 1:
+                    for item in first_item[1:]:
+                        if isinstance(item, (bytes, bytearray)) and len(item) > 1000:
+                            raw_email = bytes(item) if isinstance(item, bytearray) else item
+                            break
+                elif isinstance(first_item, (bytes, bytearray)) and len(first_item) > 1000:
+                    # Прямой bytes/bytearray (но обычно это заголовок)
+                    raw_email = bytes(first_item) if isinstance(first_item, bytearray) else first_item
+            
+            # Если все еще не нашли, ищем рекурсивно
+            if raw_email is None:
+                def find_bytes(obj, depth=0):
+                    """Рекурсивно ищем bytes или bytearray в структуре"""
+                    if depth > 3:  # Ограничиваем глубину
+                        return None
+                    if isinstance(obj, (bytes, bytearray)) and len(obj) > 1000:  # Минимальный размер письма
+                        return bytes(obj) if isinstance(obj, bytearray) else obj
+                    if isinstance(obj, (tuple, list)):
+                        for item in obj:
+                            result = find_bytes(item, depth + 1)
+                            if result:
+                                return result
+                    return None
+                
+                for item in data:
+                    raw_email = find_bytes(item)
+                    if raw_email:
+                        break
+            
+            # Если все еще не bytes, логируем ошибку
+            if not isinstance(raw_email, bytes):
+                logger.error(f"Не удалось извлечь письмо {msg_num} из ответа сервера")
+                logger.debug(f"Структура данных: длина data: {len(data)}")
+                return None
+            
             email_message = email.message_from_bytes(raw_email)
             
             # Извлекаем данные
             message_id = email_message.get('Message-ID', f'<{msg_num}@unknown>')
             from_address = self._decode_header(email_message.get('From', ''))
             subject = self._decode_header(email_message.get('Subject', ''))
+            
+            # Если нет адреса отправителя, используем значение по умолчанию
+            if not from_address:
+                from_address = email_message.get('From', 'unknown@unknown')
+                logger.warning(f"Письмо {msg_num} не имеет адреса отправителя, используем: {from_address}")
             
             # Парсим дату
             date_str = email_message.get('Date', '')
@@ -256,14 +324,21 @@ class EmailClient:
             # Извлекаем вложения
             attachments = self._extract_attachments(email_message)
             
-            return IncomingEmail(
-                message_id=message_id,
-                from_address=from_address,
-                subject=subject,
-                body=body,
-                received_date=received_date,
-                attachments=attachments
-            )
+            try:
+                email_obj = IncomingEmail(
+                    message_id=message_id,
+                    from_address=from_address,
+                    subject=subject,
+                    body=body,
+                    received_date=received_date,
+                    attachments=attachments
+                )
+                logger.debug(f"Успешно распарсено письмо {msg_num}: {message_id}")
+                return email_obj
+            except Exception as validation_error:
+                logger.error(f"Ошибка валидации Pydantic для письма {msg_num}: {validation_error}")
+                logger.debug(f"Данные письма: message_id={message_id}, from={from_address}, subject={subject[:50]}")
+                return None
             
         except Exception as e:
             logger.error(f"Ошибка парсинга письма {msg_num}: {e}", exc_info=True)
@@ -407,7 +482,11 @@ class EmailClient:
                     logger.warning("Не удалось найти непрочитанные письма")
                     return emails
                 
-                message_ids = messages[0].split()
+                # Декодируем bytes в строки
+                if isinstance(messages[0], bytes):
+                    message_ids = [msg_id.decode('utf-8') for msg_id in messages[0].split()]
+                else:
+                    message_ids = messages[0].split()
                 
                 # Ограничиваем количество
                 if max_count:
@@ -420,6 +499,8 @@ class EmailClient:
                     email_obj = await self._parse_email_imap(msg_num)
                     if email_obj:
                         emails.append(email_obj)
+                    else:
+                        logger.warning(f"Не удалось распарсить письмо {msg_num}")
             
             else:  # POP3
                 # Получаем количество писем через asyncio.to_thread
@@ -436,6 +517,97 @@ class EmailClient:
                 
                 # POP3 не различает прочитанные/непрочитанные, получаем все
                 # В реальности нужно отслеживать уже обработанные письма
+                for msg_num in range(1, num_messages + 1):
+                    email_obj = await self._parse_email_pop3(msg_num)
+                    if email_obj:
+                        emails.append(email_obj)
+            
+            logger.info(f"Успешно получено {len(emails)} писем")
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения писем: {e}", exc_info=True)
+        finally:
+            # Не отключаемся, так как может понадобиться пометить письма как прочитанные
+            pass
+        
+        return emails
+    
+    async def fetch_emails(self, max_count: Optional[int] = None, unread_only: bool = False) -> List[IncomingEmail]:
+        """
+        Получает список писем (все или только непрочитанные)
+        
+        Args:
+            max_count: Максимальное количество писем для получения
+            unread_only: Если True, получает только непрочитанные письма. 
+                        Если False, получает все письма (включая прочитанные)
+        
+        Returns:
+            Список объектов IncomingEmail
+        """
+        emails = []
+        
+        try:
+            if not self.connection:
+                if not await self.connect():
+                    return emails
+            
+            if self.protocol == "imap":
+                if unread_only:
+                    # Ищем только непрочитанные письма
+                    search_criteria = 'UNSEEN'
+                    log_msg = "непрочитанных"
+                else:
+                    # Ищем все письма
+                    search_criteria = 'ALL'
+                    log_msg = "всех"
+                
+                result, messages = await self.connection.search(None, search_criteria)
+                if result != 'OK':
+                    logger.warning(f"Не удалось найти {log_msg} письма")
+                    return emails
+                
+                # Декодируем bytes в строки
+                if isinstance(messages[0], bytes):
+                    message_ids = [msg_id.decode('utf-8') for msg_id in messages[0].split()]
+                else:
+                    message_ids = messages[0].split()
+                
+                # Если пустой результат (например, нет писем)
+                if not message_ids or (isinstance(message_ids[0], bytes) and not message_ids[0]):
+                    logger.info(f"Найдено 0 {log_msg} писем")
+                    return emails
+                
+                # Преобразуем все message_ids в строки (на случай если они int)
+                message_ids = [str(msg_id) if not isinstance(msg_id, str) else msg_id for msg_id in message_ids]
+                
+                # Ограничиваем количество
+                if max_count:
+                    message_ids = message_ids[:max_count]
+                
+                logger.info(f"Найдено {len(message_ids)} {log_msg} писем")
+                
+                # Парсим каждое письмо
+                for msg_num in message_ids:
+                    email_obj = await self._parse_email_imap(str(msg_num))
+                    if email_obj:
+                        emails.append(email_obj)
+                    else:
+                        logger.warning(f"Не удалось распарсить письмо {msg_num}")
+            
+            else:  # POP3
+                # Получаем количество писем через asyncio.to_thread
+                def _sync_list():
+                    return len(self.connection.list()[1])
+                
+                num_messages = await asyncio.to_thread(_sync_list)
+                
+                # Ограничиваем количество
+                if max_count:
+                    num_messages = min(num_messages, max_count)
+                
+                logger.info(f"Найдено {num_messages} писем в почтовом ящике")
+                
+                # POP3 не различает прочитанные/непрочитанные, получаем все
                 for msg_num in range(1, num_messages + 1):
                     email_obj = await self._parse_email_pop3(msg_num)
                     if email_obj:
@@ -476,8 +648,14 @@ class EmailClient:
                 logger.warning(f"Письмо {message_id} не найдено")
                 return False
             
+            # Декодируем bytes в строки, если необходимо
+            if isinstance(messages[0], bytes):
+                msg_nums = [msg_num.decode('utf-8') for msg_num in messages[0].split()]
+            else:
+                msg_nums = messages[0].split()
+            
             # Помечаем как прочитанное
-            for msg_num in messages[0].split():
+            for msg_num in msg_nums:
                 await self.connection.store(msg_num, '+FLAGS', '\\Seen')
             
             logger.info(f"Письмо {message_id} помечено как прочитанное")

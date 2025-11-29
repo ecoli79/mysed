@@ -26,6 +26,7 @@ from auth.token_storage import token_storage
 from components.document_viewer import show_document_viewer
 from services.signature_manager import SignatureManager
 import traceback
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,11 @@ _mayan_client: Optional[MayanClient] = None
 _connection_status: bool = False
 _auth_error: Optional[str] = None
 _current_user: Optional[Any] = None
+
+# После строки 39, добавить:
+_mayan_client_cache: Optional[MayanClient] = None
+_token_checked: bool = False
+_token_check_lock = asyncio.Lock()  # Блокировка для предотвращения race conditions
 
 # Исключения
 class UploadError(Exception):
@@ -334,6 +340,8 @@ class SimpleFormDataExtractor:
 
 async def get_mayan_client() -> MayanClient:
     """Получает клиент Mayan EDMS с учетными данными текущего пользователя"""
+    global _mayan_client_cache, _token_checked, _token_check_lock
+    
     try:
         # ВСЕГДА получаем текущего пользователя из контекста, чтобы использовать актуальный токен
         current_user = get_current_user()
@@ -345,46 +353,83 @@ async def get_mayan_client() -> MayanClient:
         if not hasattr(current_user, 'mayan_api_token') or not current_user.mayan_api_token:
             raise MayanTokenExpiredError(f'У пользователя {current_user.username} нет API токена для доступа к Mayan EDMS')
         
+        # Проверяем, есть ли кэшированный клиент с тем же токеном
+        if _mayan_client_cache:
+            # Получаем токен из заголовков клиента
+            cached_token = None
+            if 'Authorization' in _mayan_client_cache.client.headers:
+                auth_header = _mayan_client_cache.client.headers['Authorization']
+                if auth_header.startswith('Token '):
+                    cached_token = auth_header[6:]
+            
+            # Если токен совпадает, возвращаем кэшированный клиент
+            if cached_token == current_user.mayan_api_token and _token_checked:
+                return _mayan_client_cache
+        
+        # Создаем новый клиент
         client = MayanClient(
             base_url=config.mayan_url,
             api_token=current_user.mayan_api_token
         )
         
-        # Проверяем действительность токена
-        is_valid = await client.check_token_validity()
-        
-        if not is_valid:
-            logger.warning('API токен Mayan EDMS истек, запрашиваем повторную авторизацию')
+        # Проверяем токен только один раз при первом создании клиента
+        # Используем блокировку, чтобы избежать множественных проверок при параллельных вызовах
+        async with _token_check_lock:
+            # Двойная проверка после получения блокировки
+            if _mayan_client_cache and _token_checked:
+                cached_token = None
+                if 'Authorization' in _mayan_client_cache.client.headers:
+                    auth_header = _mayan_client_cache.client.headers['Authorization']
+                    if auth_header.startswith('Token '):
+                        cached_token = auth_header[6:]
+                if cached_token == current_user.mayan_api_token:
+                    return _mayan_client_cache
             
-            # Показываем диалог повторной авторизации
-            new_token = await show_mayan_reauth_dialog()
-            
-            if new_token:
-                # Обновляем токен пользователя в сессии
-                current_user.mayan_api_token = new_token
-                # Обновляем сессию в session_manager
-                try:
-                    client_ip = ui.context.client.request.client.host
-                    token = token_storage.get_token(client_ip)
-                    if token:
-                        session = session_manager.get_user_by_token(token)
-                        if session:
-                            session.mayan_api_token = new_token
-                except Exception as e:
-                    logger.warning(f'Не удалось обновить токен в сессии: {e}')
+            # Проверяем действительность токена только если еще не проверяли
+            if not _token_checked:
+                is_valid = await client.check_token_validity()
                 
-                # Создаем новый клиент с обновленным токеном
-                client = MayanClient(
-                    base_url=config.mayan_url,
-                    api_token=new_token
-                )
-                logger.info('Клиент Mayan EDMS обновлен с новым токеном')
-            else:
-                raise ValueError('Повторная авторизация не удалась или была отменена')
+                if not is_valid:
+                    logger.warning('API токен Mayan EDMS истек, запрашиваем повторную авторизацию')
+                    
+                    # Показываем диалог повторной авторизации
+                    new_token = await show_mayan_reauth_dialog()
+                    
+                    if new_token:
+                        # Обновляем токен пользователя в сессии
+                        current_user.mayan_api_token = new_token
+                        # Обновляем сессию в session_manager
+                        try:
+                            from auth.token_storage import token_storage
+                            client_ip = ui.context.client.request.client.host
+                            token = token_storage.get_token(client_ip)
+                            if token:
+                                session = session_manager.get_user_by_token(token)
+                                if session:
+                                    session.mayan_api_token = new_token
+                        except Exception as e:
+                            logger.warning(f'Не удалось обновить токен в сессии: {e}')
+                        
+                        # Создаем новый клиент с обновленным токеном
+                        client = MayanClient(
+                            base_url=config.mayan_url,
+                            api_token=new_token
+                        )
+                        logger.info('Клиент Mayan EDMS обновлен с новым токеном')
+                    else:
+                        raise ValueError('Повторная авторизация не удалась или была отменена')
+                
+                _token_checked = True
         
+        # Кэшируем клиент
+        _mayan_client_cache = client
         return client
         
     except MayanTokenExpiredError:
+        # Сбрасываем кэш при ошибке токена
+        _mayan_client_cache = None
+        _token_checked = False
+        
         logger.warning('Обнаружен истекший токен, запрашиваем повторную авторизацию')
         
         # Показываем диалог повторной авторизации
@@ -398,6 +443,7 @@ async def get_mayan_client() -> MayanClient:
                 current_user.mayan_api_token = new_token
                 # Обновляем сессию в session_manager
                 try:
+                    from auth.token_storage import token_storage
                     client_ip = ui.context.client.request.client.host
                     token = token_storage.get_token(client_ip)
                     if token:
@@ -412,13 +458,26 @@ async def get_mayan_client() -> MayanClient:
                 base_url=config.mayan_url,
                 api_token=new_token
             )
+            _mayan_client_cache = client
+            _token_checked = True
             logger.info('Клиент Mayan EDMS обновлен с новым токеном')
             return client
         else:
             raise ValueError('Повторная авторизация не удалась или была отменена')
     except Exception as e:
         logger.error(f'Ошибка при создании клиента Mayan EDMS: {e}', exc_info=True)
+        # Сбрасываем кэш при ошибке
+        _mayan_client_cache = None
+        _token_checked = False
         raise
+
+# Добавить функцию для сброса кэша (на случай смены пользователя)
+def reset_mayan_client_cache():
+    """Сбрасывает кэш клиента Mayan EDMS"""
+    global _mayan_client_cache, _token_checked
+    _mayan_client_cache = None
+    _token_checked = False
+    logger.info('Кэш клиента Mayan EDMS сброшен')
 
 async def check_connection() -> bool:
     """Проверяет подключение к Mayan EDMS"""
@@ -482,7 +541,7 @@ async def update_file_size(document: MayanDocument, size_label: ui.label):
         logger.error(f"Ошибка при получении количества страниц для документа {document.document_id}: {e}")
         size_label.text = "(ошибка получения страниц)"
 
-def create_document_card(document: MayanDocument) -> ui.card:
+def create_document_card(document: MayanDocument, update_cabinet_title_func=None, current_count=None, documents_count_label=None) -> ui.card:
     """Создает карточку документа с возможностью предоставления доступа"""
     
     # Временное логирование для отладки
@@ -493,6 +552,11 @@ def create_document_card(document: MayanDocument) -> ui.card:
     logger.info(f"- MIME-тип: {document.file_latest_mimetype}")
     
     with ui.card().classes('w-full mb-4') as card:
+        # Сохраняем функцию обновления, текущий счетчик и label счетчика в карточке
+        card.update_cabinet_title_func = update_cabinet_title_func
+        card.current_count = current_count
+        card.documents_count_label = documents_count_label
+        
         with ui.row().classes('w-full items-start gap-4'):
             # Превью документа (слева)
             preview_container = ui.column().classes('flex-shrink-0')
@@ -531,7 +595,16 @@ def create_document_card(document: MayanDocument) -> ui.card:
                             logger.info(f'URL превью для документа {document.document_id}: {preview_url}')
                             
                             # Загружаем изображение через клиент с аутентификацией
-                            image_data = await client.get_document_preview_image(document.document_id)
+                            try:
+                                image_data = await client.get_document_preview_image(document.document_id)
+                            except MayanTokenExpiredError:
+                                # Токен истек во время запроса, обновляем клиент и повторяем
+                                logger.warning(f'Токен истек при загрузке превью для документа {document.document_id}, обновляем...')
+                                global _mayan_client_cache, _token_checked
+                                _mayan_client_cache = None
+                                _token_checked = False
+                                client = await get_mayan_client()
+                                image_data = await client.get_document_preview_image(document.document_id)
                             
                             if image_data:
                                 logger.info(f'Получено {len(image_data)} байт изображения для документа {document.document_id}')
@@ -635,6 +708,15 @@ def create_document_card(document: MayanDocument) -> ui.card:
                     ui.button('Предоставить доступ', icon='share', color='blue').classes('text-xs').on_click(
                         lambda doc=document: show_grant_access_dialog(doc)
                     )
+                    
+                    # Кнопка удаления (только для admins и secretar)
+                    user_groups_normalized = [group.strip().lower() for group in current_user.groups]
+                    is_admin_or_secretar = 'admins' in user_groups_normalized or 'secretar' in user_groups_normalized
+                    
+                    if is_admin_or_secretar:
+                        ui.button('Удалить', icon='delete', color='red').classes('text-xs').on_click(
+                            lambda doc=document, card_ref=card: delete_document(doc, card_ref)
+                        )
         
         # Асинхронно проверяем наличие подписей и добавляем кнопку, если они есть
         async def check_and_add_signature_button():
@@ -1191,13 +1273,13 @@ async def handle_file_upload(
             logger.error(f'Не удалось отобразить ошибку в UI: {ui_error}')
 
 
-def download_document_file(document: MayanDocument):
+async def download_document_file(document: MayanDocument):
     """Скачивает файл документа через прокси"""
     try:
-        client = get_mayan_client()
+        client = await get_mayan_client()
         
         # Получаем содержимое файла
-        file_content = client.get_document_file_content(document.document_id)
+        file_content = await client.get_document_file_content(document.document_id)
         if not file_content:
             ui.notify('Не удалось получить содержимое файла', type='error')
             return
@@ -1697,9 +1779,18 @@ async def load_documents_by_cabinets():
                             with content_container:
                                 if child_cabinets:
                                     ui.label('Документы:').classes('text-sm font-semibold mb-2 mt-4')
-                                ui.label(f'Найдено документов: {len(documents)}').classes('text-sm text-gray-600 mb-2')
+                                
+                                # Создаем label для счетчика документов и сохраняем ссылку
+                                documents_count_label = ui.label(f'Найдено документов: {len(documents)}').classes('text-sm text-gray-600 mb-2')
+                                
                                 for document in documents:
-                                    create_document_card(document)
+                                    # Передаем функцию обновления заголовка, текущий счетчик и label счетчика
+                                    create_document_card(
+                                        document, 
+                                        update_cabinet_title, 
+                                        len(documents),
+                                        documents_count_label
+                                    )
                         elif not child_cabinets:
                             with content_container:
                                 ui.label('Документы не найдены').classes('text-sm text-gray-500 text-center py-4')
@@ -1872,7 +1963,17 @@ async def show_mayan_reauth_dialog() -> Optional[str]:
                 if new_token:
                     # Обновляем токен в сессии
                     current_user.mayan_api_token = new_token
-                    session_manager.update_session(current_user.username, current_user)
+                    # Обновляем сессию в session_manager
+                    try:
+                        from auth.token_storage import token_storage
+                        client_ip = ui.context.client.request.client.host
+                        token = token_storage.get_token(client_ip)
+                        if token:
+                            session = session_manager.get_user_by_token(token)
+                            if session:
+                                session.mayan_api_token = new_token
+                    except Exception as e:
+                        logger.warning(f'Не удалось обновить токен в сессии: {e}')
                     
                     status_label.text = 'Авторизация успешна!'
                     status_label.classes('text-green-500')
@@ -1909,3 +2010,92 @@ async def show_mayan_reauth_dialog() -> Optional[str]:
         return None
     
     return dialog_result['token']
+
+async def delete_document(document: MayanDocument, card: ui.card = None):
+    """Удаляет документ с подтверждением и удаляет карточку из UI"""
+    try:
+        # Показываем диалог подтверждения
+        with ui.dialog() as dialog, ui.card().classes('w-full max-w-md'):
+            ui.label(f'Удаление документа').classes('text-lg font-semibold mb-4')
+            ui.label(f'Вы уверены, что хотите удалить документ "{document.label}"?').classes('text-sm mb-4')
+            ui.label('Это действие нельзя отменить.').classes('text-xs text-red-500 mb-4')
+            
+            async def confirm_delete():
+                try:
+                    client = await get_mayan_client()
+                    success = await client.delete_document(document.document_id)
+                    
+                    if success:
+                        ui.notify(f'Документ "{document.label}" успешно удален', type='positive')
+                        dialog.close()
+                        
+                        # Удаляем карточку из UI напрямую, если она передана
+                        if card:
+                            try:
+                                # Читаем текущее значение счетчика из label "Найдено документов"
+                                current_count = None
+                                if hasattr(card, 'documents_count_label') and card.documents_count_label:
+                                    try:
+                                        # Парсим текущее значение из текста label
+                                        label_text = card.documents_count_label.text
+                                        import re
+                                        match = re.search(r'Найдено документов:\s*(\d+)', label_text)
+                                        if match:
+                                            current_count = int(match.group(1))
+                                            logger.info(f'Прочитано текущее значение счетчика из label: {current_count}')
+                                    except Exception as e:
+                                        logger.warning(f'Не удалось прочитать счетчик из label: {e}')
+                                
+                                # Если не удалось прочитать из label, используем сохраненное значение
+                                if current_count is None and hasattr(card, 'current_count') and card.current_count is not None:
+                                    current_count = card.current_count
+                                    logger.info(f'Используем сохраненное значение счетчика: {current_count}')
+                                
+                                # Обновляем счетчики, если удалось определить текущее значение
+                                if current_count is not None:
+                                    new_count = max(0, current_count - 1)  # Уменьшаем на 1, но не меньше 0
+                                    
+                                    # Обновляем счетчик документов в заголовке кабинета
+                                    if hasattr(card, 'update_cabinet_title_func') and card.update_cabinet_title_func:
+                                        card.update_cabinet_title_func(new_count)
+                                        logger.info(f'Обновлен счетчик документов в заголовке кабинета: {new_count}')
+                                    
+                                    # Обновляем label "Найдено документов"
+                                    if hasattr(card, 'documents_count_label') and card.documents_count_label:
+                                        card.documents_count_label.text = f'Найдено документов: {new_count}'
+                                        logger.info(f'Обновлен label счетчика документов: {new_count}')
+                                    
+                                    # Обновляем счетчик во всех карточках, которые используют тот же label
+                                    # Это нужно для того, чтобы при следующем удалении использовалось актуальное значение
+                                    if hasattr(card, 'documents_count_label') and card.documents_count_label:
+                                        # Находим все карточки с тем же label и обновляем их счетчик
+                                        # Это делается через обновление самого label, так что другие карточки будут читать актуальное значение
+                                        pass  # Label уже обновлен выше
+                                else:
+                                    logger.warning('Не удалось определить текущее значение счетчика')
+                                
+                                card.delete()
+                                logger.info(f'Карточка документа {document.document_id} удалена из UI')
+                            except Exception as e:
+                                logger.warning(f'Не удалось удалить карточку из UI: {e}')
+                                # Fallback: обновляем список, если не удалось удалить карточку
+                                await load_documents_by_cabinets()
+                        else:
+                            # Если карточка не передана, обновляем весь список
+                            logger.warning('Карточка не передана в delete_document, обновляем весь список')
+                            await load_documents_by_cabinets()
+                    else:
+                        ui.notify('Ошибка при удалении документа', type='error')
+                except Exception as e:
+                    logger.error(f'Ошибка при удалении документа: {e}', exc_info=True)
+                    ui.notify(f'Ошибка при удалении: {str(e)}', type='error')
+            
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Отмена', on_click=dialog.close).classes('bg-gray-500 text-white')
+                ui.button('Удалить', icon='delete', color='red', on_click=confirm_delete).classes('bg-red-500 text-white')
+        
+        dialog.open()
+        
+    except Exception as e:
+        logger.error(f'Ошибка при открытии диалога удаления документа: {e}', exc_info=True)
+        ui.notify(f'Ошибка: {str(e)}', type='error')
