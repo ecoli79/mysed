@@ -5,6 +5,12 @@ from nicegui import ui
 from fastapi import APIRouter, Request
 import json
 import logging
+import re
+from auth.middleware import get_current_user
+from auth.ldap_auth import LDAPAuthenticator
+from typing import Optional
+from auth.session_manager import session_manager, UserSession
+from auth.token_storage import token_storage, get_last_token
 
 # Создаем FastAPI роутер для API endpoints
 api_router = APIRouter(prefix='/api')
@@ -15,6 +21,10 @@ logger = logging.getLogger(__name__)
 _certificates_cache = []
 _selected_certificate = None
 _signature_result = None
+_last_user_username = None  # Добавляем переменную для отслеживания смены пользователя
+
+# Добавляем глобальную переменную для режима показа всех сертификатов
+_show_all_certificates = False
 
 # Функции для работы с состоянием
 def get_selected_certificate():
@@ -34,6 +44,267 @@ def set_certificates_cache(certificates):
     """Устанавливает кэш сертификатов"""
     global _certificates_cache
     _certificates_cache = certificates
+
+def extract_cn_from_subject(subject: str) -> str:
+    """
+    Извлекает CN (Common Name) из subject сертификата
+    
+    Args:
+        subject: Строка subject сертификата, например "CN=Имполитов Денис Владимирович, O=Организация, ..."
+        
+    Returns:
+        CN значение или пустая строка
+    """
+    if not subject:
+        return ''
+    
+    # Ищем CN= в строке
+    cn_match = re.search(r'CN=([^,]+)', subject, re.IGNORECASE)
+    if cn_match:
+        return cn_match.group(1).strip()
+    
+    return ''
+
+def normalize_fio(fio: str) -> str:
+    """
+    Нормализует ФИО для сравнения: убирает лишние пробелы, приводит к нижнему регистру
+    
+    Args:
+        fio: ФИО в любом формате
+        
+    Returns:
+        Нормализованная строка ФИО
+    """
+    if not fio:
+        return ''
+    
+    # Убираем лишние пробелы и приводим к нижнему регистру
+    normalized = ' '.join(fio.split()).lower()
+    return normalized
+
+def remove_middle_name(fio: str) -> str:
+    """
+    Убирает отчество из ФИО, оставляя только имя и фамилию
+    
+    Args:
+        fio: Полное ФИО, например "Имполитов Денис Владимирович"
+        
+    Returns:
+        ФИО без отчества, например "Имполитов Денис"
+    """
+    if not fio:
+        return ''
+    
+    parts = fio.split()
+    if len(parts) >= 2:
+        # Берем первые два слова (фамилия и имя)
+        return ' '.join(parts[:2])
+    return fio
+
+def get_user_from_request(request: Request) -> Optional[UserSession]:
+    """
+    Получает пользователя из FastAPI Request
+    
+    Args:
+        request: FastAPI Request объект
+        
+    Returns:
+        UserSession или None
+    """
+    try:
+        # Получаем IP адрес клиента из запроса
+        client_ip = request.client.host if request.client else None
+        
+        if not client_ip:
+            # Пробуем получить из заголовков
+            forwarded_for = request.headers.get('X-Forwarded-For')
+            if forwarded_for:
+                client_ip = forwarded_for.split(',')[0].strip()
+            else:
+                client_ip = "unknown"
+        
+        logger.debug(f"Получен IP адрес клиента: {client_ip}")
+        
+        # Получаем токен из хранилища по IP
+        token = token_storage.get_token(client_ip)
+        
+        # Если токен не найден по IP, пробуем последний токен
+        if not token:
+            token = get_last_token()
+            logger.debug(f"Используем последний токен: {token[:8] if token else None}...")
+        
+        if token:
+            user = session_manager.get_user_by_token(token)
+            if user:
+                logger.debug(f"Пользователь найден по токену: {user.username}")
+                return user
+            else:
+                logger.warning(f"Пользователь не найден для токена: {token[:8] if token else None}...")
+        else:
+            logger.warning(f"Токен не найден для IP: {client_ip}")
+            
+    except Exception as e:
+        logger.error(f"Ошибка получения пользователя из Request: {e}", exc_info=True)
+    
+    return None
+
+def get_user_fio_for_certificate_matching(request: Request = None) -> str:
+    """
+    Получает ФИО текущего пользователя для сравнения с сертификатами
+    
+    Args:
+        request: Опциональный FastAPI Request объект для получения пользователя
+        
+    Returns:
+        Строка с именем и фамилией пользователя в формате "Фамилия Имя"
+    """
+    global _last_user_username
+    
+    try:
+        # Пробуем получить пользователя из Request, если он передан
+        user = None
+        if request:
+            user = get_user_from_request(request)
+        
+        # Если не получили из Request, пробуем через get_current_user (для NiceGUI контекста)
+        if not user:
+            try:
+                user = get_current_user()
+            except Exception as e:
+                logger.debug(f"get_current_user() не доступен в этом контексте: {e}")
+        
+        if not user:
+            logger.warning("Не удалось получить пользователя ни из Request, ни из ui.context")
+            # Очищаем кэш при отсутствии пользователя
+            _last_user_username = None
+            return ''
+        
+        current_username = getattr(user, 'username', '').strip()
+        
+        # Если пользователь изменился, очищаем кэш сертификатов
+        if _last_user_username and _last_user_username != current_username:
+            logger.info(f"Обнаружена смена пользователя: {_last_user_username} -> {current_username}, очищаем кэш сертификатов")
+            global _certificates_cache, _selected_certificate
+            _certificates_cache = []
+            _selected_certificate = None
+        
+        _last_user_username = current_username
+        
+        logger.info(f"Получен пользователь: username={current_username}, first_name={getattr(user, 'first_name', 'N/A')}, last_name={getattr(user, 'last_name', 'N/A')}")
+        
+        # Пробуем получить из сессии пользователя
+        if hasattr(user, 'first_name') and hasattr(user, 'last_name'):
+            first_name = getattr(user, 'first_name', '').strip()
+            last_name = getattr(user, 'last_name', '').strip()
+            
+            if first_name and last_name:
+                # Формат: "Фамилия Имя"
+                fio = f"{last_name} {first_name}"
+                logger.info(f"ФИО из сессии: {fio}")
+                return fio
+        
+        # Если нет в сессии, пробуем получить из LDAP
+        if current_username:
+            try:
+                ldap_auth = LDAPAuthenticator()
+                ldap_user = ldap_auth.get_user_by_login(current_username)
+                if ldap_user:
+                    sn = getattr(ldap_user, 'sn', '').strip()
+                    given_name = getattr(ldap_user, 'givenName', '').strip()
+                    
+                    if sn and given_name:
+                        # Формат: "Фамилия Имя"
+                        fio = f"{sn} {given_name}"
+                        logger.info(f"ФИО из LDAP: {fio}")
+                        return fio
+                    else:
+                        logger.warning(f"LDAP пользователь найден, но sn или givenName пустые: sn={sn}, givenName={given_name}")
+                else:
+                    logger.warning(f"LDAP пользователь не найден для username={current_username}")
+            except Exception as ldap_error:
+                logger.error(f"Ошибка при получении пользователя из LDAP: {ldap_error}", exc_info=True)
+        
+        logger.warning("Не удалось получить ФИО пользователя ни из сессии, ни из LDAP")
+    except Exception as e:
+        logger.error(f"Ошибка получения ФИО пользователя: {e}", exc_info=True)
+    
+    return ''
+
+def extract_name_parts(fio: str) -> tuple:
+    """
+    Извлекает части ФИО (фамилию и имя) из строки
+    
+    Args:
+        fio: ФИО в любом формате, например "Имполитов Денис Владимирович" или "Имполитов Денис"
+        
+    Returns:
+        Кортеж (фамилия, имя) в нижнем регистре, или (None, None) если не удалось извлечь
+    """
+    if not fio:
+        return (None, None)
+    
+    # Нормализуем: убираем лишние пробелы, кавычки, приводим к нижнему регистру
+    normalized = ' '.join(fio.split()).lower()
+    # Убираем кавычки
+    normalized = normalized.strip('"\'')
+    
+    parts = normalized.split()
+    
+    if len(parts) >= 2:
+        # Берем первые два слова как фамилию и имя
+        return (parts[0], parts[1])
+    elif len(parts) == 1:
+        # Если только одно слово, считаем его фамилией
+        return (parts[0], None)
+    
+    return (None, None)
+
+def match_user_fio_with_certificate(user_fio: str, certificate_cn: str) -> bool:
+    """
+    Сравнивает ФИО пользователя с CN сертификата
+    
+    Сравнивает только фамилию и имя, игнорируя отчество и порядок слов.
+    Например:
+    - "Имполитов Денис" совпадет с "Имполитов Денис Владимирович"
+    - "Денис Имполитов" совпадет с "Имполитов Денис Владимирович"
+    
+    Args:
+        user_fio: ФИО пользователя (может быть "Фамилия Имя" или "Имя Фамилия")
+        certificate_cn: CN из сертификата (может содержать отчество)
+        
+    Returns:
+        True если фамилия и имя совпадают (без учета отчества и порядка)
+    """
+    if not user_fio or not certificate_cn:
+        return False
+    
+    # Извлекаем части ФИО
+    user_surname, user_name = extract_name_parts(user_fio)
+    cert_surname, cert_name = extract_name_parts(certificate_cn)
+    
+    if not user_surname or not user_name:
+        logger.debug(f"Не удалось извлечь фамилию и имя из user_fio: {user_fio}")
+        return False
+    
+    if not cert_surname or not cert_name:
+        logger.debug(f"Не удалось извлечь фамилию и имя из certificate_cn: {certificate_cn}")
+        return False
+    
+    # Сравниваем: фамилия и имя должны совпадать (в любом порядке)
+    # Вариант 1: user_fio = "Фамилия Имя", cert_cn = "Фамилия Имя ..."
+    match1 = (user_surname == cert_surname) and (user_name == cert_name)
+    
+    # Вариант 2: user_fio = "Имя Фамилия", cert_cn = "Фамилия Имя ..." (обратный порядок)
+    match2 = (user_surname == cert_name) and (user_name == cert_surname)
+    
+    result = match1 or match2
+    
+    if result:
+        logger.info(f"Совпадение найдено: user_fio='{user_fio}' ({user_surname} {user_name}) <-> cert_cn='{certificate_cn}' ({cert_surname} {cert_name})")
+    else:
+        logger.debug(f"Совпадение не найдено: user_fio='{user_fio}' ({user_surname} {user_name}) <-> cert_cn='{certificate_cn}' ({cert_surname} {cert_name})")
+    
+    return result
 
 # NiceGUI страницы (без роутера)
 @ui.page('/c')
@@ -56,7 +327,7 @@ def item(item_id: str):
 @api_router.post("/cryptopro-event")
 async def handle_cryptopro_event(request: Request):
     """Обрабатывает события от КриптоПро плагина"""
-    global _certificates_cache, _selected_certificate, _signature_result
+    global _certificates_cache, _selected_certificate, _signature_result, _last_user_username
     
     try:
         data = await request.json()
@@ -69,23 +340,87 @@ async def handle_cryptopro_event(request: Request):
         if event_name == 'certificates_loaded':
             certificates = event_data.get('certificates', [])
             count = event_data.get('count', 0)
-            logger.info(f"Загружено сертификатов: {count}")
+            show_all = event_data.get('show_all', False)
+            
+            logger.info(f"Загружено сертификатов: {count}, show_all: {show_all}")
+            
+            # Получаем текущего пользователя из Request
+            user = get_user_from_request(request)
+            current_username = getattr(user, 'username', '').strip() if user else None
+            
+            logger.info(f"Пользователь из Request: username={current_username}, user={user is not None}")
+            
+            # Если пользователь изменился, очищаем кэш
+            if _last_user_username and _last_user_username != current_username:
+                logger.info(f"Обнаружена смена пользователя при загрузке сертификатов: {_last_user_username} -> {current_username}")
+                _certificates_cache = []
+                _selected_certificate = None
+                _last_user_username = current_username
+            
+            # Получаем ФИО пользователя для фильтрации (передаем request)
+            user_fio = get_user_fio_for_certificate_matching(request)
+            logger.info(f"ФИО пользователя для фильтрации: '{user_fio}' (username: {current_username})")
+            
+            # Фильтруем сертификаты, если не включен режим показа всех
+            filtered_certificates = []
+            matched_certificates = []
+            
+            if show_all:
+                # Показываем все сертификаты
+                filtered_certificates = certificates
+                logger.info("Режим показа всех сертификатов включен")
+            else:
+                # НЕ показываем все сертификаты автоматически, даже если ФИО пустое
+                # Пользователь должен сам решить, показывать ли все сертификаты
+                if not user_fio:
+                    logger.warning(f"ФИО пользователя пустое (username: {current_username}), показываем пустой список")
+                    filtered_certificates = []  # Показываем пустой список, а не все сертификаты
+                else:
+                    # Фильтруем по ФИО пользователя
+                    for cert in certificates:
+                        subject = cert.get('subject', '')
+                        cn = extract_cn_from_subject(subject)
+                        
+                        if cn:
+                            if match_user_fio_with_certificate(user_fio, cn):
+                                matched_certificates.append(cert)
+                                logger.info(f"Найден соответствующий сертификат: {cn}")
+                            else:
+                                logger.debug(f"Сертификат не соответствует: CN={cn}, User FIO={user_fio}")
+                        else:
+                            logger.warning(f"Не удалось извлечь CN из subject: {subject}")
+                    
+                    filtered_certificates = matched_certificates
+                    
+                    if not filtered_certificates:
+                        logger.warning(f"Не найдено сертификатов, соответствующих ФИО пользователя '{user_fio}' (username: {current_username}). Всего сертификатов: {count}")
             
             # Создаем словарь опций для NiceGUI select
             options = {}
-            for i, cert in enumerate(certificates):
+            for i, cert in enumerate(filtered_certificates):
                 # Используем индекс как ключ, а subject как отображаемое значение
                 options[str(i)] = f"{cert['subject']} (действителен до: {cert['validTo']})"
             
-            # Обновляем глобальную переменную с сертификатами
-            _certificates_cache = certificates
+            # Обновляем глобальную переменную с отфильтрованными сертификатами
+            _certificates_cache = filtered_certificates
             
-            return {
+            # Формируем ответ
+            response = {
                 "status": "success", 
                 "action": "update_select",
                 "options": options,
-                "certificates": certificates
+                "certificates": filtered_certificates,
+                "total_count": count,
+                "filtered_count": len(filtered_certificates),
+                "show_all": show_all
             }
+            
+            # Если сертификаты не найдены и не включен режим показа всех, добавляем предупреждение
+            if not show_all and not filtered_certificates and certificates:
+                response["warning"] = "Сертификат пользователя не найден. Используйте параметр show_all=true для показа всех сертификатов."
+                response["message"] = f"Не найдено сертификатов, соответствующих ФИО пользователя ({user_fio}). Всего доступно сертификатов: {count}."
+            
+            return response
             
         elif event_name == 'certificate_selected':
             value = event_data.get('value', '')

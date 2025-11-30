@@ -62,6 +62,9 @@ _selected_task_id: Optional[str] = None
 
 _task_cards = {}
 
+# Добавляем глобальную переменную для режима показа всех сертификатов
+_show_all_certificates = False
+
 
 async def get_mayan_client() -> MayanClient:
     """Получает клиент Mayan EDMS с учетными данными текущего пользователя"""
@@ -1280,6 +1283,12 @@ def complete_regular_task(task):
 async def complete_signing_task(task):
     """Завершает задачу подписания документа"""
     
+    # Объявляем global в начале функции
+    global _show_all_certificates, _document_for_signing
+    
+    # Сбрасываем глобальную переменную при открытии диалога
+    _show_all_certificates = False  # Всегда начинаем с фильтрованного режима
+    
     with ui.dialog() as dialog, ui.card().classes('w-full max-w-4xl'):
         ui.label('Подписание документа').classes('text-xl font-bold mb-4')
         
@@ -1471,6 +1480,31 @@ async def complete_signing_task(task):
             if document_loaded:
                 ui.label('Электронная подпись:').classes('text-lg font-semibold')
                 crypto_status = ui.html('').classes('mb-4')
+                
+                # Добавляем переключатель для показа всех сертификатов
+                # УДАЛИТЬ строку: global _show_all_certificates (уже объявлен в начале функции)
+                
+                def on_show_all_changed(e):
+                    """Обработчик изменения переключателя"""
+                    global _show_all_certificates  # Оставляем здесь, так как это вложенная функция
+                    # В NiceGUI событие передает объект с атрибутом value
+                    if hasattr(e, 'value'):
+                        _show_all_certificates = e.value
+                    elif isinstance(e, bool):
+                        _show_all_certificates = e
+                    else:
+                        # Если это другой формат события, пробуем получить значение из checkbox
+                        _show_all_certificates = show_all_checkbox.value
+                    
+                    # Перезагружаем сертификаты с новым параметром
+                    check_crypto_pro_availability(crypto_status)
+                
+                show_all_checkbox = ui.checkbox(
+                    'Показать все сертификаты',
+                    value=_show_all_certificates,
+                    on_change=on_show_all_changed
+                ).classes('mb-2')
+                
                 check_crypto_pro_availability(crypto_status)
                 
                 # Информация о выбранном сертификате
@@ -1642,6 +1676,8 @@ async def complete_signing_task_with_result(task, document_id, document_name, di
 def check_crypto_pro_availability(status_container):
     """Проверяет доступность КриптоПро плагина"""
     try:
+        global _show_all_certificates
+        
         # Сначала показываем статус проверки
         status_container.content = '''
         <div id="crypto-status" style="padding: 10px; border: 1px solid #ddd; border-radius: 4px; background-color: #f9f9f9;">
@@ -1668,16 +1704,17 @@ def check_crypto_pro_availability(status_container):
                     `;
                 }}
                 
-                // Автоматически загружаем сертификаты
+                // Автоматически загружаем сертификаты с параметром show_all
                 setTimeout(() => {{
                     window.cryptoProIntegration.getAvailableCertificates()
                         .then(certificates => {{
                             console.log("Сертификаты получены:", certificates);
                             
-                            // Отправляем событие о загруженных сертификатах
+                            // Отправляем событие о загруженных сертификатах с параметром show_all
                             window.nicegui_handle_event('certificates_loaded', {{
                                 certificates: certificates,
-                                count: certificates.length
+                                count: certificates.length,
+                                show_all: {str(_show_all_certificates).lower()}
                             }});
                         }})
                         .catch(error => {{
@@ -1711,23 +1748,26 @@ def check_crypto_pro_availability(status_container):
 def load_certificates(certificate_select, status_container: ui.html):
     """Загружает список доступных сертификатов"""
     try:
-        ui.run_javascript('''
+        global _show_all_certificates
+        
+        ui.run_javascript(f'''
             console.log('=== Автоматическая загрузка сертификатов ===');
+            console.log('show_all: {str(_show_all_certificates).lower()}');
             
             // Принудительно устанавливаем pluginAvailable = true
-            if (window.cryptoProIntegration) {
+            if (window.cryptoProIntegration) {{
                 window.cryptoProIntegration.pluginAvailable = true;
                 window.cryptoProIntegration.pluginLoaded = true;
                 console.log('Принудительно установлен pluginAvailable = true');
-            }
+            }}
             
             // Используем готовую функцию из async_code.js
-            if (typeof window.cadesplugin !== 'undefined') {
+            if (typeof window.cadesplugin !== 'undefined') {{
                 console.log('cadesplugin найден, получаем сертификаты...');
                 
                 // Используем async_spawn для получения сертификатов
-                window.cadesplugin.async_spawn(function*() {
-                    try {
+                window.cadesplugin.async_spawn(function*() {{
+                    try {{
                         console.log('Создаем объект Store...');
                         const oStore = yield window.cadesplugin.CreateObjectAsync("CAdESCOM.Store");
                         console.log('Объект Store создан');
@@ -1739,13 +1779,13 @@ def load_certificates(certificate_select, status_container: ui.html):
                         console.log('Получаем список сертификатов...');
                         const certs = yield oStore.Certificates;
                         const certCnt = yield certs.Count;
-                        console.log(`Найдено сертификатов: ${certCnt}`);
+                        console.log(`Найдено сертификатов: ${{certCnt}}`);
                         
                         const certList = [];
                         
-                        for (let i = 1; i <= certCnt; i++) {
-                            try {
-                                console.log(`Обрабатываем сертификат ${i}...`);
+                        for (let i = 1; i <= certCnt; i++) {{
+                            try {{
+                                console.log(`Обрабатываем сертификат ${{i}}...`);
                                 const cert = yield certs.Item(i);
                                 const subject = yield cert.SubjectName;
                                 const issuer = yield cert.IssuerName;
@@ -1759,8 +1799,8 @@ def load_certificates(certificate_select, status_container: ui.html):
                                 const isValid = validToDate > new Date();
                                 
                                 // Добавляем только сертификаты с приватным ключом (для подписи)
-                                if (hasPrivateKey) {
-                                    const certInfo = {
+                                if (hasPrivateKey) {{
+                                    const certInfo = {{
                                         subject: subject,
                                         issuer: issuer,
                                         serialNumber: serialNumber,
@@ -1769,46 +1809,47 @@ def load_certificates(certificate_select, status_container: ui.html):
                                         isValid: isValid,
                                         hasPrivateKey: hasPrivateKey,
                                         index: i
-                                    };
+                                    }};
                                     
                                     certList.push(certInfo);
-                                    console.log(`✅ Сертификат для подписи: ${subject} (действителен: ${isValid})`);
-                                } else {
-                                    console.log(`⚠️ Сертификат без приватного ключа: ${subject}`);
-                                }
+                                    console.log(`✅ Сертификат для подписи: ${{subject}} (действителен: ${{isValid}})`);
+                                }} else {{
+                                    console.log(`⚠️ Сертификат без приватного ключа: ${{subject}}`);
+                                }}
                                 
-                            } catch (certError) {
-                                console.warn(`⚠️ Ошибка при получении сертификата ${i}:`, certError);
-                            }
-                        }
+                            }} catch (certError) {{
+                                console.warn(`⚠️ Ошибка при получении сертификата ${{i}}:`, certError);
+                            }}
+                        }}
                         
                         console.log('Закрываем хранилище...');
                         yield oStore.Close();
-                        console.log(`✅ Успешно получено ${certList.length} сертификатов`);
+                        console.log(`✅ Успешно получено ${{certList.length}} сертификатов`);
                         
-                        // Отправляем сертификаты в Python через событие
-                        window.nicegui_handle_event('certificates_loaded', {
+                        // Отправляем сертификаты в Python через событие с параметром show_all
+                        window.nicegui_handle_event('certificates_loaded', {{
                             certificates: certList,
-                            count: certList.length
-                        });
+                            count: certList.length,
+                            show_all: {str(_show_all_certificates).lower()}
+                        }});
                         
                         return certList;
                         
-                    } catch (e) {
+                    }} catch (e) {{
                         console.error('❌ Ошибка при получении сертификатов:', e);
-                        window.nicegui_handle_event('certificates_error', {
+                        window.nicegui_handle_event('certificates_error', {{
                             error: e.message || 'Неизвестная ошибка'
-                        });
+                        }});
                         throw e;
-                    }
-                });
+                    }}
+                }});
                 
-            } else {
+            }} else {{
                 console.error('cadesplugin не найден');
-                window.nicegui_handle_event('integration_not_available', {
+                window.nicegui_handle_event('integration_not_available', {{
                     message: 'КриптоПро интеграция недоступна'
-                });
-            }
+                }});
+            }}
         ''')
         
     except Exception as e:
