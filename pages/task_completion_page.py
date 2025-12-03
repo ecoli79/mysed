@@ -177,7 +177,7 @@ def create_active_tasks_section():
             'Обновить задачи',
             icon='refresh',
             on_click=lambda: load_active_tasks(_tasks_header_container)
-        ).classes('mb-4 bg-blue-500 text-white')
+        ).classes('mb-4 bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
         # Контейнер для заголовка с количеством задач
         _tasks_header_container = ui.column().classes('w-full mb-4')
@@ -486,13 +486,13 @@ async def create_task_card_with_progress(task):
                         'Завершить задачу',
                         icon='check',
                         on_click=lambda t=task: complete_task(t)
-                    ).classes('bg-green-500 text-white')
+                    ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
                     
                     ui.button(
                         'Детали',
                         icon='info',
                         on_click=lambda t=task: show_task_details(t)
-                    ).classes('bg-blue-500 text-white')
+                    ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
             
             # Контейнер для деталей задачи (скрыт по умолчанию)
             details_container = ui.column().classes('w-full mt-4')
@@ -534,13 +534,13 @@ def create_task_card(task):
                             'Просмотр деталей',
                             icon='visibility',
                             on_click=lambda t=task: show_task_details(t)
-                        ).classes('bg-blue-500 text-white text-xs')
+                        ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                         
                         ui.button(
                             'Завершить задачу',
                             icon='check',
                             on_click=lambda t=task: complete_task(t)
-                        ).classes('bg-green-500 text-white text-xs')
+                        ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
                 
                 with ui.column().classes('items-end'):
                     ui.label(f'ID: {task.id}').classes('text-xs text-gray-500 font-mono')
@@ -558,7 +558,7 @@ def create_completed_tasks_section():
             'Обновить задачи',
             icon='refresh',
             on_click=load_completed_tasks
-        ).classes('mb-4 bg-blue-500 text-white')
+        ).classes('mb-4 bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
         # Контейнер для задач
         _completed_tasks_container = ui.column().classes('w-full')
@@ -671,7 +671,7 @@ def create_grouped_completed_task_card(task):
                             'Просмотр деталей',
                             icon='visibility',
                             on_click=lambda t=task: show_grouped_task_details_in_tab(t)
-                        ).classes('bg-blue-500 text-white text-xs')
+                        ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                 
                 with ui.column().classes('items-end'):
                     ui.label(f'ID процесса: {task.process_instance_id}').classes('text-xs text-gray-500 font-mono')
@@ -789,7 +789,7 @@ async def show_grouped_task_details_in_tab(task):
                 'Обновить детали',
                 icon='refresh',
                 on_click=lambda t=task: show_grouped_task_details_in_tab(t)
-            ).classes('w-full bg-blue-500 text-white')
+            ).classes('w-full bg-blue-500 text-white text-xs px-2 py-1 h-7')
 
 def create_completed_task_card(task):
     """Создает карточку завершенной задачи"""
@@ -822,7 +822,7 @@ def create_completed_task_card(task):
                             'Просмотр деталей',
                             icon='visibility',
                             on_click=lambda t=task: show_details(t)
-                        ).classes('bg-blue-500 text-white text-xs')
+                        ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                         
                         # ui.button(
                         #     'Просмотр результатов',
@@ -969,7 +969,7 @@ async def show_completed_task_details_in_tab(task):
                                         'Скачать документ с подписями',
                                         icon='download',
                                         on_click=download_signed
-                                    ).classes('bg-green-600 text-white')
+                                    ).classes('bg-green-600 text-white text-xs px-2 py-1 h-7')
                             
                             # Список участников процесса (только для задач подписания)
                             if is_signing_task and 'signerList' in process_variables:
@@ -1140,7 +1140,7 @@ def create_task_details_section():
             'Загрузить детали',
             icon='search',
             on_click=lambda: load_task_details(task_id_input.value)
-        ).classes('bg-blue-500 text-white mb-4')
+        ).classes('bg-blue-500 text-white mb-4 text-xs px-2 py-1 h-7')
         
         # Контейнер для деталей задачи
         _details_container = ui.column().classes('w-full')
@@ -1270,13 +1270,13 @@ def complete_regular_task(task):
                 ui.button(
                     'Отмена',
                     on_click=dialog.close
-                ).classes('bg-gray-500 text-white')
+                ).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                 
                 ui.button(
                     'Завершить задачу',
                     icon='check',
                     on_click=lambda: submit_task_completion(task, status_select.value, comment_textarea.value, dialog)
-                ).classes('bg-green-500 text-white')
+                ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
     
     dialog.open()
 
@@ -1364,9 +1364,9 @@ async def complete_signing_task(task):
                                     'Завершить задачу',
                                     icon='check_circle',
                                     on_click=complete_already_signed
-                                ).classes('bg-green-600 text-white')
+                                ).classes('bg-green-600 text-white text-xs px-2 py-1 h-7')
                                 
-                                ui.button('Закрыть', on_click=dialog.close).classes('bg-gray-500 text-white')
+                                ui.button('Закрыть', on_click=dialog.close).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                             
                             dialog.open()
                             return  # Выходим из функции, не показывая форму подписания
@@ -1441,13 +1441,13 @@ async def complete_signing_task(task):
                                 'Просмотр документа',
                                 icon='visibility',
                                 on_click=open_preview
-                            ).classes('bg-blue-500 text-white')
+                            ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                             
                             ui.button(
                                 'Скачать документ',
                                 icon='download',
                                 on_click=download_doc
-                            ).classes('bg-green-500 text-white')
+                            ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
                         
                         global _document_for_signing
                         _document_for_signing = {
@@ -1535,8 +1535,8 @@ async def complete_signing_task(task):
                                 certificate_info_display,
                                 result_container
                             )
-                        ).classes('bg-green-500 text-white')
-                        ui.button('ОТМЕНА', on_click=dialog.close).classes('bg-gray-500 text-white')
+                        ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
+                        ui.button('ОТМЕНА', on_click=dialog.close).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                 
                 # Результат подписания (изначально скрыт)
                 result_container = ui.column().classes('w-full mb-4')
@@ -1555,7 +1555,7 @@ async def complete_signing_task(task):
                             document_name,
                             dialog
                         )
-                    ).classes('bg-green-600 text-white')
+                    ).classes('bg-green-600 text-white text-xs px-2 py-1 h-7')
             else:
                 # Если документ не загружен, показываем только кнопку завершения задачи
                 with ui.card().classes('p-4 bg-blue-50 border border-blue-200 mb-4'):
@@ -1573,12 +1573,12 @@ async def complete_signing_task(task):
                         )
                     
                     with ui.row().classes('w-full justify-end gap-2'):
-                        ui.button('ОТМЕНА', on_click=dialog.close).classes('bg-gray-500 text-white')
+                        ui.button('ОТМЕНА', on_click=dialog.close).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                         ui.button(
                             'Завершить задачу',
                             icon='check',
                             on_click=complete_without_signing
-                        ).classes('bg-green-600 text-white')
+                        ).classes('bg-green-600 text-white text-xs px-2 py-1 h-7')
     
     dialog.open()
 
@@ -2710,7 +2710,7 @@ async def load_and_display_document(document_id: str, container: ui.column):
                     'Открыть документ в Mayan EDMS',
                     icon='open_in_new',
                     on_click=lambda url=document_url: ui.run_javascript(f'window.open("{url}", "_blank")')
-                ).classes('mb-4 bg-blue-500 text-white')
+                ).classes('mb-4 bg-blue-500 text-white text-xs px-2 py-1 h-7')
                 
                 # Отображаем содержимое документа
                 if 'content' in document_info and document_info['content']:
@@ -3165,7 +3165,7 @@ async def show_task_details(task):
                                             'Скачать документ',
                                             icon='download',
                                             on_click=lambda doc_id=doc_id_str, doc_name=document_name: download_document_from_task(doc_id, doc_name)
-                                        ).classes('bg-green-500 text-white')
+                                        ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
                                         
                                         # Добавляем кнопку для просмотра, если есть preview URL
                                         preview_url = await mayan_client.get_document_preview_url(doc_id_str)
@@ -3174,7 +3174,7 @@ async def show_task_details(task):
                                                 'Просмотр документа',
                                                 icon='visibility',
                                                 on_click=lambda doc_id=doc_id_str: open_document_preview(doc_id)
-                                            ).classes('bg-blue-500 text-white')
+                                            ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                                     
                             except Exception as e:
                                 logger.error(f"Ошибка при получении URL документа {document_id}: {e}", exc_info=True)
@@ -3190,7 +3190,7 @@ async def show_task_details(task):
                     'Скрыть детали',
                     icon='close',
                     on_click=lambda: hide_task_details_in_card(task_id_str, process_id_str)
-                ).classes('bg-gray-500 text-white')
+                ).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
             
         except Exception as e:
             ui.label(f'Ошибка при загрузке деталей: {str(e)}').classes('text-red-600')

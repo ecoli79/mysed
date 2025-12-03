@@ -1,8 +1,7 @@
 import asyncio
 import api_router
-import class_example
 import function_example
-from pages import home_page, deploy_work, task_completion_page, document_review_page, login_page, my_processes_page, mayan_documents, document_signing_page
+from pages import home_page, deploy_work, task_completion_page, document_review_page, login_page, my_processes_page, mayan_documents, document_signing_page, task_assignment_page
 from auth.middleware import require_auth, get_current_user
 import theme
 import os
@@ -192,10 +191,10 @@ def test_page():
 #function_example.create()
 
 # Example 3: use a class to move the whole page creation into a separate file
-from class_example import ClassExample
+from pages.task_assignment_page import TaskAssignmentPage
 
 # Инициализируем класс с назначением задач
-task_assignment = ClassExample()
+task_assignment = TaskAssignmentPage()
 
 # Example 4: use APIRouter as described in https://nicegui.io/documentation/page#modularize_with_apirouter
 # Подключаем API роутер для обработки событий КриптоПро

@@ -106,8 +106,7 @@ def content():
         await load_my_processes(
             processes_container, 
             completed_processes_container,
-            details_container,
-            gantt_container,  # ДОБАВИТЬ
+            gantt_container,
             current_user.username,
             show_completed=show_completed,
             days=period_days
@@ -174,7 +173,7 @@ def content():
                     'Показать завершенные',
                     icon='visibility',
                     on_click=toggle_completed
-                ).classes('bg-gray-500 text-white')
+                ).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                 
                 # Фильтр по дням (скрыт по умолчанию)
                 period_select = ui.select(
@@ -194,30 +193,23 @@ def content():
                     'Обновить', 
                     icon='refresh', 
                     on_click=refresh_processes
-                ).classes('bg-blue-500 text-white')
+                ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
-        # Создаем структуру: диаграмма Ганта сверху на всю ширину, под ней процессы и детали
+        # Создаем структуру: диаграмма Ганта сверху на всю ширину, под ней процессы
         # Контейнер для диаграммы Ганта (на всю ширину)
         gantt_container = ui.column().classes('w-full mb-4')
         
-        # Создаем разделенную структуру: слева процессы, справа детали
-        with ui.row().classes('w-full gap-4'):
-            # Левая колонка - список процессов (занимает всю доступную ширину)
-            with ui.column().classes('flex-1 min-w-0'):
-                processes_container = ui.column().classes('w-full')
-                # Контейнер для завершенных процессов (скрыт по умолчанию)
-                completed_processes_container = ui.column().classes('w-full')
-                completed_processes_container.set_visibility(False)
-            
-            # Правая колонка - детали процесса
-            with ui.column().classes('w-1/3 min-w-[400px]'):
-                details_container = ui.column().classes('w-full')
-                _details_container = details_container
+        # Контейнер для процессов (занимает всю ширину)
+        with ui.column().classes('w-full'):
+            processes_container = ui.column().classes('w-full')
+            # Контейнер для завершенных процессов (скрыт по умолчанию)
+            completed_processes_container = ui.column().classes('w-full')
+            completed_processes_container.set_visibility(False)
         
         # Загружаем процессы
         ui.timer(0.1, lambda: refresh_processes(), once=True)
 
-async def load_my_processes(processes_container, completed_processes_container, details_container, gantt_container, creator_username, show_completed: bool = False, days: int = 7):
+async def load_my_processes(processes_container, completed_processes_container, gantt_container, creator_username, show_completed: bool = False, days: int = 7):
     """Загружает процессы созданные пользователем"""
     global _process_cards
     
@@ -227,7 +219,6 @@ async def load_my_processes(processes_container, completed_processes_container, 
         # ОЧИЩАЕМ КОНТЕЙНЕРЫ ПЕРЕД ЗАГРУЗКОЙ
         processes_container.clear()
         completed_processes_container.clear()
-        details_container.clear()  # Очищаем блок с деталями процесса
         gantt_container.clear()  # Очищаем контейнер диаграммы
         _process_cards.clear()  # Очищаем словарь карточек
         
@@ -348,7 +339,7 @@ async def load_my_processes(processes_container, completed_processes_container, 
             if active_processes:
                 ui.label('Активные процессы').classes('text-lg font-semibold mb-2')
                 for process in active_processes:
-                    create_process_card(process, is_active=True, details_container=details_container)
+                    create_process_card(process, is_active=True)
             
             if not active_processes and not show_completed:
                 ui.label('У вас нет активных процессов').classes('text-gray-500 text-center mt-8')
@@ -360,7 +351,7 @@ async def load_my_processes(processes_container, completed_processes_container, 
                 if completed_processes:
                     ui.label('Завершенные процессы').classes('text-lg font-semibold mt-4 mb-2')
                     for process in completed_processes:
-                        create_process_card(process, is_active=False, details_container=details_container)
+                        create_process_card(process, is_active=False)
                 else:
                     ui.label('Нет завершенных процессов за выбранный период').classes('text-gray-500 text-center mt-4')
         else:
@@ -371,14 +362,13 @@ async def load_my_processes(processes_container, completed_processes_container, 
     except Exception as e:
         processes_container.clear()
         completed_processes_container.clear()
-        details_container.clear()  # Также очищаем при ошибке
         gantt_container.clear()  # Очищаем диаграмму при ошибке
         with processes_container:
             ui.label(f'Ошибка при загрузке процессов: {str(e)}').classes('text-red-600')
         logger.error(f"Ошибка при загрузке процессов: {e}", exc_info=True)
 
 
-def create_process_card(process, is_active=True, details_container=None):
+def create_process_card(process, is_active=True):
     """Создает карточку процесса с расширенной информацией"""
     from utils.date_utils import format_date_russian
     global _selected_process_id, _process_cards
@@ -448,11 +438,6 @@ def create_process_card(process, is_active=True, details_container=None):
     if due_date:
         due_date = format_date_russian(due_date)
     
-    # Обрезаем длинный ID процесса для отображения
-    display_process_id = process_id
-    if len(display_process_id) > 40:
-        display_process_id = display_process_id[:40] + '...'
-    
     # Создаем карточку с условными стилями и data-атрибутами
     card = ui.card().classes(f'mb-3 p-4 border-l-4 {status_color} w-full max-w-full {bg_class} {border_style} {shadow_class}')
     # Добавляем data-атрибуты для поиска через JavaScript
@@ -460,6 +445,7 @@ def create_process_card(process, is_active=True, details_container=None):
     
     # Сохраняем ссылку на карточку
     indicator_row = None
+    details_container = None  # Контейнер для деталей внутри карточки
     
     with card:
         # Добавляем индикатор выбранного процесса
@@ -474,11 +460,6 @@ def create_process_card(process, is_active=True, details_container=None):
                 # Название процесса - с переносом текста
                 ui.label(f'Процесс: {process_name}').classes('text-lg font-semibold break-words mb-2')
                 
-                # ID процесса - с переносом и обрезкой
-                with ui.row().classes('items-center gap-2 mb-1'):
-                    ui.label('ID:').classes('text-sm font-medium text-gray-500 whitespace-nowrap')
-                    ui.label(display_process_id).classes('text-sm font-mono text-gray-600 break-all')
-                
                 # Статус
                 ui.label(f'Статус: {status_text}').classes('text-sm font-medium mb-1')
                 
@@ -489,16 +470,44 @@ def create_process_card(process, is_active=True, details_container=None):
                     ui.label(f'Создан: {formatted_time}').classes('text-sm text-gray-600 mb-1')
                 
                 # Кому назначен процесс
-                if assignee_list:
-                    assignees_text = ', '.join(assignee_list) if isinstance(assignee_list, list) else str(assignee_list)
-                    if len(assignees_text) > 60:
-                        assignees_text = assignees_text[:60] + '...'
-                    ui.label(f'Назначено: {assignees_text}').classes('text-sm text-gray-700 break-words mb-1')
+                # if assignee_list:
+                #     assignees_text = ', '.join(assignee_list) if isinstance(assignee_list, list) else str(assignee_list)
+                #     if len(assignees_text) > 60:
+                #         assignees_text = assignees_text[:60] + '...'
+                #     ui.label(f'Назначено: {assignees_text}').classes('text-sm text-gray-700 break-words mb-1')
                 
                 # Стадия выполнения (прогресс)
                 if is_active and progress_info:
-                    completed = progress_info.get('nr_of_completed_instances', 0)
-                    total = progress_info.get('nr_of_instances', len(assignee_list) if assignee_list else 0)
+                    # Используем правильные ключи из get_task_progress
+                    completed = progress_info.get('completed_reviews', 0)
+                    total = progress_info.get('total_reviews', 0)
+                    
+                    # Если total_reviews равен 0, пытаемся использовать assigneeList или signerList как fallback
+                    if total == 0:
+                        # Получаем список пользователей из переменных
+                        variables = process.get('variables', {})
+                        assignee_list = variables.get('assigneeList', [])
+                        signer_list = variables.get('signerList', [])
+                        
+                        # Парсим списки если они строки
+                        if isinstance(assignee_list, str):
+                            try:
+                                import json
+                                assignee_list = json.loads(assignee_list)
+                            except:
+                                assignee_list = []
+                        
+                        if isinstance(signer_list, str):
+                            try:
+                                import json
+                                signer_list = json.loads(signer_list)
+                            except:
+                                signer_list = []
+                        
+                        # Используем signerList для задач подписания, если assigneeList пуст
+                        user_list = signer_list if signer_list and not assignee_list else assignee_list
+                        total = len(user_list) if user_list else 0
+                    
                     if total > 0:
                         progress_percent = round((completed / total) * 100)
                         
@@ -514,78 +523,57 @@ def create_process_card(process, is_active=True, details_container=None):
                 # Дедлайн (если есть) - теперь отформатирован
                 if due_date:
                     ui.label(f'Срок исполнения: {due_date}').classes('text-sm text-orange-600 mb-1')
-                
-                # Бизнес-ключ
-                if process.get('businessKey'):
-                    business_key = str(process.get('businessKey'))
-                    if len(business_key) > 50:
-                        business_key = business_key[:50] + '...'
-                    ui.label(f'Бизнес-ключ: {business_key}').classes('text-xs text-gray-500 break-all')
             
             with ui.column().classes('items-end flex-shrink-0'):
                 if is_active:
-                    ui.button('Просмотр', icon='visibility', on_click=lambda pid=process_id, det_container=details_container: show_process_details(pid, det_container)).classes('bg-blue-500 text-white whitespace-nowrap')
+                    ui.button('Просмотр', icon='visibility', on_click=lambda pid=process_id, card_container=card: show_process_details(pid, card_container)).classes('bg-blue-500 text-white whitespace-nowrap text-xs px-2 py-1 h-7')
                 else:
-                    ui.button('История', icon='history', on_click=lambda pid=process_id, det_container=details_container: show_process_history(pid, det_container)).classes('bg-gray-500 text-white whitespace-nowrap')
+                    ui.button('История', icon='history', on_click=lambda pid=process_id, card_container=card: show_process_history(pid, card_container)).classes('bg-gray-500 text-white whitespace-nowrap text-xs px-2 py-1 h-7')
+        
+        # Контейнер для деталей процесса (скрыт по умолчанию)
+        details_container = ui.column().classes('w-full mt-4 hidden')
+        details_container.set_visibility(False)
     
     # Сохраняем ссылку на карточку
     _process_cards[process_id] = {
         'card': card,
         'indicator': indicator_row,
+        'details_container': details_container,
         'process_id': process_id,
         'is_active': is_active
     }
 
-async def show_process_details(process_id, details_container):
-    """Показывает детали активного процесса справа"""
+async def show_process_details(process_id, card_container):
+    """Показывает детали активного процесса внизу карточки"""
     global _selected_process_id
     
     # Обновляем выбранный процесс
     old_selected_id = _selected_process_id
     _selected_process_id = process_id
     
+    # Получаем контейнер деталей из словаря карточек
+    card_info = _process_cards.get(process_id)
+    if not card_info:
+        return
+    
+    details_container = card_info.get('details_container')
+    if not details_container:
+        return
+    
+    # Переключаем видимость деталей
+    is_visible = details_container.visible
+    if is_visible:
+        # Если детали уже открыты, закрываем их
+        details_container.set_visibility(False)
+        details_container.clear()
+        _selected_process_id = None
+        # Обновляем стили карточки
+        update_card_selection(old_selected_id, None)
+        return
+    
     # Обновляем стили карточек без перезагрузки списка
     if old_selected_id != _selected_process_id:
-        logger.info(f"Обновляем выделение процесса: старая задача={old_selected_id}, новая задача={_selected_process_id}")
-        
-        # Обновляем стили через JavaScript
-        update_script = f"""
-        // Убираем выделение со старой карточки
-        if ('{old_selected_id}') {{
-            const oldCards = document.querySelectorAll('[data-process-id="{old_selected_id}"]');
-            oldCards.forEach(card => {{
-                card.classList.remove('border-l-4', 'border-blue-600', 'border-2', 'border-blue-600', 'shadow-lg', 'bg-blue-50');
-                // Восстанавливаем оригинальные стили в зависимости от типа процесса
-                if (card.classList.contains('border-green-500')) {{
-                    card.classList.add('border-l-4', 'border-green-500', 'border', 'border-gray-200');
-                }} else {{
-                    card.classList.add('border-l-4', 'border-gray-500', 'border', 'border-gray-200');
-                }}
-                // Удаляем индикатор
-                const indicator = card.querySelector('[data-indicator="true"]');
-                if (indicator) indicator.remove();
-            }});
-        }}
-        
-        // Добавляем выделение новой карточке
-        if ('{_selected_process_id}') {{
-            const newCards = document.querySelectorAll('[data-process-id="{_selected_process_id}"]');
-            newCards.forEach(card => {{
-                card.classList.remove('border-l-4', 'border-green-500', 'border-gray-500', 'border', 'border-gray-200');
-                card.classList.add('border-l-4', 'border-blue-600', 'border-2', 'border-blue-600', 'shadow-lg', 'bg-blue-50');
-                // Добавляем индикатор, если его нет
-                if (!card.querySelector('[data-indicator="true"]')) {{
-                    const indicator = document.createElement('div');
-                    indicator.setAttribute('data-indicator', 'true');
-                    indicator.className = 'flex items-center gap-2 mb-2 w-full';
-                    indicator.innerHTML = '<span class="material-icons text-blue-600 text-lg">check_circle</span><span class="text-blue-600 font-semibold text-sm">Выбрано</span>';
-                    card.insertBefore(indicator, card.firstChild);
-                }}
-            }});
-        }}
-        """
-        
-        ui.run_javascript(update_script)
+        update_card_selection(old_selected_id, _selected_process_id)
     
     try:
         camunda_client = await create_camunda_client()
@@ -601,10 +589,11 @@ async def show_process_details(process_id, details_container):
         
         # Очищаем контейнер деталей
         details_container.clear()
+        details_container.set_visibility(True)
         
         with details_container:
-            with ui.card().classes('p-6 w-full max-w-full'):
-                ui.label('Детали процесса').classes('text-xl font-bold mb-4')
+            with ui.card().classes('p-4 w-full bg-gray-50 border border-gray-200'):
+                ui.label('Детали процесса').classes('text-lg font-bold mb-4')
                 
                 # Основная информация
                 ui.label(f'ID процесса: {process_id}').classes('text-sm font-mono text-gray-600 mb-2 break-all')
@@ -613,7 +602,7 @@ async def show_process_details(process_id, details_container):
                 process_name = variables.get('taskName') or variables.get('documentName') or 'Неизвестно'
                 if len(process_name) > 100:
                     process_name = process_name[:100] + '...'
-                ui.label(f'Название: {process_name}').classes('text-lg font-semibold mb-3 break-words')
+                ui.label(f'Название: {process_name}').classes('text-base font-semibold mb-3 break-words')
                 
                 # Описание
                 task_description = variables.get('taskDescription', '')
@@ -622,27 +611,10 @@ async def show_process_details(process_id, details_container):
                     ui.label(task_description).classes('text-sm mb-3 text-gray-600 break-words')
                 
                 # Статус процесса
-                ui.label('Статус: Активен').classes('text-sm font-medium text-green-600 mb-3')
+                # ui.label('Статус: Активен').classes('text-sm font-medium text-green-600 mb-3')
                 
-                # Прогресс выполнения
+                # Статус пользователей
                 if progress_info:
-                    completed = progress_info.get('nr_of_completed_instances', 0)
-                    total = progress_info.get('nr_of_instances', 0)
-                    
-                    # Пересчитываем процент для точного отображения
-                    if total > 0:
-                        progress_percent = round((completed / total) * 100)
-                    else:
-                        progress_percent = round(progress_info.get('progress_percent', 0))
-                    
-                    ui.label('Прогресс выполнения:').classes('text-sm font-semibold mb-2')
-                    
-                    # Прогресс-бар с текстом в одной строке
-                    with ui.row().classes('w-full items-center gap-2 my-2 mb-4'):
-                        ui.linear_progress(value=progress_percent / 100, show_value=False).classes('flex-1 h-4')
-                        ui.label(f'{completed}/{total} ({progress_percent}%)').classes('text-xs text-gray-600 whitespace-nowrap')
-                    
-                    # Статус пользователей
                     ui.label('Статус пользователей:').classes('text-sm font-semibold mb-2')
                     
                     for user_status in progress_info.get('user_status', []):
@@ -669,11 +641,11 @@ async def show_process_details(process_id, details_container):
                     ui.label(f'Создан: {formatted_start}').classes('text-sm text-gray-600')
                 
                 # Дедлайн
-                due_date = variables.get('dueDate', '')
-                if due_date:
-                    from utils.date_utils import format_date_russian
-                    formatted_due = format_date_russian(due_date)
-                    ui.label(f'Срок исполнения: {formatted_due}').classes('text-sm text-orange-600')
+                # due_date = variables.get('dueDate', '')
+                # if due_date:
+                #     from utils.date_utils import format_date_russian
+                #     formatted_due = format_date_russian(due_date)
+                #     ui.label(f'Срок исполнения: {formatted_due}').classes('text-sm text-orange-600')
                 
                 # Бизнес-ключ
                 if process_info.get('businessKey'):
@@ -686,56 +658,37 @@ async def show_process_details(process_id, details_container):
         ui.notify(f'Ошибка при получении деталей процесса: {str(e)}', type='error')
         logger.error(f"Ошибка в show_process_details: {e}", exc_info=True)
 
-async def show_process_history(process_id, details_container):
-    """Показывает историю завершенного процесса справа"""
+async def show_process_history(process_id, card_container):
+    """Показывает историю завершенного процесса внизу карточки"""
     global _selected_process_id
     
     # Обновляем выбранный процесс
     old_selected_id = _selected_process_id
     _selected_process_id = process_id
     
+    # Получаем контейнер деталей из словаря карточек
+    card_info = _process_cards.get(process_id)
+    if not card_info:
+        return
+    
+    details_container = card_info.get('details_container')
+    if not details_container:
+        return
+    
+    # Переключаем видимость деталей
+    is_visible = details_container.visible
+    if is_visible:
+        # Если детали уже открыты, закрываем их
+        details_container.set_visibility(False)
+        details_container.clear()
+        _selected_process_id = None
+        # Обновляем стили карточки
+        update_card_selection(old_selected_id, None)
+        return
+    
     # Обновляем стили карточек без перезагрузки списка
     if old_selected_id != _selected_process_id:
-        logger.info(f"Обновляем выделение процесса: старая задача={old_selected_id}, новая задача={_selected_process_id}")
-        
-        # Обновляем стили через JavaScript (тот же код, что и в show_process_details)
-        update_script = f"""
-        // Убираем выделение со старой карточки
-        if ('{old_selected_id}') {{
-            const oldCards = document.querySelectorAll('[data-process-id="{old_selected_id}"]');
-            oldCards.forEach(card => {{
-                card.classList.remove('border-l-4', 'border-blue-600', 'border-2', 'border-blue-600', 'shadow-lg', 'bg-blue-50');
-                // Восстанавливаем оригинальные стили в зависимости от типа процесса
-                if (card.classList.contains('border-green-500')) {{
-                    card.classList.add('border-l-4', 'border-green-500', 'border', 'border-gray-200');
-                }} else {{
-                    card.classList.add('border-l-4', 'border-gray-500', 'border', 'border-gray-200');
-                }}
-                // Удаляем индикатор
-                const indicator = card.querySelector('[data-indicator="true"]');
-                if (indicator) indicator.remove();
-            }});
-        }}
-        
-        // Добавляем выделение новой карточке
-        if ('{_selected_process_id}') {{
-            const newCards = document.querySelectorAll('[data-process-id="{_selected_process_id}"]');
-            newCards.forEach(card => {{
-                card.classList.remove('border-l-4', 'border-green-500', 'border-gray-500', 'border', 'border-gray-200');
-                card.classList.add('border-l-4', 'border-blue-600', 'border-2', 'border-blue-600', 'shadow-lg', 'bg-blue-50');
-                // Добавляем индикатор, если его нет
-                if (!card.querySelector('[data-indicator="true"]')) {{
-                    const indicator = document.createElement('div');
-                    indicator.setAttribute('data-indicator', 'true');
-                    indicator.className = 'flex items-center gap-2 mb-2 w-full';
-                    indicator.innerHTML = '<span class="material-icons text-blue-600 text-lg">check_circle</span><span class="text-blue-600 font-semibold text-sm">Выбрано</span>';
-                    card.insertBefore(indicator, card.firstChild);
-                }}
-            }});
-        }}
-        """
-        
-        ui.run_javascript(update_script)
+        update_card_selection(old_selected_id, _selected_process_id)
     
     try:
         camunda_client = await create_camunda_client()
@@ -752,13 +705,14 @@ async def show_process_history(process_id, details_container):
         
         # Очищаем контейнер деталей
         details_container.clear()
+        details_container.set_visibility(True)
         
         with details_container:
-            with ui.card().classes('p-6 w-full max-w-full'):
-                ui.label('История процесса').classes('text-xl font-bold mb-4')
+            with ui.card().classes('p-4 w-full bg-gray-50 border border-gray-200'):
+                ui.label('История процесса').classes('text-lg font-bold mb-4')
                 
                 # Основная информация о процессе
-                ui.label('Информация о процессе').classes('text-lg font-semibold mb-2')
+                ui.label('Информация о процессе').classes('text-base font-semibold mb-2')
                 ui.label(f'ID процесса: {process_id}').classes('text-sm font-mono text-gray-600 mb-1 break-all')
                 
                 process_key = history_process.get('processDefinitionKey', 'Неизвестно')
@@ -768,7 +722,7 @@ async def show_process_history(process_id, details_container):
                 process_name = variables.get('taskName') or variables.get('documentName') or process_key
                 if len(process_name) > 100:
                     process_name = process_name[:100] + '...'
-                ui.label(f'Название: {process_name}').classes('text-lg font-semibold mb-3 break-words')
+                ui.label(f'Название: {process_name}').classes('text-base font-semibold mb-3 break-words')
                 
                 # Даты
                 from utils.date_utils import format_date_russian
@@ -821,11 +775,58 @@ async def show_process_history(process_id, details_container):
                     business_key = str(history_process.get('businessKey'))
                     if len(business_key) > 50:
                         business_key = business_key[:50] + '...'
-                    ui.label(f'Бизнес-ключ: {history_process["businessKey"]}').classes('text-xs text-gray-500 mt-3 break-all')
+                    ui.label(f'Бизнес-ключ: {business_key}').classes('text-xs text-gray-500 mt-3 break-all')
         
     except Exception as e:
         ui.notify(f'Ошибка при получении истории процесса: {str(e)}', type='error')
         logger.error(f"Ошибка при получении истории процесса {process_id}: {e}", exc_info=True)
+
+def update_card_selection(old_selected_id, new_selected_id):
+    """Обновляет стили карточек при выборе процесса"""
+    logger.info(f"Обновляем выделение процесса: старая задача={old_selected_id}, новая задача={new_selected_id}")
+    
+    # Убираем выделение со старой карточки
+    if old_selected_id:
+        old_card_info = _process_cards.get(old_selected_id)
+        if old_card_info:
+            old_card = old_card_info.get('card')
+            if old_card:
+                # Восстанавливаем оригинальные стили
+                is_active = old_card_info.get('is_active', True)
+                if is_active:
+                    old_card.classes(remove='border-l-4 border-blue-600 border-2 border-blue-600 shadow-lg bg-blue-50')
+                    old_card.classes(add='border-l-4 border-green-500 border border-gray-200')
+                else:
+                    old_card.classes(remove='border-l-4 border-blue-600 border-2 border-blue-600 shadow-lg bg-blue-50')
+                    old_card.classes(add='border-l-4 border-gray-500 border border-gray-200')
+                
+                # Удаляем индикатор
+                indicator = old_card_info.get('indicator')
+                if indicator:
+                    indicator.set_visibility(False)
+    
+    # Добавляем выделение новой карточке
+    if new_selected_id:
+        new_card_info = _process_cards.get(new_selected_id)
+        if new_card_info:
+            new_card = new_card_info.get('card')
+            if new_card:
+                # Добавляем стили выделения
+                new_card.classes(remove='border-l-4 border-green-500 border-gray-500 border border-gray-200')
+                new_card.classes(add='border-l-4 border-blue-600 border-2 border-blue-600 shadow-lg bg-blue-50')
+                
+                # Добавляем индикатор
+                indicator = new_card_info.get('indicator')
+                if indicator:
+                    indicator.set_visibility(True)
+                else:
+                    # Создаем новый индикатор если его нет
+                    with new_card:
+                        indicator_row = ui.row().classes('w-full items-center gap-2 mb-2')
+                        with indicator_row:
+                            ui.icon('check_circle').classes('text-blue-600 text-lg')
+                            ui.label('Выбрано').classes('text-blue-600 font-semibold text-sm')
+                        new_card_info['indicator'] = indicator_row
 
 def export_process_history(process_id, history_process, history_variables, history_tasks):
     """Экспортирует историю процесса в CSV"""

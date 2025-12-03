@@ -1217,17 +1217,46 @@ class MayanClient:
             response.raise_for_status()
             
             data = response.json()
+            
+            # Логируем полную структуру ответа для отладки
+            logger.info(f'Полный ответ API для типов документов: {json.dumps(data, indent=2, ensure_ascii=False)}')
+            logger.info(f'Структура ответа: count={data.get("count", "N/A")}, next={data.get("next")}, previous={data.get("previous")}')
+            
             document_types = data.get('results', [])
             
-            logger.info(f'Получено {len(document_types)} типов документов')
+            logger.info(f'Получено {len(document_types)} типов документов со страницы 1')
+            
+            # Проверяем, есть ли еще страницы (обработка пагинации)
+            if data.get('next'):
+                logger.info(f'Есть следующая страница, загружаем следующие типы документов...')
+                # Рекурсивно загружаем все страницы
+                page = 2
+                while True:
+                    next_response = await self._make_request('GET', endpoint, params={'page': page, 'page_size': 100})
+                    next_response.raise_for_status()
+                    next_data = next_response.json()
+                    next_types = next_data.get('results', [])
+                    if not next_types:
+                        break
+                    document_types.extend(next_types)
+                    logger.info(f'Получено {len(next_types)} типов документов со страницы {page}')
+                    if not next_data.get('next'):
+                        break
+                    page += 1
+                logger.info(f'Всего загружено типов документов: {len(document_types)}')
             
             # Отладочная информация
             if document_types:
                 logger.info(f'Пример типа документа: {json.dumps(document_types[0], indent=2, ensure_ascii=False)}')
+            else:
+                logger.warning('Типы документов не найдены в ответе API')
             
             return document_types
         except httpx.HTTPError as e:
             logger.error(f'Ошибка при получении типов документов: {e}')
+            return []
+        except Exception as e:
+            logger.error(f'Неожиданная ошибка при получении типов документов: {e}', exc_info=True)
             return []
 
 

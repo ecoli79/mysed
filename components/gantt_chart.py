@@ -81,7 +81,8 @@ def parse_task_deadline(due_date: Any) -> Optional[datetime]:
 
 
 def prepare_tasks_for_gantt(tasks: List[Any], name_field: str = 'name', due_field: str = 'due', 
-                            id_field: str = 'id', process_instance_id_field: str = 'process_instance_id') -> List[Dict[str, Any]]:
+                            id_field: str = 'id', process_instance_id_field: str = 'process_instance_id',
+                            description_field: str = 'description') -> List[Dict[str, Any]]:
     """
     Подготавливает список задач для отображения на диаграмме Ганта
     
@@ -91,9 +92,10 @@ def prepare_tasks_for_gantt(tasks: List[Any], name_field: str = 'name', due_fiel
         due_field: Название поля/атрибута с дедлайном
         id_field: Название поля/атрибута с ID задачи
         process_instance_id_field: Название поля/атрибута с ID процесса
+        description_field: Название поля/атрибута с описанием задачи
         
     Returns:
-        Список словарей с ключами 'name', 'deadline', 'task_id', 'process_instance_id'
+        Список словарей с ключами 'name', 'description', 'deadline', 'task_id', 'process_instance_id'
     """
     parsed_tasks = []
     
@@ -104,11 +106,13 @@ def prepare_tasks_for_gantt(tasks: List[Any], name_field: str = 'name', due_fiel
             due_date = task.get(due_field)
             task_id = task.get(id_field, '')
             process_instance_id = task.get(process_instance_id_field, '')
+            task_description = task.get(description_field, '')
         else:
             task_name = getattr(task, name_field, '')
             due_date = getattr(task, due_field, None)
             task_id = getattr(task, id_field, '')
             process_instance_id = getattr(task, process_instance_id_field, '')
+            task_description = getattr(task, description_field, '')
         
         if not task_name:
             continue
@@ -119,6 +123,7 @@ def prepare_tasks_for_gantt(tasks: List[Any], name_field: str = 'name', due_fiel
         if deadline:
             parsed_tasks.append({
                 'name': task_name,
+                'description': task_description,
                 'deadline': deadline,
                 'task_id': task_id,
                 'process_instance_id': process_instance_id
@@ -134,6 +139,7 @@ def create_gantt_chart(
     due_field: str = 'due',
     id_field: str = 'id',
     process_instance_id_field: str = 'process_instance_id',
+    description_field: str = 'description',
     now: Optional[datetime] = None,
     px_per_day: int = 30
 ) -> None:
@@ -147,11 +153,12 @@ def create_gantt_chart(
         due_field: Название поля/атрибута с дедлайном
         id_field: Название поля/атрибута с ID задачи
         process_instance_id_field: Название поля/атрибута с ID процесса
+        description_field: Название поля/атрибута с описанием задачи
         now: Текущая дата для расчета (по умолчанию datetime.now())
         px_per_day: Пикселей на день для масштабирования
     """
     # Подготавливаем задачи
-    parsed_tasks = prepare_tasks_for_gantt(tasks, name_field, due_field, id_field, process_instance_id_field)
+    parsed_tasks = prepare_tasks_for_gantt(tasks, name_field, due_field, id_field, process_instance_id_field, description_field)
     
     if not parsed_tasks:
         ui.label('Нет задач с указанными дедлайнами для отображения на диаграмме').classes('text-gray-500 text-center mt-4 mb-4')
@@ -177,6 +184,7 @@ def create_gantt_chart(
         with ui.column().classes('gap-1 w-full items-stretch').style('width: 100%;'):
             for task_data in parsed_tasks:
                 full_name = task_data['name']
+                task_description = task_data.get('description', '')
                 deadline = task_data['deadline']
                 task_id = task_data.get('task_id', '')
                 process_instance_id = task_data.get('process_instance_id', '')
@@ -191,7 +199,12 @@ def create_gantt_chart(
                 else:
                     days_text = 'сегодня'
                 
+                # Формируем tooltip с описанием, если оно есть
                 tooltip_text = f'{full_name}\nДедлайн: {date_str}\n{days_text}'
+                if task_description:
+                    # Обрезаем описание, если оно слишком длинное
+                    desc_display = task_description[:100] + '...' if len(task_description) > 100 else task_description
+                    tooltip_text = f'{full_name}\nОписание: {desc_display}\nДедлайн: {date_str}\n{days_text}'
                 safe_tooltip = tooltip_text.replace('"', '&quot;').replace('\n', '&#10;')
                 
                 # Контейнер для строки задачи - как в примере

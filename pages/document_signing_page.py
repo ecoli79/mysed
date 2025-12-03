@@ -22,7 +22,7 @@ def content() -> None:
         'Перейти к назначению задач',
         icon='assignment',
         on_click=lambda: ui.navigate.to('/task-assignment')
-    ).classes('bg-blue-500 text-white')
+    ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
     
     ui.label('Инструкция:').classes('text-lg font-semibold mt-6 mb-2')
     ui.label('1. Выберите пользователей, которые должны подписать документ').classes('text-sm mb-1')
@@ -68,7 +68,7 @@ def load_signing_tasks(container: ui.column):
                     'Подписать документ',
                     icon='edit',
                     on_click=lambda t=task: open_signing_dialog(t)
-                ).classes('bg-blue-500 text-white mt-2')
+                ).classes('bg-blue-500 text-white mt-2 text-xs px-2 py-1 h-7')
     
     except Exception as e:
         logger.error(f"Ошибка при загрузке задач подписания: {e}")
@@ -102,13 +102,13 @@ def open_signing_dialog(task):
             ui.button(
                 'Отмена',
                 on_click=dialog.close
-            ).classes('bg-gray-500 text-white')
+            ).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
             
             ui.button(
                 'Подписать документ',
                 icon='edit',
                 on_click=lambda: sign_document(task, dialog)
-            ).classes('bg-green-500 text-white')
+            ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
     
     dialog.open()
 
@@ -242,13 +242,13 @@ def show_certificate_selection_dialog(task, parent_dialog):
             'Загрузить доступные сертификаты',
             icon='refresh',
             on_click=lambda: load_certificates(cert_container, task, cert_dialog, parent_dialog)
-        ).classes('bg-blue-500 text-white mb-4')
+        ).classes('bg-blue-500 text-white mb-4 text-xs px-2 py-1 h-7')
         
         # Кнопка отмены
         ui.button(
             'Отмена',
             on_click=cert_dialog.close
-        ).classes('bg-gray-500 text-white')
+        ).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
     
     cert_dialog.open()
 
@@ -365,7 +365,7 @@ def create_initiate_signing_section():
         'Запустить процесс подписания',
         icon='play_arrow',
         on_click=lambda: start_signing_process(document_select.value, signers_input.value, comment_input.value)
-    ).classes('bg-blue-500 text-white')
+    ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
     
     # Загружаем доступные документы
     load_available_documents(document_select)

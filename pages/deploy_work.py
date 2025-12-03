@@ -34,13 +34,13 @@ def process_templates_page():
                 'Тест подключения',
                 icon='wifi',
                 on_click=test_camunda_connection
-            ).classes('bg-blue-500 text-white')
+            ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
             
             ui.button(
                 'Обновить статус',
                 icon='refresh',
                 on_click=update_connection_status
-            ).classes('bg-gray-500 text-white')
+            ).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
         
         # Создаем вкладки
         with ui.tabs().classes('w-full') as tabs:
@@ -146,7 +146,7 @@ def create_deploy_section():
                 'Развернуть процесс',
                 icon='cloud_upload',
                 on_click=lambda: deploy_click(uploaded_file, deployment_name, enable_duplicate_filtering, deploy_changed_only, tenant_id, results_container)
-            ).props('type=button').classes('w-full bg-green-500 text-white')
+            ).props('type=button').classes('w-full bg-green-500 text-white text-xs px-2 py-1 h-7')
 
 def handle_bpmn_upload(e, deployment_name, enable_duplicate_filtering, deploy_changed_only, tenant_id, results_container, uploaded_file):
     """Обрабатывает загрузку BPMN файла"""
@@ -446,7 +446,7 @@ def create_manage_section():
                 'Обновить список',
                 icon='refresh',
                 on_click=lambda: load_process_definitions(processes_container)
-            ).classes('mb-4 bg-blue-500 text-white')
+            ).classes('mb-4 bg-blue-500 text-white text-xs px-2 py-1 h-7')
             
             # Контейнер для процессов
             processes_container = ui.column().classes('w-full')
@@ -497,13 +497,13 @@ def refresh_templates():
                             'Скачать',
                             icon='download',
                             on_click=lambda t=template: download_template(t)
-                        ).classes('bg-green-500 text-white text-xs')
+                        ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
                         
                         ui.button(
                             'Создать',
                             icon='add',
                             on_click=lambda t=template: create_new_template(t["name"])
-                        ).classes('bg-blue-500 text-white text-xs')
+                        ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
     except Exception as e:
         ui.label(f'Ошибка загрузки шаблонов: {str(e)}').classes('text-red-600')
@@ -536,7 +536,7 @@ def create_templates_section():
                 'Обновить шаблоны',
                 icon='refresh',
                 on_click=refresh_templates
-            ).classes('bg-green-500 text-white')
+            ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
         
         
        

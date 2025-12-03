@@ -76,7 +76,7 @@ def create_review_tasks_section():
             'Обновить задачи',
             icon='refresh',
             on_click=load_review_tasks
-        ).classes('mb-4 bg-blue-500 text-white')
+        ).classes('mb-4 bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
         # Контейнер для задач
         _tasks_container = ui.column().classes('w-full')
@@ -162,13 +162,13 @@ def create_task_card(task):
                                 'Скачать документ',
                                 icon='download',
                                 on_click=lambda url=download_url: download_document(url)
-                            ).classes('bg-green-500 text-white text-xs')
+                            ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
                         
                         ui.button(
                             'Завершить ознакомление',
                             icon='check',
                             on_click=lambda t=task: complete_review_task(t)
-                        ).classes('bg-blue-500 text-white text-xs')
+                        ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                 
                 with ui.column().classes('items-end'):
                     ui.label(f'ID задачи: {task.id}').classes('text-xs text-gray-500 font-mono')
@@ -192,7 +192,7 @@ def create_documents_section():
                 'Поиск',
                 icon='search',
                 on_click=lambda: search_documents(search_input.value)
-            ).classes('bg-blue-500 text-white')
+            ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
         # Контейнер для документов
         _documents_container = ui.column().classes('w-full')
@@ -253,13 +253,13 @@ def create_document_card(doc: MayanDocument):
                             'Просмотр',
                             icon='visibility',
                             on_click=lambda d=doc: view_document(d)
-                        ).classes('bg-blue-500 text-white text-xs')
+                        ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                         
                         ui.button(
                             'Скачать',
                             icon='download',
                             on_click=lambda d=doc: download_document_from_mayan(d)
-                        ).classes('bg-green-500 text-white text-xs')
+                        ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
                 
                 with ui.column().classes('items-end'):
                     ui.label(f'ID: {doc.document_id}').classes('text-xs text-gray-500 font-mono')
@@ -284,17 +284,17 @@ def create_start_review_section():
                 search_btn = ui.button(
                     'Найти',
                     icon='search',
-                ).classes('bg-blue-500 text-white')
+                ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                 
                 refresh_btn = ui.button(
                     'Показать последние',
                     icon='refresh',
-                ).classes('bg-gray-500 text-white')
+                ).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                 
                 reset_btn = ui.button(
                     'Сбросить',
                     icon='clear',
-                ).classes('bg-red-500 text-white')
+                ).classes('bg-red-500 text-white text-xs px-2 py-1 h-7')
             
             # Метка выбранного документа
             selected_doc_label = ui.label('Документ не выбран').classes('text-sm text-gray-500 mb-2')
@@ -444,7 +444,7 @@ def create_start_review_section():
                                             'Выбрать',
                                             icon='check',
                                             on_click=lambda d=doc: select_document_for_review(d)
-                                        ).classes('bg-green-500 text-white')
+                                        ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
                         
                     except Exception as e:
                         logger.error(f"Ошибка при поиске документов: {e}", exc_info=True)
@@ -481,7 +481,7 @@ def create_start_review_section():
                                     'Выбрать другой документ',
                                     icon='refresh',
                                     on_click=lambda: search_and_display_documents_for_review(doc_search_input.value)
-                                ).classes('mt-2 bg-blue-500 text-white')
+                                ).classes('mt-2 bg-blue-500 text-white text-xs px-2 py-1 h-7')
                     
                     except Exception as e:
                         logger.error(f"Ошибка при выборе документа: {e}", exc_info=True)
@@ -521,7 +521,7 @@ def create_start_review_section():
                         business_key.value,
                         roles_select.value if roles_select else []
                     )
-                ).classes('bg-green-500 text-white')
+                ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
 
 def search_documents_for_review(query: str):
     """Поиск документов для выбора"""
@@ -706,13 +706,13 @@ def complete_review_task(task):
                 ui.button(
                     'Отмена',
                     on_click=dialog.close
-                ).classes('bg-gray-500 text-white')
+                ).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                 
                 ui.button(
                     'Завершить ознакомление',
                     icon='check',
                     on_click=lambda: submit_task_completion(task, status_select.value, comment_textarea.value, dialog)
-                ).classes('bg-green-500 text-white')
+                ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
     
     dialog.open()
 
@@ -808,7 +808,7 @@ def create_progress_tracking_section():
             'Обновить процессы',
             icon='refresh',
             on_click=load_multi_instance_processes
-        ).classes('mb-4 bg-green-500 text-white')
+        ).classes('mb-4 bg-green-500 text-white text-xs px-2 py-1 h-7')
         
         # Контейнер для процессов
         _progress_container = ui.column().classes('w-full')
@@ -883,7 +883,7 @@ def create_process_progress_card(process):
                             ui.label('🔄 В процессе').classes('text-blue-600 font-semibold')
                         
                         # Кнопка деталей
-                        ui.button('Детали', icon='info', on_click=lambda p=process: show_process_details(p)).classes('text-xs')
+                        ui.button('Детали', icon='info', on_click=lambda p=process: show_process_details(p)).classes('text-xs px-2 py-1 h-7')
                 
                 # Детальная информация о пользователях
                 with ui.expansion('Статус пользователей', icon='people').classes('mt-2'):
@@ -967,13 +967,13 @@ def show_process_details(process):
                 
                 # Кнопки действий
                 with ui.row().classes('mt-4'):
-                    ui.button('Закрыть', on_click=dialog.close).classes('bg-gray-500 text-white')
+                    ui.button('Закрыть', on_click=dialog.close).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                     
                     if not progress_info['is_complete']:
                         ui.button('Обновить', icon='refresh', on_click=lambda: [
                             dialog.close(),
                             load_multi_instance_processes()
-                        ]).classes('bg-blue-500 text-white')
+                        ]).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
         dialog.open()
         

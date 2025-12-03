@@ -701,21 +701,21 @@ def create_document_card(document: MayanDocument, update_cabinet_title_func=None
             with buttons_container:
                 if document.file_latest_id:
                     # Кнопка скачивания
-                    ui.button('Скачать', icon='download').classes('text-xs').on_click(
+                    ui.button('Скачать', icon='download').classes('text-xs px-2 py-1 h-7').on_click(
                         lambda doc=document: download_document_file(doc)
                     )
                 
                 # Кнопка предоставления доступа
                 current_user = get_current_user()
                 if current_user:
-                    ui.button('Предоставить доступ', icon='share', color='blue').classes('text-xs').on_click(
+                    ui.button('Предоставить доступ', icon='share', color='blue').classes('text-xs px-2 py-1 h-7').on_click(
                         lambda doc=document: show_grant_access_dialog(doc)
                     )
                     
                     # Кнопка избранного
                     if is_favorites_page:
                         # На странице избранных сразу показываем, что документ в избранном
-                        favorite_button = ui.button('Удалить из избранного', icon='star', color='amber').classes('text-xs')
+                        favorite_button = ui.button('Удалить из избранного', icon='star', color='amber').classes('text-xs px-2 py-1 h-7')
                         
                         # Обработчик клика для страницы избранных
                         favorite_button.on_click(lambda doc=document, btn=favorite_button, card_ref=card, count_label_ref=favorites_count_label: toggle_favorite(doc, btn, card_ref, count_label_ref))
@@ -727,7 +727,7 @@ def create_document_card(document: MayanDocument, update_cabinet_title_func=None
                                 is_favorite = await check_favorite_status(document)
                                 if not is_favorite:
                                     # Документ не в избранном - показываем кнопку
-                                    favorite_button = ui.button('В избранное', icon='star_border', color='amber').classes('text-xs')
+                                    favorite_button = ui.button('В избранное', icon='star_border', color='amber').classes('text-xs px-2 py-1 h-7')
                                     favorite_button.on_click(lambda doc=document, btn=favorite_button: toggle_favorite(doc, btn))
                             except Exception as e:
                                 logger.warning(f'Ошибка при проверке статуса избранного: {e}')
@@ -741,7 +741,7 @@ def create_document_card(document: MayanDocument, update_cabinet_title_func=None
                     is_admin_or_secretar = 'admins' in user_groups_normalized or 'secretar' in user_groups_normalized
                     
                     if is_admin_or_secretar:
-                        ui.button('Удалить', icon='delete', color='red').classes('text-xs').on_click(
+                        ui.button('Удалить', icon='delete', color='red').classes('text-xs px-2 py-1 h-7').on_click(
                             lambda doc=document, card_ref=card: delete_document(doc, card_ref)
                         )
         
@@ -757,7 +757,7 @@ def create_document_card(document: MayanDocument, update_cabinet_title_func=None
                     with buttons_container:
                         async def download_handler(doc=document):
                             await download_signed_document(doc)
-                        ui.button('Скачать с подписями', icon='verified', color='green').classes('text-xs').on_click(
+                        ui.button('Скачать с подписями', icon='verified', color='green').classes('text-xs px-2 py-1 h-7').on_click(
                             lambda doc=document: download_handler(doc)
                         )
             except Exception as e:
@@ -934,8 +934,8 @@ async def show_grant_access_dialog(document: MayanDocument):
             
             # # Кнопки
             with ui.row().classes('w-full gap-2'):
-                ui.button('Отмена').on('click', dialog.close)
-                ui.button('Предоставить доступ', icon='add', color='primary').classes('flex-1').on('click', handle_grant_access)
+                ui.button('Отмена').classes('text-xs px-2 py-1 h-7').on('click', dialog.close)
+                ui.button('Предоставить доступ', icon='add', color='primary').classes('flex-1 text-xs px-2 py-1 h-7').on('click', handle_grant_access)
     dialog.open()
 
 def grant_access_to_document(document: MayanDocument, username: str, 
@@ -997,11 +997,11 @@ def show_document_content(document: MayanDocument):
                 ui.label('• Нет прав на доступ к файлу').classes('ml-4')
                 
                 # Кнопка для скачивания файла
-                ui.button('Скачать файл', icon='download', on_click=lambda: download_document_file(document)).classes('mt-4')
+                ui.button('Скачать файл', icon='download', on_click=lambda: download_document_file(document)).classes('mt-4 text-xs px-2 py-1 h-7')
             
             # Кнопки управления
             with ui.row().classes('w-full justify-end mt-4'):
-                ui.button('Закрыть').on('click', dialog.close)
+                ui.button('Закрыть').classes('text-xs px-2 py-1 h-7').on('click', dialog.close)
         
         dialog.open()
         
@@ -1170,7 +1170,9 @@ async def upload_document():
                     # Сохраняем соответствие для использования в handle_file_upload
                     document_type_select.type_id_map = type_id_map
                 else:
-                    ui.label('Не удалось загрузить типы документов').classes('text-red-500')
+                    # Изменяем сообщение - это не ошибка, а просто отсутствие типов документов
+                    ui.label('Типы документов не найдены в системе').classes('text-orange-500')
+                    logger.warning("Типы документов не найдены в системе")
                             
                 # Получаем кабинеты
                 cabinets = await client.get_cabinets()
@@ -1179,16 +1181,21 @@ async def upload_document():
                     # ИСПРАВЛЕНИЕ: Используем простой список названий для отображения
                     cabinet_options = []
                     cabinet_id_map = {}  # Словарь для соответствия названий и ID
+                    
+                    # Добавляем опцию по умолчанию "Выберите кабинет"
+                    default_option = 'Выберите кабинет'
+                    cabinet_options.append(default_option)
+                    
                     for cabinet in cabinets:
                         display_name = cabinet['label']  # Название кабинета
                         cabinet_options.append(display_name)  # Простой список названий
                         cabinet_id_map[display_name] = cabinet['id']  # Сохраняем соответствие
                     
-                    default_cabinet_value = cabinet_options[0] if cabinet_options else None  # Название первого элемента
+                    # Устанавливаем "Выберите кабинет" как значение по умолчанию
                     cabinet_select = ui.select(
                         options=cabinet_options,
                         label='Кабинет',
-                        value=default_cabinet_value
+                        value=default_option
                     ).classes('w-full')
                     
                     # Сохраняем соответствие для использования в handle_file_upload
@@ -1199,7 +1206,7 @@ async def upload_document():
                 # Убираем языки и теги - оставляем только тип документа и кабинет
                                     
             except Exception as e:
-                logger.error(f"Ошибка при получении данных с сервера: {e}")
+                logger.error(f"Ошибка при получении данных с сервера: {e}", exc_info=True)
                 ui.label(f'Ошибка при загрузке данных: {str(e)}').classes('text-red-500')
                 document_type_select = None
                 cabinet_select = None
@@ -1212,13 +1219,19 @@ async def upload_document():
                 logger.info(f"Подготовка формы: cabinet_id_map содержит {len(local_cabinet_id_map)} кабинетов")
                 logger.info(f"Подготовка формы: cabinet_id_map = {local_cabinet_id_map}")
             
+            # Сохраняем type_id_map в локальную переменную для правильного захвата в lambda
+            local_type_id_map = None
+            if document_type_select and hasattr(document_type_select, 'type_id_map'):
+                local_type_id_map = document_type_select.type_id_map
+            
             upload_area = ui.upload(
                 on_upload=lambda e: asyncio.create_task(handle_file_upload(
                     e, 
                     description_input.value,
                     document_type_select.value if document_type_select else None,
                     cabinet_select.value if cabinet_select else None,
-                    local_cabinet_id_map
+                    local_cabinet_id_map,
+                    local_type_id_map
                 )),
                 auto_upload=False
             ).classes('w-full')
@@ -1230,7 +1243,8 @@ async def handle_file_upload(
     description: str, 
     document_type_name: Optional[str] = None, 
     cabinet_name: Optional[str] = None,
-    cabinet_id_map: Optional[Dict[str, int]] = None
+    cabinet_id_map: Optional[Dict[str, int]] = None,
+    type_id_map: Optional[Dict[str, int]] = None
 ) -> None:
     """Обрабатывает загрузку файла с улучшенной архитектурой"""
     global _upload_form_container
@@ -1241,6 +1255,22 @@ async def handle_file_upload(
         return
     
     try:
+        # Валидация выбора типа документа
+        if not document_type_name:
+            if _upload_form_container:
+                with _upload_form_container:
+                    error_label = ui.label('Пожалуйста, выберите тип документа').classes('text-red-500 p-4 bg-red-50 rounded')
+            logger.warning("Попытка загрузки без выбранного типа документа")
+            return
+        
+        # Валидация выбора кабинета
+        if not cabinet_name or cabinet_name == 'Выберите кабинет':
+            if _upload_form_container:
+                with _upload_form_container:
+                    error_label = ui.label('Пожалуйста, выберите кабинет для сохранения документа').classes('text-red-500 p-4 bg-red-50 rounded')
+            logger.warning("Попытка загрузки без выбранного кабинета")
+            return
+        
         # Получаем имя файла без расширения для названия документа
         filename = upload_event.name
         # Убираем расширение файла для названия документа
@@ -1248,7 +1278,7 @@ async def handle_file_upload(
         
         logger.info(f"Имя файла: {filename}")
         logger.info(f"Название документа (без расширения): {document_label}")
-        logger.info(f"Полученные параметры: cabinet_name={cabinet_name}, cabinet_id_map={cabinet_id_map}")
+        logger.info(f"Полученные параметры: document_type_name={document_type_name}, cabinet_name={cabinet_name}, cabinet_id_map={cabinet_id_map}")
         
         # Получаем ID кабинета из карты, если она передана
         cabinet_id = None
@@ -1464,11 +1494,11 @@ async def preview_document_file(document: MayanDocument):
                 ui.label('Скачайте файл для просмотра в соответствующем приложении.').classes('text-gray-500')
             
             with ui.row().classes('mt-4'):
-                ui.button('Закрыть', on_click=dialog.close).classes('bg-gray-500 text-white')
+                ui.button('Закрыть', on_click=dialog.close).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                 ui.button('Открыть в новой вкладке', icon='open_in_new', on_click=lambda: (
                     ui.download(temp_path if 'temp_path' in locals() else None, filename),
                     dialog.close()
-                )).classes('bg-blue-500 text-white')
+                )).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
         dialog.open()
         
@@ -1645,7 +1675,7 @@ def content() -> None:
     # Секция с документами
     with ui.row().classes('w-full mb-4'):
         ui.label('Документы по кабинетам').classes('text-lg font-semibold')
-        ui.button('Обновить', icon='refresh', on_click=load_documents_by_cabinets).classes('ml-auto')
+        ui.button('Обновить', icon='refresh', on_click=load_documents_by_cabinets).classes('ml-auto text-xs px-2 py-1 h-7')
     
     _recent_documents_container = ui.column().classes('w-full')
     # Загружаем документы только после создания контейнера
@@ -1881,7 +1911,7 @@ def search_content() -> None:
     
     with ui.row().classes('w-full mb-4'):
         search_input = ui.input('Поисковый запрос', placeholder='Введите название документа для поиска').classes('flex-1')
-        ui.button('Поиск', icon='search', on_click=lambda: search_documents(search_input.value)).classes('ml-2')
+        ui.button('Поиск', icon='search', on_click=lambda: search_documents(search_input.value)).classes('ml-2 text-xs px-2 py-1 h-7')
     
     _search_results_container = ui.column().classes('w-full')
     with _search_results_container:
@@ -2022,8 +2052,8 @@ async def show_mayan_reauth_dialog() -> Optional[str]:
             dialog.close()
         
         with ui.row().classes('w-full justify-end gap-2'):
-            ui.button('Отмена', on_click=handle_cancel).classes('bg-gray-500 text-white')
-            ui.button('Авторизоваться', on_click=handle_reauth).classes('bg-blue-500 text-white')
+            ui.button('Отмена', on_click=handle_cancel).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
+            ui.button('Авторизоваться', on_click=handle_reauth).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
         # Обработка нажатия Enter
         password_input.on('keydown.enter', handle_reauth)
@@ -2118,8 +2148,8 @@ async def delete_document(document: MayanDocument, card: ui.card = None):
                     ui.notify(f'Ошибка при удалении: {str(e)}', type='error')
             
             with ui.row().classes('w-full justify-end gap-2'):
-                ui.button('Отмена', on_click=dialog.close).classes('bg-gray-500 text-white')
-                ui.button('Удалить', icon='delete', color='red', on_click=confirm_delete).classes('bg-red-500 text-white')
+                ui.button('Отмена', on_click=dialog.close).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
+                ui.button('Удалить', icon='delete', color='red', on_click=confirm_delete).classes('bg-red-500 text-white text-xs px-2 py-1 h-7')
         
         dialog.open()
         
@@ -2256,7 +2286,7 @@ def favorites_content() -> None:
     # Секция с избранными документами
     with ui.row().classes('w-full mb-4'):
         ui.label('Избранные документы').classes('text-lg font-semibold')
-        ui.button('Обновить', icon='refresh', on_click=load_favorite_documents).classes('ml-auto')
+        ui.button('Обновить', icon='refresh', on_click=load_favorite_documents).classes('ml-auto text-xs px-2 py-1 h-7')
     
     _favorites_container = ui.column().classes('w-full')
     # Загружаем избранные документы только после создания контейнера
