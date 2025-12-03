@@ -8,9 +8,11 @@ from config.settings import config
 from utils import validate_username, format_due_date, create_task_detail_data
 import theme
 import logging
+import asyncio
 from components.gantt_chart import create_gantt_chart
 from models import GroupedHistoryTask, CamundaHistoryTask
 from utils.date_utils import format_date_russian
+from utils.aggrid_locale import AGGGRID_RUSSIAN_LOCALE, apply_aggrid_pagination_localization
 
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,9 @@ def content() -> None:
         ui.notify('Ошибка: пользователь не авторизован', type='error')
         ui.navigate.to('/login')
         return
+    
+    # Применяем глобальную локализацию пагинации ag-grid при загрузке страницы
+    apply_aggrid_pagination_localization()
     
     ui.timer(0.1, lambda: create_tasks_page(user.username), once=True)
 
@@ -474,7 +479,14 @@ async def create_tasks_page(login: str):
             'rowSelection': 'single',
             'pagination': True,
             'paginationPageSize': 10,
+            'localeText': AGGGRID_RUSSIAN_LOCALE,
         }).classes('w-full h-96').on('cellDoubleClicked', on_task_dblclick)
+        
+        # Применяем JavaScript локализацию для пагинации (fallback для элементов, которые не локализуются через localeText)
+        # Запускаем локализацию после создания таблицы с несколькими попытками
+        ui.timer(0.3, apply_aggrid_pagination_localization, once=True)
+        ui.timer(0.8, apply_aggrid_pagination_localization, once=True)
+        ui.timer(1.5, apply_aggrid_pagination_localization, once=True)
         
         # Таблица детальной информации о задаче
         with ui.card().classes('w-full mt-4') as tasks_details_card:
@@ -489,6 +501,7 @@ async def create_tasks_page(login: str):
                 ],
                 'rowData': [],
                 'rowSelection': 'none',
+                'localeText': AGGGRID_RUSSIAN_LOCALE,
             }).classes('w-full h-48')
             tasks_details_grid.visible = False
             

@@ -10,6 +10,8 @@ from config.settings import config
 from datetime import datetime, timezone
 import time
 import logging
+import asyncio
+from utils.aggrid_locale import AGGGRID_RUSSIAN_LOCALE
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,13 @@ class TaskAssignmentPage:
         async def page_task_assignment():
             with theme.frame('Назначение задач пользователям'):
                 #message('Выбор пользователей и назначение им задач')
+                # Сохраняем текущего пользователя в замыкании для использования в асинхронных функциях
+                current_user = get_current_user()
+                if not current_user:
+                    ui.notify('Ошибка: пользователь не авторизован', type='error')
+                    ui.navigate.to('/login')
+                    return
+                
                 # Список для хранения выбранных пользователей
                 selected_users = []
                 all_users = await get_users()
@@ -77,6 +86,7 @@ class TaskAssignmentPage:
                             ],
                             'rowData': [ user.__dict__ for user in all_users],
                             'rowSelection': 'multiple',
+                            'localeText': AGGGRID_RUSSIAN_LOCALE,
                             # Простая HTML заглушка
                             'overlayNoRowsTemplate': '''
                                 <div style="padding: 40px; text-align: center; color: #666; font-size: 16px;">
@@ -110,6 +120,7 @@ class TaskAssignmentPage:
                             ],
                             'rowData': [],
                             'rowSelection': 'multiple',
+                            'localeText': AGGGRID_RUSSIAN_LOCALE,
                               # Простая HTML заглушка
                             'overlayNoRowsTemplate': '''
                                 <div style="padding: 40px; text-align: center; color: #666; font-size: 16px;">
@@ -454,8 +465,32 @@ class TaskAssignmentPage:
                                         with document_results_container:
                                             ui.label('Поиск документов...').classes('text-sm text-gray-600 text-center py-4')
                                                                                 
-                                        # Получаем клиент Mayan EDMS
-                                        mayan_client = await MayanClient.create_with_session_user()
+                                        # Получаем клиент Mayan EDMS используя сохраненного пользователя
+                                        try:
+                                            # Проверяем наличие API токена у пользователя
+                                            if not hasattr(current_user, 'mayan_api_token') or not current_user.mayan_api_token:
+                                                raise ValueError(f'У пользователя {current_user.username} нет API токена для доступа к Mayan EDMS')
+                                            
+                                            # Создаем клиент напрямую с токеном пользователя
+                                            mayan_client = MayanClient(
+                                                base_url=config.mayan_url,
+                                                api_token=current_user.mayan_api_token
+                                            )
+                                        except ValueError as auth_error:
+                                            logger.error(f"Ошибка авторизации при создании клиента Mayan: {auth_error}")
+                                            document_results_container.clear()
+                                            with document_results_container:
+                                                ui.label('Ошибка авторизации').classes('text-sm text-red-600 text-center py-2')
+                                                ui.label(f'Детали: {str(auth_error)}').classes('text-xs text-gray-500 text-center mt-1')
+                                                ui.label('Пожалуйста, обновите страницу и войдите снова').classes('text-xs text-gray-400 text-center mt-2')
+                                            return
+                                        except Exception as client_error:
+                                            logger.error(f"Ошибка при создании клиента Mayan: {client_error}", exc_info=True)
+                                            document_results_container.clear()
+                                            with document_results_container:
+                                                ui.label('Ошибка подключения').classes('text-sm text-red-600 text-center py-2')
+                                                ui.label(f'Детали: {str(client_error)}').classes('text-xs text-gray-500 text-center mt-1')
+                                            return
                                         
                                         # Выполняем поиск
                                         query = query.strip() if query else ''
@@ -467,7 +502,12 @@ class TaskAssignmentPage:
                                         else:
                                             # Если запрос пустой, показываем последние документы
                                             logger.info("Запрос пустой, показываем последние документы")
-                                            documents = await mayan_client.get_documents(page=1, page_size=20)
+                                            try:
+                                                documents, total_count = await mayan_client.get_documents(page=1, page_size=20)
+                                                logger.info(f"Получено документов: {len(documents)}, всего: {total_count}")
+                                            except Exception as get_docs_error:
+                                                logger.error(f"Ошибка при получении последних документов: {get_docs_error}", exc_info=True)
+                                                documents = []
                                         
                                         # Очищаем контейнер перед показом результатов
                                         document_results_container.clear()
@@ -475,6 +515,7 @@ class TaskAssignmentPage:
                                         if not documents:
                                             with document_results_container:
                                                 ui.label('Документы не найдены').classes('text-sm text-gray-500 text-center py-4')
+                                                ui.label('У вас нет доступа к документам или документы отсутствуют').classes('text-xs text-gray-400 text-center mt-2')
                                             return
                                         
                                         # Отображаем найденные документы
@@ -511,7 +552,9 @@ class TaskAssignmentPage:
                                         logger.error(f"Ошибка при поиске документов: {e}", exc_info=True)
                                         document_results_container.clear()
                                         with document_results_container:
-                                            ui.label(f'Ошибка при поиске: {str(e)}').classes('text-sm text-red-600 text-center py-4')
+                                            ui.label('Ошибка при поиске документов').classes('text-sm text-red-600 text-center py-2')
+                                            ui.label(f'Детали: {str(e)}').classes('text-xs text-gray-500 text-center mt-1')
+                                            ui.label('Проверьте подключение к Mayan EDMS и права доступа').classes('text-xs text-gray-400 text-center mt-2')
                                 
                                 # Добавляем обработчик Enter для поля поиска (после определения функции)
                                 document_search_input.on('keydown.enter', lambda: search_and_display_documents_for_task(document_search_input.value))
@@ -543,10 +586,21 @@ class TaskAssignmentPage:
                                                             ui.label(f'Файл: {doc.file_latest_filename}').classes('text-xs text-gray-600')
                                                 
                                                 # Кнопка для изменения выбора
+                                                # Используем прямой вызов через ui.timer для сохранения контекста NiceGUI
+                                                def on_select_another_click():
+                                                    """Обработчик для кнопки выбора другого документа"""
+                                                    # Сохраняем значение запроса в переменную
+                                                    search_query = document_search_input.value
+                                                    # Используем ui.timer для вызова асинхронной функции в правильном контексте
+                                                    # NiceGUI автоматически обработает асинхронную функцию
+                                                    async def timer_callback():
+                                                        await search_and_display_documents_for_task(search_query)
+                                                    ui.timer(0.1, timer_callback, once=True)
+                                                
                                                 ui.button(
                                                     'Выбрать другой документ',
                                                     icon='refresh',
-                                                    on_click=lambda: search_and_display_documents_for_task(document_search_input.value)
+                                                    on_click=on_select_another_click
                                                 ).classes('mt-2 bg-blue-500 text-white text-xs px-2 py-1 h-7')
                                     
                                     except Exception as e:
@@ -642,8 +696,32 @@ class TaskAssignmentPage:
                                         with document_results_container_review:
                                             ui.label('Поиск документов...').classes('text-sm text-gray-600 text-center py-4')
                                                                                 
-                                        # Получаем клиент Mayan EDMS
-                                        mayan_client = await MayanClient.create_with_session_user()
+                                        # Получаем клиент Mayan EDMS используя сохраненного пользователя
+                                        try:
+                                            # Проверяем наличие API токена у пользователя
+                                            if not hasattr(current_user, 'mayan_api_token') or not current_user.mayan_api_token:
+                                                raise ValueError(f'У пользователя {current_user.username} нет API токена для доступа к Mayan EDMS')
+                                            
+                                            # Создаем клиент напрямую с токеном пользователя
+                                            mayan_client = MayanClient(
+                                                base_url=config.mayan_url,
+                                                api_token=current_user.mayan_api_token
+                                            )
+                                        except ValueError as auth_error:
+                                            logger.error(f"Ошибка авторизации при создании клиента Mayan: {auth_error}")
+                                            document_results_container_review.clear()
+                                            with document_results_container_review:
+                                                ui.label('Ошибка авторизации').classes('text-sm text-red-600 text-center py-2')
+                                                ui.label(f'Детали: {str(auth_error)}').classes('text-xs text-gray-500 text-center mt-1')
+                                                ui.label('Пожалуйста, обновите страницу и войдите снова').classes('text-xs text-gray-400 text-center mt-2')
+                                            return
+                                        except Exception as client_error:
+                                            logger.error(f"Ошибка при создании клиента Mayan: {client_error}", exc_info=True)
+                                            document_results_container_review.clear()
+                                            with document_results_container_review:
+                                                ui.label('Ошибка подключения').classes('text-sm text-red-600 text-center py-2')
+                                                ui.label(f'Детали: {str(client_error)}').classes('text-xs text-gray-500 text-center mt-1')
+                                            return
                                         
                                         # Выполняем поиск
                                         query = query.strip() if query else ''
@@ -655,7 +733,12 @@ class TaskAssignmentPage:
                                         else:
                                             # Если запрос пустой, показываем последние документы
                                             logger.info("Запрос пустой, показываем последние документы")
-                                            documents = await mayan_client.get_documents(page=1, page_size=20)
+                                            try:
+                                                documents, total_count = await mayan_client.get_documents(page=1, page_size=20)
+                                                logger.info(f"Получено документов: {len(documents)}, всего: {total_count}")
+                                            except Exception as get_docs_error:
+                                                logger.error(f"Ошибка при получении последних документов: {get_docs_error}", exc_info=True)
+                                                documents = []
                                         
                                         # Очищаем контейнер перед показом результатов
                                         document_results_container_review.clear()
@@ -663,6 +746,7 @@ class TaskAssignmentPage:
                                         if not documents:
                                             with document_results_container_review:
                                                 ui.label('Документы не найдены').classes('text-sm text-gray-500 text-center py-4')
+                                                ui.label('У вас нет доступа к документам или документы отсутствуют').classes('text-xs text-gray-400 text-center mt-2')
                                             return
                                         
                                         # Отображаем найденные документы
@@ -699,7 +783,9 @@ class TaskAssignmentPage:
                                         logger.error(f"Ошибка при поиске документов: {e}", exc_info=True)
                                         document_results_container_review.clear()
                                         with document_results_container_review:
-                                            ui.label(f'Ошибка при поиске: {str(e)}').classes('text-sm text-red-600 text-center py-4')
+                                            ui.label('Ошибка при поиске документов').classes('text-sm text-red-600 text-center py-2')
+                                            ui.label(f'Детали: {str(e)}').classes('text-xs text-gray-500 text-center mt-1')
+                                            ui.label('Проверьте подключение к Mayan EDMS и права доступа').classes('text-xs text-gray-400 text-center mt-2')
                                 
                                 # Добавляем обработчик Enter для поля поиска (после определения функции)
                                 document_search_input_review.on('keydown.enter', lambda: search_and_display_documents_for_review(document_search_input_review.value))
@@ -731,10 +817,21 @@ class TaskAssignmentPage:
                                                             ui.label(f'Файл: {doc.file_latest_filename}').classes('text-xs text-gray-600')
                                                 
                                                 # Кнопка для изменения выбора
+                                                # Используем прямой вызов через ui.timer для сохранения контекста NiceGUI
+                                                def on_select_another_review_click():
+                                                    """Обработчик для кнопки выбора другого документа"""
+                                                    # Сохраняем значение запроса в переменную
+                                                    search_query = document_search_input_review.value
+                                                    # Используем ui.timer для вызова асинхронной функции в правильном контексте
+                                                    # NiceGUI автоматически обработает асинхронную функцию
+                                                    async def timer_callback():
+                                                        await search_and_display_documents_for_review(search_query)
+                                                    ui.timer(0.1, timer_callback, once=True)
+                                                
                                                 ui.button(
                                                     'Выбрать другой документ',
                                                     icon='refresh',
-                                                    on_click=lambda: search_and_display_documents_for_review(document_search_input_review.value)
+                                                    on_click=on_select_another_review_click
                                                 ).classes('mt-2 bg-blue-500 text-white text-xs px-2 py-1 h-7')
                                     
                                     except Exception as e:
