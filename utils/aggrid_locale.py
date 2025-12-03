@@ -78,6 +78,7 @@ def apply_aggrid_pagination_localization():
     """
     Применяет JavaScript локализацию для пагинации ag-grid
     Используется как fallback, если localeText не работает для некоторых элементов
+    ВАЖНО: Изменяет только текстовые узлы, не трогая интерактивные элементы (селекторы, кнопки и т.д.)
     """
     ui.run_javascript('''
         (function() {
@@ -88,47 +89,38 @@ def apply_aggrid_pagination_localization():
             window.aggridPaginationLocalized = true;
             
             function replacePageSizeText() {
-                // Метод 1: Используем специфичные селекторы ag-grid для "Page Size"
-                // Ищем все возможные селекторы, которые могут содержать "Page Size"
-                const selectors = [
-                    '.ag-paging-page-size-label',
-                    '.ag-paging-page-size-selector-label',
-                    '[class*="ag-paging-page-size"]',
-                    '.ag-paging-panel span',
-                    '.ag-paging-row-summary-panel span',
-                    '.ag-paging-panel label'
-                ];
-                
-                selectors.forEach(function(selector) {
-                    try {
-                        const elements = document.querySelectorAll(selector);
-                        elements.forEach(function(el) {
-                            if (el && el.textContent) {
-                                const text = el.textContent.trim();
-                                if (text === 'Page Size:' || text === 'Page Size' || text.includes('Page Size')) {
-                                    el.textContent = el.textContent.replace(/Page Size:/gi, 'Размер страницы:');
-                                    el.textContent = el.textContent.replace(/Page Size/gi, 'Размер страницы');
-                                }
-                            }
-                        });
-                    } catch (e) {
-                        // Игнорируем ошибки селекторов
-                    }
-                });
-                
-                // Метод 2: Ищем по тексту во всех элементах пагинации ag-grid
-                const paginationPanels = document.querySelectorAll('.ag-paging-panel, .ag-paging-row-summary-panel, .ag-paging-page-size-selector');
+                // Ищем только текстовые узлы в панели пагинации, которые содержат "Page Size"
+                // НЕ трогаем элементы, которые содержат дочерние элементы (селекторы, кнопки и т.д.)
+                const paginationPanels = document.querySelectorAll('.ag-paging-panel, .ag-paging-row-summary-panel');
                 paginationPanels.forEach(function(panel) {
                     if (!panel) return;
                     
-                    // Ищем все текстовые узлы внутри панели пагинации
+                    // Используем TreeWalker для поиска ТОЛЬКО текстовых узлов
                     const walker = document.createTreeWalker(
                         panel,
                         NodeFilter.SHOW_TEXT,
                         {
                             acceptNode: function(node) {
-                                if (node.textContent && (node.textContent.includes('Page Size') || node.textContent.trim() === 'Page Size:')) {
-                                    return NodeFilter.FILTER_ACCEPT;
+                                // Проверяем, что это текстовый узел и содержит "Page Size"
+                                if (node && node.nodeType === Node.TEXT_NODE) {
+                                    const text = node.textContent.trim();
+                                    // Проверяем, что родительский элемент не является интерактивным (select, button, input)
+                                    const parent = node.parentElement;
+                                    if (parent) {
+                                        const tagName = parent.tagName.toLowerCase();
+                                        // Пропускаем интерактивные элементы
+                                        if (tagName === 'select' || tagName === 'button' || tagName === 'input' || tagName === 'option') {
+                                            return NodeFilter.FILTER_REJECT;
+                                        }
+                                        // Проверяем, что родитель не содержит интерактивных элементов
+                                        if (parent.querySelector('select, button, input')) {
+                                            return NodeFilter.FILTER_REJECT;
+                                        }
+                                    }
+                                    // Принимаем только узлы с текстом "Page Size"
+                                    if (text === 'Page Size:' || text === 'Page Size' || (text.includes('Page Size') && text.length < 50)) {
+                                        return NodeFilter.FILTER_ACCEPT;
+                                    }
                                 }
                                 return NodeFilter.FILTER_SKIP;
                             }
@@ -138,8 +130,9 @@ def apply_aggrid_pagination_localization():
                     
                     let node;
                     while (node = walker.nextNode()) {
-                        if (node.textContent) {
+                        if (node && node.nodeType === Node.TEXT_NODE && node.textContent) {
                             const originalText = node.textContent;
+                            // Заменяем только текст "Page Size", не трогая остальное
                             const newText = originalText.replace(/Page Size:/gi, 'Размер страницы:').replace(/Page Size/gi, 'Размер страницы');
                             if (newText !== originalText) {
                                 node.textContent = newText;
@@ -156,7 +149,6 @@ def apply_aggrid_pagination_localization():
             setTimeout(replacePageSizeText, 600);
             setTimeout(replacePageSizeText, 1000);
             setTimeout(replacePageSizeText, 2000);
-            setTimeout(replacePageSizeText, 3000);
             
             // Используем MutationObserver для отслеживания динамических изменений в ag-grid
             if (!window.aggridPaginationObserver) {
@@ -167,23 +159,27 @@ def apply_aggrid_pagination_localization():
                             const target = mutation.target;
                             if (target) {
                                 // Проверяем, относится ли изменение к пагинации ag-grid
-                                if (target.classList && (
+                                // НО только если это не интерактивный элемент
+                                const isInteractive = target.tagName && ['SELECT', 'BUTTON', 'INPUT', 'OPTION'].includes(target.tagName);
+                                const isInPagination = target.classList && (
                                     target.classList.contains('ag-paging-panel') || 
                                     target.classList.contains('ag-paging-row-summary-panel') ||
                                     target.closest('.ag-paging-panel') ||
                                     target.closest('.ag-paging-row-summary-panel')
-                                )) {
-                                    shouldReplace = true;
-                                }
-                                // Также проверяем по тексту
-                                if (target.textContent && target.textContent.includes('Page Size')) {
-                                    shouldReplace = true;
+                                );
+                                
+                                if (isInPagination && !isInteractive) {
+                                    // Проверяем, что изменение не в селекторе
+                                    if (!target.closest('select') && !target.closest('.ag-paging-page-size-selector select')) {
+                                        shouldReplace = true;
+                                    }
                                 }
                             }
                         }
                     });
                     if (shouldReplace) {
-                        replacePageSizeText();
+                        // Небольшая задержка, чтобы ag-grid успел отрендерить элементы
+                        setTimeout(replacePageSizeText, 50);
                     }
                 });
                 

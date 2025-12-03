@@ -479,6 +479,7 @@ async def create_tasks_page(login: str):
             'rowSelection': 'single',
             'pagination': True,
             'paginationPageSize': 10,
+            'paginationPageSizeSelector': [10, 25, 50, 100],  # Явно включаем селектор размера страницы
             'localeText': AGGGRID_RUSSIAN_LOCALE,
         }).classes('w-full h-96').on('cellDoubleClicked', on_task_dblclick)
         
