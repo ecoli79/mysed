@@ -1484,4 +1484,4 @@ function Signatura_CreateSign_Async(Thumbprint, detached, data, isBase64Encoded,
 
 
 
-async_resolve();
+//async_resolve();

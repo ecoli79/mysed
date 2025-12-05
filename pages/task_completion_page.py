@@ -472,9 +472,12 @@ async def create_task_card_with_progress(task):
                                     status_icon = 'check_circle' if user_info["completed"] else 'schedule'
                                     status_color = 'text-green-600' if user_info["completed"] else 'text-orange-600'
                                     
+                                    # Получаем отображаемое имя (ФИО и должность) вместо логина
+                                    user_display_name = get_user_display_name(user_info["user"])
+                                    
                                     with ui.row().classes('w-full items-center gap-2'):
                                         ui.icon(status_icon).classes(status_color)
-                                        ui.label(f'{user_info["user"]}: {user_info["status"]}').classes('text-sm')
+                                        ui.label(f'{user_display_name}: {user_info["status"]}').classes('text-sm')
                         
                     except Exception as e:
                         logger.warning(f"Не удалось получить информацию о прогрессе для задачи {task.id}: {e}")
@@ -497,8 +500,9 @@ async def create_task_card_with_progress(task):
             # Контейнер для деталей задачи (скрыт по умолчанию)
             details_container = ui.column().classes('w-full mt-4')
             details_container.set_visibility(False)
-            
-        # Сохраняем ссылку на карточку, индикатор и контейнер деталей
+        
+        # Сохраняем ссылку на карточку, индикатор и контейнеры
+        # Контейнер формы завершения будет создан динамически при нажатии на кнопку
         _task_cards[task_id_str] = {
             'card': card,
             'indicator': indicator_row,
@@ -509,13 +513,18 @@ async def create_task_card_with_progress(task):
 
 def create_task_card(task):
     """Создает карточку задачи"""
-    global _tasks_container
+    global _tasks_container, _task_cards
     
     if _tasks_container is None:
         return
+    
+    task_id_str = str(getattr(task, 'id', ''))
+    process_id_str = str(getattr(task, 'process_instance_id', ''))
         
     with _tasks_container:
-        with ui.card().classes('mb-3 p-4 border-l-4 border-blue-500'):
+        card = ui.card().classes('mb-3 p-4 border-l-4 border-blue-500')
+        
+        with card:
             with ui.row().classes('items-start justify-between w-full'):
                 with ui.column().classes('flex-1'):
                     ui.label(f'{task.name}').classes('text-lg font-semibold')
@@ -545,6 +554,14 @@ def create_task_card(task):
                 with ui.column().classes('items-end'):
                     ui.label(f'ID: {task.id}').classes('text-xs text-gray-500 font-mono')
                     ui.label(f'Приоритет: {task.priority}').classes('text-xs text-gray-500')
+        
+        # Сохраняем ссылку на карточку
+        # Контейнер формы завершения будет создан динамически при нажатии на кнопку
+        _task_cards[task_id_str] = {
+            'card': card,
+            'task_id': task_id_str,
+            'process_id': process_id_str
+        }
 
 def create_completed_tasks_section():
     """Создает секцию с завершенными задачами"""
@@ -1222,14 +1239,46 @@ async def complete_task(task):
 
 
 def complete_regular_task(task):
-    """Завершает задачу"""
-    # Создаем модальное окно для завершения задачи
-    with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl'):
-        ui.label('Завершение задачи').classes('text-xl font-semibold mb-4')
+    """Завершает задачу - форма открывается прямо в карточке задачи"""
+    global _task_cards, _uploaded_files, _uploaded_files_container
+    
+    # Находим карточку задачи
+    task_id_str = str(getattr(task, 'id', ''))
+    process_id_str = str(getattr(task, 'process_instance_id', ''))
+    
+    task_card_info = _task_cards.get(task_id_str) or _task_cards.get(process_id_str)
+    
+    if not task_card_info:
+        ui.notify('Ошибка: карточка задачи не найдена', type='error')
+        return
+    
+    card = task_card_info['card']
+    
+    # Проверяем, есть ли уже контейнер формы завершения
+    if 'completion_form_container' in task_card_info:
+        # Если форма уже существует, просто показываем её
+        completion_form = task_card_info['completion_form_container']
+        completion_form.set_visibility(True)
+        return
+    
+    # Создаем контейнер для формы завершения
+    with card:
+        completion_form = ui.column().classes('w-full mt-4 p-4 bg-gray-50 border rounded')
+        completion_form.set_visibility(True)
+    
+    # Сохраняем ссылку на контейнер формы
+    task_card_info['completion_form_container'] = completion_form
+    
+    # Очищаем список загруженных файлов
+    _uploaded_files = []
+    
+    # Создаем форму завершения внутри контейнера
+    with completion_form:
+        ui.label('Завершение задачи').classes('text-lg font-semibold mb-4')
         
         # Информация о задаче
-        with ui.card().classes('p-4 bg-gray-50 mb-4'):
-            ui.label(f'Задача: {task.name}').classes('text-lg font-semibold')
+        with ui.card().classes('p-3 bg-white mb-4'):
+            ui.label(f'Задача: {task.name}').classes('text-base font-semibold')
             ui.label(f'ID задачи: {task.id}').classes('text-sm text-gray-600')
             ui.label(f'ID процесса: {task.process_instance_id}').classes('text-sm text-gray-600')
         
@@ -1261,42 +1310,72 @@ def complete_regular_task(task):
             ).classes('w-full mb-4')
             
             # Список загруженных файлов
-            global _uploaded_files_container, _uploaded_files
             _uploaded_files_container = ui.column().classes('w-full mb-4')
-            _uploaded_files = []
             
             # Кнопки действий
             with ui.row().classes('w-full justify-end gap-2'):
                 ui.button(
                     'Отмена',
-                    on_click=dialog.close
+                    on_click=lambda: completion_form.set_visibility(False)
                 ).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                 
                 ui.button(
                     'Завершить задачу',
                     icon='check',
-                    on_click=lambda: submit_task_completion(task, status_select.value, comment_textarea.value, dialog)
+                    on_click=lambda: submit_task_completion(task, status_select.value, comment_textarea.value, completion_form)
                 ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
-    
-    dialog.open()
 
 async def complete_signing_task(task):
-    """Завершает задачу подписания документа"""
+    """Завершает задачу подписания документа - форма открывается прямо в карточке задачи"""
     
     # Объявляем global в начале функции
-    global _show_all_certificates, _document_for_signing
+    global _show_all_certificates, _document_for_signing, _task_cards
     
-    # Сбрасываем глобальную переменную при открытии диалога
+    # Сбрасываем глобальную переменную при открытии формы
     _show_all_certificates = False  # Всегда начинаем с фильтрованного режима
     
-    with ui.dialog() as dialog, ui.card().classes('w-full max-w-4xl'):
+    # Находим карточку задачи
+    task_id_str = str(getattr(task, 'id', ''))
+    process_id_str = str(getattr(task, 'process_instance_id', ''))
+    
+    task_card_info = _task_cards.get(task_id_str) or _task_cards.get(process_id_str)
+    
+    if not task_card_info:
+        ui.notify('Ошибка: карточка задачи не найдена', type='error')
+        return
+    
+    card = task_card_info['card']
+    
+    # Проверяем, есть ли уже контейнер формы завершения
+    if 'completion_form_container' in task_card_info and task_card_info['completion_form_container']:
+        # Если форма уже существует, очищаем её содержимое и пересоздаём
+        # Это нужно для того, чтобы сертификаты загружались заново
+        old_form = task_card_info['completion_form_container']
+        old_form.clear()
+        completion_form = old_form
+    else:
+        # Создаем контейнер для формы завершения
+        with card:
+            completion_form = ui.column().classes('w-full mt-4 p-4 bg-gray-50 border rounded')
+            completion_form.set_visibility(True)
+        
+        # Сохраняем ссылку на контейнер формы
+        task_card_info['completion_form_container'] = completion_form
+    
+    # Сбрасываем глобальные переменные для новой задачи
+    global _certificates_cache, _selected_certificate
+    _certificates_cache = []
+    _selected_certificate = None
+    
+    # Создаем форму завершения внутри контейнера
+    with completion_form:
         ui.label('Подписание документа').classes('text-xl font-bold mb-4')
         
         with ui.column().classes('w-full gap-4'):
             # Получаем переменные процесса
             document_id = None
             document_name = None
-            signer_list = []
+           # signer_list = []
             
             try:
                 camunda_client = await create_camunda_client()
@@ -1309,27 +1388,25 @@ async def complete_signing_task(task):
                 document_name = process_variables.get('documentName')
                 
                 # Извлекаем список подписантов
-                signer_list = process_variables.get('signerList', [])
-                if isinstance(signer_list, dict) and 'value' in signer_list:
-                    signer_list = signer_list['value']
-                elif isinstance(signer_list, str):
-                    try:
-                        signer_list = json.loads(signer_list)
-                    except:
-                        signer_list = [signer_list] if signer_list else []
+                # signer_list = process_variables.get('signerList', [])
+                # if isinstance(signer_list, dict) and 'value' in signer_list:
+                #     signer_list = signer_list['value']
+                # elif isinstance(signer_list, str):
+                #     try:
+                #         signer_list = json.loads(signer_list)
+                #     except:
+                #         signer_list = [signer_list] if signer_list else []
                 
             except Exception as e:
                 ui.label(f'Ошибка при получении переменных процесса: {str(e)}').classes('text-red-600')
                 logger.error(f"Ошибка в complete_signing_task при получении переменных: {e}")
             
             # ИСПРАВЛЕНИЕ: Проверяем, уже подписан ли документ текущим пользователем
-            # Добавляем проверку, что document_id - это валидный ID документа (число)
             def is_valid_document_id(doc_id):
                 '''Проверяет, что document_id - это валидный идентификатор (число)'''
                 if not doc_id:
                     return False
                 try:
-                    # Пытаемся преобразовать в число
                     int(str(doc_id).strip())
                     return True
                 except (ValueError, AttributeError):
@@ -1357,7 +1434,7 @@ async def complete_signing_task(task):
                                         '',
                                         {},
                                         'Документ уже подписан',
-                                        dialog
+                                        completion_form
                                     )
                                 
                                 ui.button(
@@ -1366,55 +1443,52 @@ async def complete_signing_task(task):
                                     on_click=complete_already_signed
                                 ).classes('bg-green-600 text-white text-xs px-2 py-1 h-7')
                                 
-                                ui.button('Закрыть', on_click=dialog.close).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
+                                ui.button('Отмена', on_click=lambda: completion_form.set_visibility(False)).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                             
-                            dialog.open()
                             return  # Выходим из функции, не показывая форму подписания
                         
                 except Exception as e:
                     logger.warning(f"Ошибка проверки существующей подписи: {e}")
                     # Продолжаем процесс, если не удалось проверить
             
-            # Отображение списка подписантов
-            if signer_list:
-                ui.label('Список подписантов:').classes('text-lg font-semibold mt-4 mb-2')
+            # # Отображение списка подписантов
+            # if signer_list:
+            #     ui.label('Список подписантов:').classes('text-lg font-semibold mt-4 mb-2')
                 
-                try:
-                    # ИСПРАВЛЕНИЕ: Создаем объект LDAPAuthenticator
-                    ldap_auth = LDAPAuthenticator()
+            #     try:
+            #         ldap_auth = LDAPAuthenticator()
                     
-                    signers_container = ui.column().classes('w-full mb-4')
+            #         signers_container = ui.column().classes('w-full mb-4')
                     
-                    with signers_container:                           
-                        with ui.column().classes('w-full'):
-                            for i, signer_login in enumerate(signer_list):
-                                try:
-                                    logger.info(f"Обрабатываем подписанта {i+1}: {signer_login}")
+            #         with signers_container:                           
+            #             with ui.column().classes('w-full'):
+            #                 for i, signer_login in enumerate(signer_list):
+            #                     try:
+            #                         logger.info(f"Обрабатываем подписанта {i+1}: {signer_login}")
                                     
-                                    # ДОБАВЛЯЕМ ЛОГИРОВАНИЕ: Проверяем пользователя в LDAP
-                                    user_info = ldap_auth.get_user_by_login(signer_login)
-                                    logger.info(f"Результат get_user_by_login для {signer_login}: {user_info is not None}")
+            #                         user_info = ldap_auth.get_user_by_login(signer_login)
+            #                         logger.info(f"Результат get_user_by_login для {signer_login}: {user_info is not None}")
                                     
-                                    if not user_info:
-                                        logger.info(f"Пользователь {signer_login} не найден через точный поиск, пробуем широкий поиск")
-                                        user_info = ldap_auth.find_user_by_login(signer_login)
-                                        logger.info(f"Результат find_user_by_login для {signer_login}: {user_info is not None}")
+            #                         if not user_info:
+            #                             logger.info(f"Пользователь {signer_login} не найден через точный поиск, пробуем широкий поиск")
+            #                             user_info = ldap_auth.find_user_by_login(signer_login)
+            #                             logger.info(f"Результат find_user_by_login для {signer_login}: {user_info is not None}")
                                     
-                                    if user_info:
-                                        ui.label(f'{i+1}. {user_info.givenName} {user_info.sn} - {user_info.destription}').classes('text-sm mb-1')
-                                        logger.info(f"Найдена информация о пользователе {signer_login}: {user_info.givenName} {user_info.sn}")
-                                    else:
-                                        ui.label(f'{i+1}. {signer_login} (не найден в LDAP)').classes('text-sm mb-1 text-red-600')
-                                        logger.warning(f"Пользователь {signer_login} не найден в LDAP после всех попыток поиска")
+            #                         if user_info:
+            #                             ui.label(f'{i+1}. {user_info.givenName} {user_info.sn} - {user_info.destription}').classes('text-sm mb-1')
+            #                             logger.info(f"Найдена информация о пользователе {signer_login}: {user_info.givenName} {user_info.sn}")
+            #                         else:
+            #                             ui.label(f'{i+1}. {signer_login} (не найден в LDAP)').classes('text-sm mb-1 text-red-600')
+            #                             logger.warning(f"Пользователь {signer_login} не найден в LDAP после всех попыток поиска")
                                         
-                                except Exception as e:
-                                    logger.error(f"Ошибка получения информации о пользователе {signer_login}: {e}")
-                                    ui.label(f'{i+1}. {signer_login} (ошибка: {str(e)})').classes('text-sm mb-1 text-red-600')
-                except Exception as e:
-                    logger.error(f"Ошибка получения списка подписантов из LDAP: {e}")
-                    ui.label(f'Ошибка получения информации о подписантах: {str(e)}').classes('text-red-600')
-            else:
-                ui.label('Список подписантов не найден в переменных процесса').classes('text-yellow-600 mt-4')
+            #                     except Exception as e:
+            #                         logger.error(f"Ошибка получения информации о пользователе {signer_login}: {e}")
+            #                         ui.label(f'{i+1}. {signer_login} (ошибка: {str(e)})').classes('text-sm mb-1 text-red-600')
+            #     except Exception as e:
+            #         logger.error(f"Ошибка получения списка подписантов из LDAP: {e}")
+            #         ui.label(f'Ошибка получения информации о подписантах: {str(e)}').classes('text-red-600')
+            # else:
+            #     ui.label('Список подписантов не найден в переменных процесса').classes('text-yellow-600 mt-4')
             
             # Загружаем документ из Mayan EDMS
             document_loaded = False
@@ -1427,7 +1501,7 @@ async def complete_signing_task(task):
                         document_base64 = base64.b64encode(document_content).decode('utf-8')
                         
                         ui.label(f'Документ загружен: {document_name or "Неизвестно"}').classes('text-green-600 mb-2')
-                        ui.label(f'Размер файла: {len(document_content)} байт').classes('text-sm text-gray-600 mb-4')
+                        #ui.label(f'Размер файла: {len(document_content)} байт').classes('text-sm text-gray-600 mb-4')
                         
                         # Добавляем кнопки для просмотра и скачивания документа
                         with ui.row().classes('w-full mb-4 gap-2'):
@@ -1478,68 +1552,99 @@ async def complete_signing_task(task):
             
             # Статус КриптоПро (показываем только если документ загружен)
             if document_loaded:
-                ui.label('Электронная подпись:').classes('text-lg font-semibold')
-                crypto_status = ui.html('').classes('mb-4')
+               # ui.label('Электронная подпись:').classes('text-lg font-semibold')
                 
-                # Добавляем переключатель для показа всех сертификатов
-                # УДАЛИТЬ строку: global _show_all_certificates (уже объявлен в начале функции)
+                # Контейнер для статуса КриптоПро (показываем сразу)
+                crypto_status_container = ui.column().classes('w-full mb-0')
+                
+                with crypto_status_container:
+                    crypto_status = ui.html('').classes('mb-0')
+                    crypto_status.props(f'data-crypto-status="true"')
+                
+                # Контейнер для списка сертификатов (создаем через NiceGUI)
+                certificates_container = ui.column().classes('w-full mb-1')
+                certificates_container.props(f'data-task-id="{task_id_str}" data-cert-container="true"')
+                
+                # Получаем ID элемента для поиска через JavaScript
+                cert_select_id = f'cert-select-{task_id_str}'
+                
+                # Select для выбора сертификата (создаем внутри контейнера)
+                with certificates_container:
+                    certificate_select = ui.select(
+                        options={},
+                        label='Выберите сертификат для подписания',
+                        with_input=True
+                    ).classes('w-full mb-4')
+                    # Добавляем data-атрибут для поиска через JavaScript
+                    if hasattr(certificate_select, 'props'):
+                        certificate_select.props(f'data-cert-select-id="{cert_select_id}"')
+                
+                # НЕ скрываем контейнер - показываем сразу, но select будет пустым до загрузки
+                # certificates_container.set_visibility(False)  # УБИРАЕМ ЭТУ СТРОКУ
+                
+                # Сохраняем ссылки на контейнеры в глобальной переменной
+                global _task_certificates_containers
+                if '_task_certificates_containers' not in globals():
+                    _task_certificates_containers = {}
+                _task_certificates_containers[task_id_str] = {
+                    'certificates_container': certificates_container,
+                    'crypto_status_container': crypto_status_container,
+                    'cert_select_id': f'cert-select-{task_id_str}'
+                }
                 
                 def on_show_all_changed(e):
                     """Обработчик изменения переключателя"""
-                    global _show_all_certificates  # Оставляем здесь, так как это вложенная функция
-                    # В NiceGUI событие передает объект с атрибутом value
+                    global _show_all_certificates
                     if hasattr(e, 'value'):
                         _show_all_certificates = e.value
                     elif isinstance(e, bool):
                         _show_all_certificates = e
                     else:
-                        # Если это другой формат события, пробуем получить значение из checkbox
                         _show_all_certificates = show_all_checkbox.value
                     
-                    # Перезагружаем сертификаты с новым параметром
-                    check_crypto_pro_availability(crypto_status)
+                    # Перезагружаем сертификаты (без select)
+                    check_crypto_pro_availability_and_load(
+                        crypto_status, 
+                        certificates_container,
+                        None,  # Не передаем select
+                        task_id_str
+                    )
                 
                 show_all_checkbox = ui.checkbox(
                     'Показать все сертификаты',
                     value=_show_all_certificates,
                     on_change=on_show_all_changed
-                ).classes('mb-2')
+                ).classes('mb-1')
                 
-                check_crypto_pro_availability(crypto_status)
+                # Вызываем проверку и загрузку сертификатов
+                check_crypto_pro_availability_and_load(
+                    crypto_status,
+                    certificates_container,
+                    None,  # Не передаем select
+                    task_id_str
+                )
                 
                 # Информация о выбранном сертификате
-                certificate_info_display = ui.html('').classes('w-full mb-4 p-4 bg-gray-50 rounded')
+                certificate_info_display = ui.html('').classes('w-full mb-1 p-4 bg-gray-50 rounded')
                 
-                # Поля для подписания
-                signing_fields_container = ui.column().classes('w-full mb-4')
+                # Обработчик выбора сертификата будет обрабатываться через JavaScript
+                # и обновлять certificate_info_display через API
                 
-                with signing_fields_container:
-                    ui.label('Данные для подписания:').classes('text-lg font-semibold mb-2')
-                    
-                    data_to_sign_value = f"Документ ID: {document_id}, Название: {document_name}"
-                    
-                    data_to_sign = ui.textarea(
-                        label='Данные для подписания',
-                        placeholder='Введите данные для подписания...',
-                        value=data_to_sign_value
-                    ).classes('w-full mb-4')
-                    
-                    with ui.row().classes('w-full justify-between gap-2'):
-                        ui.button(
-                            'Подписать документ',
-                            icon='edit',
-                            on_click=lambda: sign_document_with_certificate(
-                                task,
-                                data_to_sign.value,
-                                signing_fields_container,
-                                certificate_info_display,
-                                result_container
-                            )
-                        ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
-                        ui.button('ОТМЕНА', on_click=dialog.close).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
+                # Кнопки для подписания (без блока "Данные для подписания")
+                with ui.row().classes('w-full justify-between gap-2 mb-1'):
+                    ui.button(
+                        'Подписать документ',
+                        icon='edit',
+                        on_click=lambda: sign_document_with_certificate(
+                            task,
+                            certificate_info_display,
+                            result_container
+                        )
+                    ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
+                    ui.button('ОТМЕНА', on_click=lambda: completion_form.set_visibility(False)).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                 
                 # Результат подписания (изначально скрыт)
-                result_container = ui.column().classes('w-full mb-4')
+                result_container = ui.column().classes('w-full mb-1')
                 result_container.visible = False
                 
                 with result_container:
@@ -1553,7 +1658,7 @@ async def complete_signing_task(task):
                             task,
                             document_id,
                             document_name,
-                            dialog
+                            completion_form
                         )
                     ).classes('bg-green-600 text-white text-xs px-2 py-1 h-7')
             else:
@@ -1569,18 +1674,16 @@ async def complete_signing_task(task):
                             '',
                             {},
                             'Документ уже подписан (не удалось загрузить для проверки)',
-                            dialog
+                            completion_form
                         )
                     
                     with ui.row().classes('w-full justify-end gap-2'):
-                        ui.button('ОТМЕНА', on_click=dialog.close).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
+                        ui.button('ОТМЕНА', on_click=lambda: completion_form.set_visibility(False)).classes('bg-gray-500 text-white text-xs px-2 py-1 h-7')
                         ui.button(
                             'Завершить задачу',
                             icon='check',
                             on_click=complete_without_signing
                         ).classes('bg-green-600 text-white text-xs px-2 py-1 h-7')
-    
-    dialog.open()
 
 def check_and_save_signed_pdf():
     """Проверяет результат создания подписанного PDF и сохраняет его"""
@@ -1638,103 +1741,92 @@ def sign_document(certificate_value, data_to_sign, signing_fields_container, cer
         logger.error(f"Ошибка при подписании документа: {e}")
         ui.notify(f'Ошибка при подписании: {str(e)}', type='error')
 
-async def complete_signing_task_with_result(task, document_id, document_name, dialog):
-    '''Завершает задачу подписания с проверкой результата'''
+async def complete_signing_task_with_result(task, document_id, document_name, completion_form):
+    """Завершает задачу подписания с результатом"""
     try:
-        # Получаем результат подписания из api_router
+        # Получаем результат подписания
         signature_result = api_router.get_signature_result()
         
         if not signature_result:
-            ui.notify('Результат подписания не найден. Сначала подпишите документ.', type='warning')
+            ui.notify('Результат подписания не найден', type='error')
             return
         
-        # Извлекаем данные подписи
-        signature_data = signature_result.get('signature', '')
+        signed = signature_result.get('action') == 'signed_document_created'
+        signature_data = signature_result.get('signed_document', '')
         certificate_info = signature_result.get('certificate_info', {})
         
-        if not signature_data:
-            ui.notify('Данные подписи отсутствуют. Сначала подпишите документ.', type='warning')
-            return
-        
-        logger.info('Данные подписи получены из api_router, завершаем задачу')
-        logger.info(f'Certificate info: {certificate_info}')
-        
-        # Завершаем задачу с данными подписи
         await submit_signing_task_completion(
-            task, 
-            True,
+            task,
+            signed,
             signature_data,
             certificate_info,
             'Документ подписан',
-            dialog
+            completion_form
         )
         
     except Exception as e:
-        ui.notify(f'Ошибка: {str(e)}', type='error')
         logger.error(f'Ошибка при завершении задачи подписания {task.id}: {e}', exc_info=True)
+        ui.notify(f'Ошибка: {str(e)}', type='error')
 
-def check_crypto_pro_availability(status_container):
-    """Проверяет доступность КриптоПро плагина"""
+def check_crypto_pro_availability_and_load(status_container, certificates_container, certificate_select, task_id=None):
+    """Проверяет доступность КриптоПро и загружает сертификаты"""
     try:
-        global _show_all_certificates
+        global _show_all_certificates, _task_certificates_containers
         
-        # Сначала показываем статус проверки
-        status_container.content = '''
-        <div id="crypto-status" style="padding: 10px; border: 1px solid #ddd; border-radius: 4px; background-color: #f9f9f9;">
-            <div style="color: #666;">🔍 Проверка КриптоПро плагина...</div>
-        </div>
-        '''
+        # Получаем cert_select_id из сохраненных контейнеров
+        cert_select_id = f'cert-select-{task_id}' if task_id else 'cert-select-default'
+        if task_id and '_task_certificates_containers' in globals():
+            containers = _task_certificates_containers.get(task_id, {})
+            cert_select_id = containers.get('cert_select_id', cert_select_id)
         
-        # Затем запускаем проверку через JavaScript
+        # Показываем статус проверки
+        # status_container.content = '''
+        # <div style="padding: 10px; border: 1px solid #ddd; border-radius: 4px; background-color: #f9f9f9;">
+        #     <div style="color: #666;">🔍 Проверка КриптоПро плагина...</div>
+        # </div>
+        # '''
+        
+        # Запускаем проверку через JavaScript
         ui.run_javascript(f'''
-            console.log("=== Начинаем проверку КриптоПро ===");
-            
-            // Проверяем доступность плагина
-            if (typeof window.cryptoProIntegration !== 'undefined') {{
-                console.log("✅ CryptoProIntegration класс найден");
+            setTimeout(() => {{
+                console.log("=== Начинаем проверку КриптоПро для задачи {task_id} ===");
                 
-                // Обновляем статус
-                const statusDiv = document.getElementById('crypto-status');
-                if (statusDiv) {{
-                    statusDiv.innerHTML = `
-                        <div style="color: green;">✅ КриптоПро плагин доступен</div>
-                        <div style="color: green;">✅ Интеграция инициализирована</div>
-                        <div style="color: green;">✅ CryptoProIntegration класс найден</div>
-                        <div id="certificates-area" style="margin-top: 15px;"></div>
-                    `;
-                }}
-                
-                // Автоматически загружаем сертификаты с параметром show_all
-                setTimeout(() => {{
-                    window.cryptoProIntegration.getAvailableCertificates()
-                        .then(certificates => {{
-                            console.log("Сертификаты получены:", certificates);
-                            
-                            // Отправляем событие о загруженных сертификатах с параметром show_all
-                            window.nicegui_handle_event('certificates_loaded', {{
-                                certificates: certificates,
-                                count: certificates.length,
-                                show_all: {str(_show_all_certificates).lower()}
+                // Проверяем доступность плагина
+                if (typeof window.cryptoProIntegration !== 'undefined') {{
+                    console.log("✅ CryptoProIntegration класс найден");
+                    
+                    // НЕ обновляем статус - убираем этот блок
+                    // Просто загружаем сертификаты без отображения статуса
+                    
+                    // Автоматически загружаем сертификаты
+                    setTimeout(() => {{
+                        window.cryptoProIntegration.getAvailableCertificates()
+                            .then(certificates => {{
+                                console.log("Сертификаты получены для задачи {task_id}:", certificates);
+                                
+                                // Отправляем событие о загруженных сертификатах
+                                window.nicegui_handle_event('certificates_loaded', {{
+                                    certificates: certificates,
+                                    count: certificates.length,
+                                    show_all: {str(_show_all_certificates).lower()},
+                                    task_id: '{task_id}',
+                                    cert_select_id: '{cert_select_id}'
+                                }});
+                            }})
+                            .catch(error => {{
+                                console.error("Ошибка получения сертификатов для задачи {task_id}:", error);
+                                window.nicegui_handle_event('certificates_error', {{
+                                    error: error.message,
+                                    task_id: '{task_id}'
+                                }});
                             }});
-                        }})
-                        .catch(error => {{
-                            console.error("Ошибка получения сертификатов:", error);
-                            window.nicegui_handle_event('certificates_error', {{
-                                error: error.message
-                            }});
-                        }});
-                }}, 1000);
-                
-            }} else {{
-                console.log("❌ CryptoProIntegration класс не найден");
-                const statusDiv = document.getElementById('crypto-status');
-                if (statusDiv) {{
-                    statusDiv.innerHTML = `
-                        <div style="color: red;">❌ CryptoProIntegration класс не найден</div>
-                        <div style="color: #666;">Убедитесь, что скрипт cryptopro-integration.js загружен</div>
-                    `;
+                    }}, 500);
+                    
+                }} else {{
+                    console.log("❌ CryptoProIntegration класс не найден");
+                    // Показываем ошибку только в консоли, не в UI
                 }}
-            }}
+            }}, 100);
         ''')
         
     except Exception as e:
@@ -1928,7 +2020,7 @@ def show_certificate_info(certificate_index: str, info_container: ui.html):
         logger.error(f"Ошибка при отображении информации о сертификате: {e}")
         info_container.content = f'<div style="color: red;">Ошибка: {str(e)}</div>'
 
-def sign_document_with_certificate(task, data_to_sign, signing_fields_container, certificate_info_display, result_container):
+def sign_document_with_certificate(task, certificate_info_display, result_container):
     """Подписывает документ с использованием выбранного сертификата - ПОДПИСАНИЕ РЕАЛЬНОГО ДОКУМЕНТА"""
     try:
         selected_cert = api_router.get_selected_certificate()
@@ -1950,7 +2042,6 @@ def sign_document_with_certificate(task, data_to_sign, signing_fields_container,
         
         if not is_valid:
             ui.notify('⚠️ Внимание: Выбранный сертификат недействителен!', type='warning')
-            # Продолжаем, но предупреждаем пользователя
         
         # Получаем РЕАЛЬНЫЙ индекс сертификата в КриптоПро
         cryptopro_index = certificate_data.get('index', selected_cert.get('js_index', 1))
@@ -1958,16 +2049,6 @@ def sign_document_with_certificate(task, data_to_sign, signing_fields_container,
         logger.info(f"Используем РЕАЛЬНЫЙ индекс КриптоПро: {cryptopro_index}")
         logger.info(f"Сертификат: {certificate_data.get('subject', 'Неизвестно')}")
         logger.info(f"Действителен: {is_valid}")
-        
-        # Показываем информацию о сертификате
-        ui.notify(f'Подписание с сертификатом: {certificate_data.get("subject", "Неизвестно")}', type='info')
-            # Продолжаем, но предупреждаем пользователя
-        
-        # Получаем РЕАЛЬНЫЙ индекс сертификата в КриптоПро
-        cryptopro_index = certificate_data.get('index', selected_cert.get('js_index', 1))
-        
-        logger.info(f"Используем РЕАЛЬНЫЙ индекс КриптоПро: {cryptopro_index}")
-        logger.info(f"Сертификат: {certificate_data.get('subject', 'Неизвестно')}")
         
         # Показываем информацию о сертификате
         ui.notify(f'Подписание с сертификатом: {certificate_data.get("subject", "Неизвестно")}', type='info')
@@ -2819,7 +2900,7 @@ async def load_document_content_for_signing(document_id: str, content_container:
             </div>
         '''
 
-async def submit_signing_task_completion(task, signed, signature_data, certificate_info, comment, dialog):
+async def submit_signing_task_completion(task, signed, signature_data, certificate_info, comment, completion_form):
     '''Отправляет завершение задачи подписания'''
     try:
         if not signed:
@@ -2863,21 +2944,22 @@ async def submit_signing_task_completion(task, signed, signature_data, certifica
         # Подготавливаем переменные для процесса подписания
         variables = {
             'signed': signed,
-            # 'signatureData': signature_data,  # Не передаем - слишком большой
-            # 'certificateInfo': certificate_info,  # Не передаем - сохранен в Mayan
             'signatureComment': comment or '',
             'signatureDate': datetime.now().isoformat(),
-            'signatureUploaded': True  # Флаг что подпись загружена
+            'signatureUploaded': True
         }
         
         # Завершаем задачу в Camunda
+        camunda_client = await create_camunda_client()
         success = await camunda_client.complete_task_with_variables(task.id, variables)
         
         if success:
             # Очищаем результат подписания после успешного завершения
             api_router.clear_signature_result()
             ui.notify('Документ успешно подписан!', type='success')
-            dialog.close()
+            # Скрываем форму завершения
+            if completion_form:
+                completion_form.set_visibility(False)
             # Обновляем список задач
             await load_active_tasks(_tasks_header_container)
         else:
@@ -2917,9 +2999,9 @@ def handle_file_upload(e):
                 ui.label(f'{file_info["filename"]} ({file_info["mimetype"]})').classes('text-sm')
                 ui.label(f'Размер: {file_info["size"]} байт').classes('text-xs text-gray-600')
 
-async def submit_task_completion(task, status, comment, dialog):
+async def submit_task_completion(task, status, comment, completion_form):
     """Отправляет завершение обычной задачи"""
-    global _uploaded_files
+    global _uploaded_files, _task_cards
     
     try:
         # Подготавливаем переменные для процесса
@@ -2933,7 +3015,7 @@ async def submit_task_completion(task, status, comment, dialog):
         result_files = []
         if _uploaded_files:
             try:
-                mayan_client = await get_mayan_client()  # ДОБАВИТЬ await
+                mayan_client = await get_mayan_client()
                 for file_info in _uploaded_files:
                     mayan_result = mayan_client.upload_document_result(
                         task_id=task.id,
@@ -2957,10 +3039,9 @@ async def submit_task_completion(task, status, comment, dialog):
                 logger.warning(f"Не удалось загрузить файлы в Mayan EDMS: {e}")
                 ui.notify('Файлы не загружены в Mayan EDMS, но задача будет завершена', type='warning')
         
-        # Завершаем задачу в Camunda (упрощенная версия)
+        # Завершаем задачу в Camunda
         camunda_client = await create_camunda_client()
         
-        # ИСПРАВЛЕНИЕ: Добавляем await перед вызовом async функции
         success = await camunda_client.complete_task_with_user_data(
             task_id=task.id,
             status=status,
@@ -2970,7 +3051,9 @@ async def submit_task_completion(task, status, comment, dialog):
         
         if success:
             ui.notify('Задача успешно завершена!', type='success')
-            dialog.close()
+            # Скрываем форму завершения
+            if completion_form:
+                completion_form.set_visibility(False)
             # Обновляем список задач
             await load_active_tasks(_tasks_header_container)
         else:
@@ -3347,7 +3430,7 @@ async def open_document_preview(document_id: str):
 
 def get_user_display_name(username: str) -> str:
     """
-    Получает отформатированное имя пользователя из логина
+    Получает отформатированное имя пользователя из логина (ФИО и должность)
     
     Args:
         username: Логин пользователя
@@ -3355,18 +3438,24 @@ def get_user_display_name(username: str) -> str:
     Returns:
         Строка с именем, фамилией и должностью или логин, если не найдено
     """
-    if not username:
-        return "Не назначен"
-    
     try:
         ldap_auth = LDAPAuthenticator()
         user_info = ldap_auth.get_user_by_login(username)
         
         if user_info:
-            display_parts = [user_info.givenName, user_info.sn]
+            # Формируем строку: "Фамилия Имя - Должность"
+            display_parts = []
+            if user_info.sn:
+                display_parts.append(user_info.sn)
+            if user_info.givenName:
+                display_parts.append(user_info.givenName)
+            
+            display_name = ' '.join(filter(None, display_parts))
+            
             if user_info.destription:
-                return ' '.join(filter(None, display_parts[:2])) + f' - {user_info.destription}'
-            return ' '.join(filter(None, display_parts[:2]))
+                display_name += f' - {user_info.destription}'
+            
+            return display_name if display_name else username
         else:
             return username
     except Exception as e:
@@ -3410,3 +3499,8 @@ async def download_signed_document_from_task(document_id: str, document_name: st
     except Exception as e:
         logger.error(f'Ошибка скачивания документа с подписями: {e}', exc_info=True)
         ui.notify(f'Ошибка: {str(e)}', type='error')
+
+# УДАЛЯЕМ весь блок с @ui.on - этот декоратор не существует в NiceGUI
+# Обработка событий теперь происходит через JavaScript напрямую
+
+# ... existing code ...

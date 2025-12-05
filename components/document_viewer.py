@@ -129,6 +129,12 @@ async def show_document_viewer(document_id: str, document_name: Optional[str] = 
                     next_button = ui.button('Следующая', icon='arrow_forward').classes('bg-blue-500 text-white')
                     close_button = ui.button('Закрыть', icon='close', on_click=dialog.close).classes('bg-gray-500 text-white')
                     
+                    # Добавляем уникальные ID для поиска кнопок
+                    prev_button_id = f'prev_btn_{id(prev_button)}'
+                    next_button_id = f'next_btn_{id(next_button)}'
+                    prev_button.props(f'id={prev_button_id}')
+                    next_button.props(f'id={next_button_id}')
+                    
                     def go_to_previous():
                         if current_page['index'] > 0:
                             current_page['index'] -= 1
@@ -152,6 +158,79 @@ async def show_document_viewer(document_id: str, document_name: Optional[str] = 
                     else:
                         prev_button.set_enabled(False)
                         next_button.set_enabled(False)
+                
+                # Добавляем обработку клавиш-стрелок для навигации
+                # Используем задержку, чтобы диалог успел полностью отрендериться
+                def setup_keyboard_navigation():
+                    dialog_id = id(dialog)
+                    ui.run_javascript(f'''
+                        (function() {{
+                            const handlerId = 'docViewerKeyHandler_{dialog_id}';
+                            const prevBtnId = '{prev_button_id}';
+                            const nextBtnId = '{next_button_id}';
+                            
+                            function handleKeyDown(event) {{
+                                // Проверяем, что диалог открыт - используем несколько способов
+                                let dialog = document.querySelector('.q-dialog--active');
+                                if (!dialog) {{
+                                    // Альтернативный способ поиска диалога
+                                    dialog = document.querySelector('.q-dialog:not([style*="display: none"])');
+                                }}
+                                if (!dialog) return;
+                                
+                                // Игнорируем, если пользователь вводит текст
+                                const activeEl = document.activeElement;
+                                if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {{
+                                    return;
+                                }}
+                                
+                                if (event.key === 'ArrowLeft') {{
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    // Ищем кнопку по ID
+                                    const prevBtn = document.getElementById(prevBtnId);
+                                    if (prevBtn && !prevBtn.disabled && !prevBtn.classList.contains('disabled')) {{
+                                        prevBtn.click();
+                                    }}
+                                }} else if (event.key === 'ArrowRight') {{
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    // Ищем кнопку по ID
+                                    const nextBtn = document.getElementById(nextBtnId);
+                                    if (nextBtn && !nextBtn.disabled && !nextBtn.classList.contains('disabled')) {{
+                                        nextBtn.click();
+                                    }}
+                                }}
+                            }}
+                            
+                            // Добавляем обработчик с небольшой задержкой для гарантии, что DOM готов
+                            setTimeout(function() {{
+                                document.addEventListener('keydown', handleKeyDown, true);
+                                window[handlerId] = handleKeyDown;
+                                console.log('Keyboard handler установлен для диалога', handlerId);
+                            }}, 100);
+                        }})();
+                    ''')
+                
+                # Устанавливаем обработчик после небольшой задержки
+                ui.timer(0.2, setup_keyboard_navigation, once=True)
+                
+                # Сохраняем оригинальный метод закрытия и добавляем очистку обработчика
+                original_close = dialog.close
+                def close_with_cleanup():
+                    dialog_id = id(dialog)
+                    ui.run_javascript(f'''
+                        (function() {{
+                            const handlerId = 'docViewerKeyHandler_{dialog_id}';
+                            if (window[handlerId]) {{
+                                document.removeEventListener('keydown', window[handlerId], true);
+                                delete window[handlerId];
+                                console.log('Keyboard handler удален', handlerId);
+                            }}
+                        }})();
+                    ''')
+                    original_close()
+                dialog.close = close_with_cleanup
                 
                 # Отображаем первую страницу
                 update_page_display()

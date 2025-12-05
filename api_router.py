@@ -341,8 +341,10 @@ async def handle_cryptopro_event(request: Request):
             certificates = event_data.get('certificates', [])
             count = event_data.get('count', 0)
             show_all = event_data.get('show_all', False)
+            task_id = event_data.get('task_id')
+            cert_select_id = event_data.get('cert_select_id')
             
-            logger.info(f"Загружено сертификатов: {count}, show_all: {show_all}")
+            logger.info(f"Загружено сертификатов: {count}, show_all: {show_all}, task_id: {task_id}")
             
             # Получаем текущего пользователя из Request
             user = get_user_from_request(request)
@@ -371,10 +373,9 @@ async def handle_cryptopro_event(request: Request):
                 logger.info("Режим показа всех сертификатов включен")
             else:
                 # НЕ показываем все сертификаты автоматически, даже если ФИО пустое
-                # Пользователь должен сам решить, показывать ли все сертификаты
                 if not user_fio:
                     logger.warning(f"ФИО пользователя пустое (username: {current_username}), показываем пустой список")
-                    filtered_certificates = []  # Показываем пустой список, а не все сертификаты
+                    filtered_certificates = []
                 else:
                     # Фильтруем по ФИО пользователя
                     for cert in certificates:
@@ -404,16 +405,50 @@ async def handle_cryptopro_event(request: Request):
             # Обновляем глобальную переменную с отфильтрованными сертификатами
             _certificates_cache = filtered_certificates
             
+            # ОБНОВЛЯЕМ SELECT ЧЕРЕЗ PYTHON, если есть task_id
+            if task_id:
+                try:
+                    # Импортируем глобальную переменную из task_completion_page
+                    import sys
+                    task_completion_module = sys.modules.get('pages.task_completion_page')
+                    if task_completion_module and hasattr(task_completion_module, '_task_certificates_containers'):
+                        containers = getattr(task_completion_module, '_task_certificates_containers', {}).get(task_id)
+                        if containers:
+                            certificate_select = containers.get('certificate_select')
+                            certificates_container = containers.get('certificates_container')
+                            
+                            if certificate_select:
+                                if options:
+                                    # Обновляем опции select
+                                    certificate_select.options = options
+                                    certificate_select.update()
+                                    logger.info(f"✅ Обновлен select для задачи {task_id} с {len(options)} опциями")
+                                else:
+                                    # Если опций нет, показываем сообщение
+                                    logger.warning(f"Нет опций для обновления select для задачи {task_id}")
+                            else:
+                                logger.warning(f"certificate_select не найден для задачи {task_id}")
+                        else:
+                            logger.warning(f"Контейнеры не найдены для задачи {task_id}")
+                except Exception as e:
+                    logger.error(f"Ошибка обновления select через Python: {e}", exc_info=True)
+            
             # Формируем ответ
             response = {
                 "status": "success", 
-                "action": "update_select",
+                "action": "update_certificates_select",
                 "options": options,
                 "certificates": filtered_certificates,
                 "total_count": count,
                 "filtered_count": len(filtered_certificates),
                 "show_all": show_all
             }
+            
+            # Добавляем task_id и cert_select_id из события, если они есть
+            if task_id:
+                response['task_id'] = task_id
+            if cert_select_id:
+                response['cert_select_id'] = cert_select_id
             
             # Если сертификаты не найдены и не включен режим показа всех, добавляем предупреждение
             if not show_all and not filtered_certificates and certificates:
@@ -426,10 +461,10 @@ async def handle_cryptopro_event(request: Request):
             value = event_data.get('value', '')
             text = event_data.get('text', '')
             certificate = event_data.get('certificate', {})
+            task_id = event_data.get('task_id')
             logger.info(f"Выбран сертификат: {value} -> {text}")
             
             # ИСПРАВЛЕНИЕ: value - это индекс в массиве certificates (0, 1, 2...)
-            # Используем его для доступа к кэшу сертификатов
             array_index = int(value) if value.isdigit() else 0
             
             # Получаем сертификат из кэша по индексу массива
@@ -458,7 +493,7 @@ async def handle_cryptopro_event(request: Request):
                 'value': value,
                 'text': text,
                 'certificate': final_certificate,
-                'js_index': cryptopro_index  # Реальный индекс КриптоПро для подписания
+                'js_index': cryptopro_index
             }
             
             logger.info(f"DEBUG: Обновлен _selected_certificate. Индекс массива: {array_index}, Индекс КриптоПро: {cryptopro_index}")
@@ -618,6 +653,18 @@ async def handle_cryptopro_event(request: Request):
                     "message": "Результат подписания еще не готов"
                 }
             
+        elif event_name == 'crypto_status_update':
+            # Обработка обновления статуса КриптоПро
+            status_html = event_data.get('status_html', '')
+            task_id = event_data.get('task_id')
+            
+            return {
+                "status": "success",
+                "action": "update_status",
+                "status_html": status_html,
+                "task_id": task_id
+            }
+        
         return {"status": "success"}
         
     except Exception as e:

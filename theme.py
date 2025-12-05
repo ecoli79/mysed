@@ -42,6 +42,11 @@ def frame(navigation_title: str):
 
     ui.add_head_html('''
         <!-- КриптоПро ЭЦП Browser Plug-in -->
+        <script type="text/javascript">
+            // Увеличиваем таймаут загрузки плагина до 60 секунд
+            // Это даст время пользователю нажать "Разрешить" в диалоге расширения
+            window.cadesplugin_load_timeout = 60000;
+        </script>
         <script type="text/javascript" src="/static/js/cadesplugin_api.js"></script>
         <script type="text/javascript" src="/static/js/Code.js"></script>
         <script type="text/javascript" src="/static/js/async_code.js"></script>
@@ -57,6 +62,17 @@ def frame(navigation_title: str):
                         console.warn('CryptoProIntegration класс не найден');
                     }
                 }, 1000);
+                
+                // Обработчик сообщений от расширения КриптоПро
+                window.addEventListener('message', function(event) {
+                    if (event.data && typeof event.data === 'string') {
+                        if (event.data.includes('cadesplugin_loaded')) {
+                            console.log('✅ Расширение КриптоПро загружено и готово к работе');
+                        } else if (event.data.includes('cadesplugin_load_error')) {
+                            console.error('❌ Ошибка загрузки расширения КриптоПро');
+                        }
+                    }
+                });
             });
         </script>
     ''')

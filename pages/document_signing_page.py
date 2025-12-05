@@ -268,14 +268,24 @@ def load_certificates(container, task, cert_dialog, parent_dialog):
             try {
                 console.log('Начинаем загрузку сертификатов...');
                 
-                // Проверяем доступность плагина
-                if (!window.cryptoProIntegration.pluginAvailable) {
-                    window.nicegui_handle_event('plugin_not_available', {
-                        message: 'КриптоПро плагин недоступен'
+                // Проверяем наличие cadesplugin
+                if (typeof window.cadesplugin === 'undefined' || !window.cadesplugin) {
+                    window.nicegui_handle_event('certificates_error', {
+                        error: 'КриптоПро плагин не найден. Убедитесь, что скрипт cadesplugin_api.js загружен.'
                     });
                     return;
                 }
                 
+                // Проверяем, что cryptoProIntegration инициализирован
+                if (!window.cryptoProIntegration) {
+                    window.nicegui_handle_event('certificates_error', {
+                        error: 'КриптоПро интеграция не инициализирована. Перезагрузите страницу.'
+                    });
+                    return;
+                }
+                
+                // Пробуем загрузить сертификаты
+                // getAvailableCertificates сама проверит доступность плагина
                 const certificates = await window.cryptoProIntegration.getAvailableCertificates();
                 console.log('Получены сертификаты:', certificates);
                 
@@ -294,7 +304,7 @@ def load_certificates(container, task, cert_dialog, parent_dialog):
             } catch (error) {
                 console.error('Ошибка при загрузке сертификатов:', error);
                 window.nicegui_handle_event('certificates_error', {
-                    error: error.message
+                    error: error.message || String(error)
                 });
             }
         }

@@ -7,94 +7,7 @@ class CryptoProIntegration {
         this.diagnosticInfo = {};
         // this.checkPluginAvailability();
     }
-    
-    // async checkPluginAvailability() {
-    //     // console.log('=== Начинаем диагностику КриптоПро ===');
         
-    //     try {
-    //         // Проверяем наличие объекта cadesplugin
-    //         if (typeof window.cadesplugin === 'undefined') {
-    //             console.log('❌ Объект cadesplugin не найден');
-    //             this.diagnosticInfo.cadesplugin = 'not_found';
-    //             this.showInstallationInstructions();
-    //             return false;
-    //         }
-            
-    //         // console.log('✅ Объект cadesplugin найден');
-    //         this.diagnosticInfo.cadesplugin = 'found';
-            
-    //         // Проверяем поддержку браузера
-    //         const browserInfo = this.checkBrowserSupport();
-    //         console.log('Информация о браузере:', browserInfo);
-    //         this.diagnosticInfo.browser = browserInfo;
-            
-    //         // if (browserInfo.isMobile) {
-    //         //     console.log('❌ Мобильные устройства не поддерживаются');
-    //         //     this.showMobileNotSupported();
-    //         //     return false;
-    //         // }
-            
-    //         // if (!browserInfo.isWindows) {
-    //         //     console.log('❌ Только Windows поддерживается');
-    //         //     this.showOSNotSupported();
-    //         //     return false;
-    //         // }
-            
-    //         // Пробуем загрузить плагин
-    //         try {
-    //             await window.cadesplugin;
-    //             console.log('✅ Плагин загружен успешно');
-    //             this.pluginAvailable = true;
-    //             this.pluginLoaded = true;
-                
-    //             // Дополнительная проверка - пробуем создать объект
-    //             try {
-    //                 await window.cadesplugin.async_spawn(function*() {
-    //                     const oStore = yield window.cadesplugin.CreateObjectAsync("CAdESCOM.Store");
-    //                     yield oStore.Open();
-    //                     const certs = yield oStore.Certificates;
-    //                     const count = yield certs.Count;
-    //                     yield oStore.Close();
-    //                     return count;
-    //                 });
-    //                 console.log('✅ Плагин полностью функционален');
-    //                 return true;
-    //             } catch (testError) {
-    //                 console.log('⚠️ Плагин загружен, но есть проблемы:', testError);
-    //                 this.pluginAvailable = true; // Все равно считаем доступным
-    //                 this.pluginLoaded = true;
-    //                 return true;
-    //             }
-                
-    //         } catch (e) {
-    //             console.log('❌ Ошибка загрузки плагина:', e);
-    //             this.diagnosticInfo.loadError = e.message;
-                
-    //             // Пробуем альтернативный способ
-    //             try {
-    //                 await window.cadesplugin.async_spawn(function*() {
-    //                     const oStore = yield window.cadesplugin.CreateObjectAsync("CAdESCOM.Store");
-    //                     return true;
-    //                 });
-    //                 console.log('✅ Плагин работает через альтернативный способ');
-    //                 this.pluginAvailable = true;
-    //                 this.pluginLoaded = true;
-    //                 return true;
-    //             } catch (altError) {
-    //                 console.log('❌ Альтернативный способ тоже не работает:', altError);
-    //                 this.showInstallationInstructions();
-    //                 return false;
-    //             }
-    //         }
-            
-    //     } catch (e) {
-    //         console.error('❌ Общая ошибка при проверке КриптоПро плагина:', e);
-    //         this.diagnosticInfo.generalError = e.message;
-    //         this.showInstallationInstructions();
-    //         return false;
-    //     }
-    // }
-    
     checkBrowserSupport() {
         const userAgent = navigator.userAgent.toLowerCase();
         const isChrome = userAgent.includes('chrome') && !userAgent.includes('edge');
@@ -147,38 +60,6 @@ class CryptoProIntegration {
         
         let instructions = '';
         
-        // if (browserInfo.isMobile) {
-        //     instructions = `
-        //         <div style="background: #ffebee; border: 1px solid #f44336; padding: 15px; border-radius: 5px; margin: 10px 0;">
-        //             <h4>❌ Мобильные устройства не поддерживаются</h4>
-        //             <p>КриптоПро ЭЦП Browser Plug-in работает только на компьютерах с Windows.</p>
-        //             <p><strong>Для работы с электронной подписью необходимо:</strong></p>
-        //             <ol>
-        //                 <li>Использовать компьютер с операционной системой Windows</li>
-        //                 <li>Установить КриптоПро CSP</li>
-        //                 <li>Установить КриптоПро ЭЦП Browser Plug-in</li>
-        //                 <li>Использовать Internet Explorer или Chrome с расширением</li>
-        //             </ol>
-        //         </div>
-        //     `;
-        // } 
-        
-        // else if (!browserInfo.isWindows) {
-        //     instructions = `
-        //         <div style="background: #ffebee; border: 1px solid #f44336; padding: 15px; border-radius: 5px; margin: 10px 0;">
-        //             <h4>❌ Операционная система не поддерживается</h4>
-        //             <p>КриптоПро ЭЦП Browser Plug-in работает только на Windows.</p>
-        //             <p><strong>Для работы с электронной подписью необходимо:</strong></p>
-        //             <ol>
-        //                 <li>Использовать компьютер с операционной системой Windows</li>
-        //                 <li>Установить КриптоПро CSP</li>
-        //                 <li>Установить КриптоПро ЭЦП Browser Plug-in</li>
-        //                 <li>Использовать Internet Explorer или Chrome с расширением</li>
-        //             </ol>
-        //         </div>
-        //     `;
-        // } 
-        // else {
             instructions = `
                 <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 10px 0;">
                     <h4>КриптоПро плагин не установлен</h4>
@@ -212,29 +93,244 @@ class CryptoProIntegration {
     async getAvailableCertificates() {
         // console.log('=== Начинаем получение сертификатов ===');
         
-        // Принудительно устанавливаем доступность плагина
-        this.pluginAvailable = true;
-        this.pluginLoaded = true;
-        
         try {
+            // Проверяем наличие cadesplugin
+            if (typeof window.cadesplugin === 'undefined') {
+                const errorMsg = 'КриптоПро плагин не найден. Убедитесь, что скрипт cadesplugin_api.js загружен.';
+                console.error(errorMsg);
+                this.pluginAvailable = false;
+                this.pluginLoaded = false;
+                throw new Error(errorMsg);
+            }
+            
+            console.log('=== Диагностика загрузки плагина КриптоПро ===');
+            console.log('1. Проверяем наличие расширения...');
+            
+            // Проверяем наличие нового API расширения
+            const hasNewAPI = typeof window.nmcades_plugin_api !== 'undefined' || 
+                             typeof window.cpcsp_chrome_nmcades !== 'undefined';
+            
+            if (hasNewAPI) {
+                console.log('✅ Обнаружен новый API расширения КриптоПро');
+            } else {
+                console.log('⚠️ Новый API расширения не найден, используем старый метод');
+            }
+            
+            console.log('2. Пробуем получить плагин напрямую...');
+            
+            // В новом расширении плагин может быть уже готов, попробуем использовать его напрямую
+            let cadesplugin;
+            try {
+                // Сначала пробуем получить плагин напрямую (для нового расширения)
+                if (window.cadesplugin) {
+                    if (typeof window.cadesplugin.then === 'function') {
+                        // Это Promise - пробуем разрешить его с таймаутом
+                        console.log('Плагин является Promise, пробуем разрешить...');
+                        const loadTimeout = window.cadesplugin_load_timeout || 60000;
+                        
+                        // ВАЖНО: Promise может разрешиться в undefined, но сам объект cadesplugin уже создан
+                        // Поэтому после разрешения Promise используем сам window.cadesplugin
+                        try {
+                            await Promise.race([
+                                window.cadesplugin,
+                                new Promise((_, reject) => 
+                                    setTimeout(() => reject(new Error('Таймаут ожидания плагина')), loadTimeout)
+                                )
+                            ]);
+                            console.log('✅ Promise разрешен');
+                        } catch (e) {
+                            console.warn('Promise отклонен или таймаут, но пробуем использовать плагин напрямую:', e);
+                        }
+                        
+                        // После разрешения Promise, сам объект cadesplugin уже содержит все методы
+                        // Проверяем, что это не Promise, а объект с методами
+                        if (window.cadesplugin && typeof window.cadesplugin.then === 'function') {
+                            // Если все еще Promise, значит плагин еще не загружен
+                            // Но в новом расширении объект может быть уже готов
+                            // Проверяем наличие методов напрямую
+                            const tempPlugin = window.cadesplugin;
+                            // Пробуем получить доступ к методам через сам Promise объект
+                            // В новом расширении методы могут быть доступны напрямую
+                            if (typeof tempPlugin.CreateObjectAsync !== 'undefined' || 
+                                typeof tempPlugin.async_spawn !== 'undefined') {
+                                cadesplugin = tempPlugin;
+                                console.log('✅ Используем плагин напрямую из Promise объекта');
+                            } else {
+                                // Ждем еще немного и проверяем снова
+                                await new Promise(resolve => setTimeout(resolve, 1000));
+                                // После ожидания, объект должен быть готов
+                                if (window.cadesplugin && typeof window.cadesplugin.CreateObjectAsync !== 'undefined') {
+                                    cadesplugin = window.cadesplugin;
+                                } else {
+                                    throw new Error('Плагин не загружен после разрешения Promise');
+                                }
+                            }
+                        } else if (window.cadesplugin) {
+                            // Promise разрешился, и теперь это объект
+                            cadesplugin = window.cadesplugin;
+                            console.log('✅ Плагин получен после разрешения Promise');
+                        } else {
+                            throw new Error('Плагин не найден после разрешения Promise');
+                        }
+                    } else {
+                        // Это уже готовый объект
+                        console.log('✅ Плагин уже готов (не Promise)');
+                        cadesplugin = window.cadesplugin;
+                    }
+                } else {
+                    throw new Error('Плагин не найден');
+                }
+            } catch (pluginError) {
+                // Если прямой доступ не сработал, пробуем через события (для совместимости со старым расширением)
+                console.log('Прямой доступ не сработал, пробуем через события...');
+                console.error('Ошибка:', pluginError);
+                
+                const pluginReady = new Promise((resolve, reject) => {
+                    let resolved = false;
+                    const loadTimeout = window.cadesplugin_load_timeout || 60000;
+                    
+                    console.log(`Ожидаем события от расширения (таймаут: ${loadTimeout} мс)...`);
+                    
+                    const timeoutId = setTimeout(() => {
+                        if (!resolved) {
+                            resolved = true;
+                            window.removeEventListener('message', messageHandler);
+                            console.error('❌ Таймаут ожидания события от расширения');
+                            // Перед отклонением, пробуем использовать плагин напрямую
+                            if (window.cadesplugin && typeof window.cadesplugin.CreateObjectAsync !== 'undefined') {
+                                resolve(window.cadesplugin);
+                            } else {
+                                reject(new Error('Истекло время ожидания загрузки плагина'));
+                            }
+                        }
+                    }, loadTimeout);
+                    
+                    const messageHandler = (event) => {
+                        if (resolved) return;
+                        
+                        // Фильтруем сообщения от других расширений
+                        if (typeof event.data !== 'string') {
+                            return;
+                        }
+                        
+                        if (event.data === 'cadesplugin_loaded' || 
+                            event.data.includes('cadesplugin_loaded')) {
+                            console.log('✅ Получено событие cadesplugin_loaded от расширения');
+                            resolved = true;
+                            clearTimeout(timeoutId);
+                            window.removeEventListener('message', messageHandler);
+                            
+                            // После события, используем плагин напрямую
+                            if (window.cadesplugin) {
+                                if (typeof window.cadesplugin.then === 'function') {
+                                    // Если все еще Promise, пробуем разрешить
+                                    window.cadesplugin.then(plugin => {
+                                        // Promise может вернуть undefined, используем window.cadesplugin
+                                        resolve(plugin || window.cadesplugin);
+                                    }).catch(err => {
+                                        // Даже при ошибке, пробуем использовать window.cadesplugin
+                                        if (window.cadesplugin && typeof window.cadesplugin.CreateObjectAsync !== 'undefined') {
+                                            resolve(window.cadesplugin);
+                                        } else {
+                                            reject(err);
+                                        }
+                                    });
+                                } else {
+                                    resolve(window.cadesplugin);
+                                }
+                            } else {
+                                reject(new Error('Плагин не найден после получения события загрузки'));
+                            }
+                        } else if (event.data === 'cadesplugin_load_error' || 
+                                   event.data.includes('cadesplugin_load_error')) {
+                            console.error('❌ Получено событие cadesplugin_load_error от расширения');
+                            resolved = true;
+                            clearTimeout(timeoutId);
+                            window.removeEventListener('message', messageHandler);
+                            reject(new Error('Расширение КриптоПро сообщило об ошибке загрузки'));
+                        }
+                    };
+                    
+                    window.addEventListener('message', messageHandler);
+                    
+                    // Также пробуем получить плагин напрямую
+                    if (window.cadesplugin) {
+                        if (typeof window.cadesplugin.then === 'function') {
+                            window.cadesplugin.then(plugin => {
+                                if (!resolved) {
+                                    console.log('✅ Плагин загружен через Promise');
+                                    resolved = true;
+                                    clearTimeout(timeoutId);
+                                    window.removeEventListener('message', messageHandler);
+                                    // Используем plugin если он определен, иначе window.cadesplugin
+                                    resolve(plugin || window.cadesplugin);
+                                }
+                            }).catch(err => {
+                                // Игнорируем, ждем события
+                            });
+                        } else {
+                            if (!resolved && typeof window.cadesplugin.CreateObjectAsync !== 'undefined') {
+                                console.log('✅ Плагин уже загружен');
+                                resolved = true;
+                                clearTimeout(timeoutId);
+                                window.removeEventListener('message', messageHandler);
+                                resolve(window.cadesplugin);
+                            }
+                        }
+                    }
+                });
+                
+                cadesplugin = await pluginReady;
+            }
+            
+            console.log('✅ Плагин КриптоПро успешно загружен');
+            console.log('Тип cadesplugin:', typeof cadesplugin);
+            console.log('cadesplugin:', cadesplugin);
+            
+            // ВАЖНО: Проверяем, что cadesplugin не undefined
+            if (!cadesplugin || cadesplugin === undefined) {
+                console.error('❌ cadesplugin is undefined, используем window.cadesplugin напрямую');
+                // Если Promise разрешился в undefined, используем сам объект window.cadesplugin
+                // который уже содержит все методы
+                if (window.cadesplugin && typeof window.cadesplugin.CreateObjectAsync !== 'undefined') {
+                    cadesplugin = window.cadesplugin;
+                    console.log('✅ Используем window.cadesplugin напрямую');
+                } else {
+                    throw new Error('Плагин не загружен: cadesplugin is undefined');
+                }
+            }
+            
+            // Проверяем наличие метода CreateObjectAsync
+            if (typeof cadesplugin.CreateObjectAsync === 'undefined') {
+                const errorMsg = 'КриптоПро плагин не поддерживает асинхронное создание объектов. Возможно, требуется обновление плагина.';
+                console.error(errorMsg);
+                console.error('Доступные свойства cadesplugin:', Object.keys(cadesplugin));
+                this.pluginAvailable = false;
+                throw new Error(errorMsg);
+            }
+            
+            // Устанавливаем доступность плагина
+            this.pluginAvailable = true;
+            this.pluginLoaded = true;
+            
             console.log('Плагин доступен, начинаем получение сертификатов...');
             
             // Используем async_spawn для совместимости
             return new Promise((resolve, reject) => {
-                window.cadesplugin.async_spawn(function*() {
+                cadesplugin.async_spawn(function*() {
                     try {
                         console.log('Создаем объект Store...');
-                        const oStore = yield window.cadesplugin.CreateObjectAsync("CAdESCOM.Store");
-                        // console.log('✅ Объект Store создан');
+                        const oStore = yield cadesplugin.CreateObjectAsync("CAdESCOM.Store");
+                        console.log('✅ Объект Store создан');
                         
                         console.log('Открываем хранилище сертификатов...');
                         yield oStore.Open();
-                        // console.log('✅ Хранилище открыто');
+                        console.log('✅ Хранилище открыто');
                         
                         console.log('Получаем список сертификатов...');
                         const certs = yield oStore.Certificates;
                         const certCnt = yield certs.Count;
-                        // console.log(`✅ Найдено сертификатов: ${certCnt}`);
+                        console.log(`✅ Найдено сертификатов: ${certCnt}`);
                         
                         const certList = [];
                         window.global_selectbox_container = []; // Глобальный контейнер
@@ -289,6 +385,15 @@ class CryptoProIntegration {
                         
                     } catch (e) {
                         console.error('Ошибка при получении сертификатов:', e);
+                        
+                        // Если ошибка связана с разрешениями, даем более понятное сообщение
+                        const errorMessage = e.message || String(e);
+                        if (errorMessage.includes('permission') || errorMessage.includes('разрешение') || 
+                            errorMessage.includes('доступ') || errorMessage.includes('access') ||
+                            errorMessage.includes('denied') || errorMessage.includes('отказано')) {
+                            throw new Error('Не получено разрешение на доступ к хранилищу сертификатов. Убедитесь, что вы нажали "Разрешить" в диалоге расширения КриптоПро.');
+                        }
+                        
                         throw e;
                     }
                 }).then(resolve).catch(reject);
@@ -296,95 +401,8 @@ class CryptoProIntegration {
             
         } catch (e) {
             console.error('Ошибка при получении сертификатов:', e);
-            throw e;
-        }
-    }
-    
-    async signFile(fileContent, certificateIndex = 0) {
-        if (!this.pluginAvailable) {
-            throw new Error('КриптоПро плагин недоступен');
-        }
-        
-        try {
-            console.log('Начинаем подписание файла...');
-            
-            // Конвертируем содержимое файла в base64 если это еще не сделано
-            let dataToSign;
-            if (typeof fileContent === 'string') {
-                dataToSign = fileContent;
-            } else {
-                dataToSign = btoa(String.fromCharCode(...new Uint8Array(fileContent)));
-            }
-            
-            return await this.signData(dataToSign, certificateIndex);
-            
-        } catch (e) {
-            console.error('Ошибка при подписании файла:', e);
-            throw e;
-        }
-    }
-
-    // Используем готовую функцию подписания из async_code.js
-    async signData(data, certificateIndex = 0) {
-        if (!this.pluginAvailable) {
-            throw new Error('КриптоПро плагин недоступен');
-        }
-        
-        try {
-            console.log('Начинаем подписание данных...');
-            
-            return new Promise((resolve, reject) => {
-                cadesplugin.async_spawn(function*(args) {
-                    try {
-                        const [dataToSign, certIndex] = args;
-                        
-                        // Получаем сертификат из глобального контейнера
-                        if (!window.global_selectbox_container || window.global_selectbox_container.length === 0) {
-                            throw new Error('Сертификаты не загружены');
-                        }
-                        
-                        const certificate = window.global_selectbox_container[certIndex];
-                        if (!certificate) {
-                            throw new Error('Сертификат не найден');
-                        }
-                        
-                        console.log('Создаем объект подписи...');
-                        const oSigner = yield cadesplugin.CreateObjectAsync("CAdESCOM.CPSigner");
-                        yield oSigner.propset_Certificate(certificate);
-                        
-                        console.log('Создаем объект для подписи данных...');
-                        const oSignedData = yield cadesplugin.CreateObjectAsync("CAdESCOM.CadesSignedData");
-                        yield oSignedData.propset_ContentEncoding(cadesplugin.CADESCOM_BASE64_TO_BINARY);
-                        yield oSignedData.propset_Content(dataToSign);
-                        
-                        console.log('Выполняем подпись...');
-                        const signature = yield oSignedData.SignCades(oSigner, cadesplugin.CADESCOM_CADES_BES, false);
-                        
-                        // Получаем информацию о сертификате
-                        const certificateInfo = {
-                            subject: yield certificate.SubjectName,
-                            issuer: yield certificate.IssuerName,
-                            serialNumber: yield certificate.SerialNumber,
-                            validFrom: yield certificate.ValidFromDate,
-                            validTo: yield certificate.ValidToDate
-                        };
-                        
-                        console.log('Подписание завершено успешно');
-                        return {
-                            signature: signature,
-                            certificateInfo: certificateInfo
-                        };
-                        
-                    } catch (e) {
-                        const errorMessage = "Не удалось создать подпись из-за ошибки: " + cadesplugin.getLastError(e);
-                        console.error('Ошибка при подписании данных:', errorMessage);
-                        throw new Error(errorMessage);
-                    }
-                }, [data, certificateIndex]).then(resolve).catch(reject);
-            });
-            
-        } catch (e) {
-            console.error('Ошибка при подписании данных:', e);
+            this.pluginAvailable = false;
+            this.pluginLoaded = false;
             throw e;
         }
     }
@@ -416,539 +434,235 @@ window.nicegui_handle_event = async function(event_name, event_data) {
         console.log('Событие отправлено успешно:', result);
         
         // Обрабатываем ответ от API
-        if (result.action === 'update_select' && result.options) {
-            console.log('Создаем select в области сертификатов...');
+        if (result.action === 'update_certificates_select' && result.options) {
+            console.log('Создаем карточки сертификатов...');
+            console.log('result:', result);
             
-            // Ищем область для сертификатов СНАЧАЛА
-            const certArea = document.getElementById('certificates-area');
+            const taskId = result.task_id || '';
+            const options = result.options || {};
+            const certificates = result.certificates || [];
             
-            // ВАЖНО: Удаляем существующий список сертификатов ПЕРЕД созданием нового
-            // Это нужно делать всегда, независимо от режима показа
-            if (certArea) {
-                const existingList = certArea.querySelector('.certificates-list');
-                if (existingList) {
-                    console.log('Удаляем существующий список сертификатов перед созданием нового');
-                    existingList.remove();
-                }
-            }
+            console.log('task_id:', taskId);
+            console.log('Сертификатов для отображения:', certificates.length);
             
-            // Проверяем наличие предупреждения о том, что сертификат не найден
-            // Показываем предупреждение только если НЕ включен режим показа всех
-            if (!result.show_all && (result.warning || (result.filtered_count === 0 && result.total_count > 0))) {
-                // Показываем предупреждение
-                const warningDiv = document.createElement('div');
-                warningDiv.style.padding = '15px';
-                warningDiv.style.marginBottom = '15px';
-                warningDiv.style.backgroundColor = '#fff3cd';
-                warningDiv.style.border = '2px solid #ffc107';
-                warningDiv.style.borderRadius = '8px';
-                warningDiv.style.color = '#856404';
-                
-                const warningTitle = document.createElement('div');
-                warningTitle.style.fontWeight = 'bold';
-                warningTitle.style.fontSize = '14px';
-                warningTitle.style.marginBottom = '8px';
-                warningTitle.textContent = '⚠️ Сертификат пользователя не найден';
-                warningDiv.appendChild(warningTitle);
-                
-                const warningMessage = document.createElement('div');
-                warningMessage.style.fontSize = '13px';
-                warningMessage.style.marginBottom = '10px';
-                if (result.message) {
-                    warningMessage.textContent = result.message;
-                } else {
-                    warningMessage.textContent = `Не найдено сертификатов, соответствующих вашему ФИО. Всего доступно сертификатов: ${result.total_count || 0}.`;
-                }
-                warningDiv.appendChild(warningMessage);
-                
-                // Добавляем кнопку для показа всех сертификатов
-                const showAllButton = document.createElement('button');
-                showAllButton.textContent = 'Показать все сертификаты';
-                showAllButton.style.padding = '8px 16px';
-                showAllButton.style.backgroundColor = '#007bff';
-                showAllButton.style.color = 'white';
-                showAllButton.style.border = 'none';
-                showAllButton.style.borderRadius = '4px';
-                showAllButton.style.cursor = 'pointer';
-                showAllButton.style.fontSize = '13px';
-                showAllButton.style.fontWeight = '500';
-                showAllButton.style.transition = 'background-color 0.2s';
-                
-                showAllButton.addEventListener('mouseenter', function() {
-                    this.style.backgroundColor = '#0056b3';
-                });
-                
-                showAllButton.addEventListener('mouseleave', function() {
-                    this.style.backgroundColor = '#007bff';
-                });
-                
-                showAllButton.addEventListener('click', function() {
-                    // Перезагружаем сертификаты с параметром show_all=true
-                    console.log('Перезагружаем сертификаты с show_all=true');
+            // Показываем контейнер сертификатов
+            if (taskId) {
+                const certContainer = document.querySelector(`[data-task-id="${taskId}"][data-cert-container]`);
+                if (certContainer) {
+                    // Очищаем контейнер от старого select
+                    certContainer.innerHTML = '';
                     
-                    // Отправляем событие для перезагрузки с show_all
-                    if (window.cryptoProIntegration) {
-                        window.cryptoProIntegration.getAvailableCertificates()
-                            .then(certificates => {
-                                console.log('Сертификаты получены для показа всех:', certificates);
-                                
-                                // Отправляем событие с show_all=true
-                                window.nicegui_handle_event('certificates_loaded', {
-                                    certificates: certificates,
-                                    count: certificates.length,
-                                    show_all: true
-                                });
-                            })
-                            .catch(error => {
-                                console.error('Ошибка получения сертификатов:', error);
-                                window.nicegui_handle_event('certificates_error', {
-                                    error: error.message
-                                });
-                            });
-                    }
-                });
-                
-                warningDiv.appendChild(showAllButton);
-                
-                // Ищем область для сертификатов и добавляем предупреждение
-                if (certArea) {
-                    // Очищаем предыдущие предупреждения
-                    const existingWarning = certArea.querySelector('[data-warning="cert-not-found"]');
-                    if (existingWarning) {
-                        existingWarning.remove();
-                    }
+                    // Показываем контейнер
+                    certContainer.style.display = '';
+                    certContainer.style.visibility = 'visible';
+                    certContainer.removeAttribute('hidden');
+                    certContainer.style.opacity = '1';
                     
-                    warningDiv.setAttribute('data-warning', 'cert-not-found');
-                    certArea.insertBefore(warningDiv, certArea.firstChild);
-                }
-            } else if (result.show_all) {
-                // Если включен режим показа всех, удаляем предупреждение, если оно есть
-                if (certArea) {
-                    const existingWarning = certArea.querySelector('[data-warning="cert-not-found"]');
-                    if (existingWarning) {
-                        console.log('Удаляем предупреждение, так как включен режим показа всех сертификатов');
-                        existingWarning.remove();
-                    }
-                }
-            }
-            
-            // Теперь обрабатываем создание списка сертификатов
-            if (!certArea) {
-                console.log('Область сертификатов не найдена, создаем фиксированный контейнер');
-                
-                // Создаем фиксированный контейнер
-                const container = document.createElement('div');
-                container.id = 'certificates-container';
-                container.style.position = 'fixed';
-                container.style.top = '20px';
-                container.style.right = '20px';
-                container.style.width = '500px';
-                container.style.maxWidth = '90vw';
-                container.style.backgroundColor = 'white';
-                container.style.border = '3px solid #4CAF50';
-                container.style.borderRadius = '8px';
-                container.style.padding = '20px';
-                container.style.zIndex = '99999';
-                container.style.boxShadow = '0 8px 16px rgba(0, 0, 0, 0.2)';
-                container.style.fontFamily = 'Arial, sans-serif';
-                
-                // Заголовок
-                const title = document.createElement('div');
-                title.textContent = 'Выберите сертификат для подписания:';
-                title.style.fontWeight = 'bold';
-                title.style.fontSize = '16px';
-                title.style.marginBottom = '10px';
-                title.style.color = '#4CAF50';
-                title.style.borderBottom = '2px solid #4CAF50';
-                title.style.paddingBottom = '8px';
-                
-                // Select элемент
-                const tempSelect = document.createElement('select');
-                tempSelect.id = 'temp-certificates-select';
-                tempSelect.style.width = '100%';
-                tempSelect.style.padding = '12px';
-                tempSelect.style.margin = '10px 0';
-                tempSelect.style.border = '2px solid #ddd';
-                tempSelect.style.borderRadius = '6px';
-                tempSelect.style.backgroundColor = 'white';
-                tempSelect.style.fontSize = '14px';
-                tempSelect.style.cursor = 'pointer';
-                
-                // Кнопка закрытия
-                const closeButton = document.createElement('button');
-                closeButton.textContent = '✕';
-                closeButton.style.position = 'absolute';
-                closeButton.style.top = '8px';
-                closeButton.style.right = '8px';
-                closeButton.style.border = 'none';
-                closeButton.style.background = 'transparent';
-                closeButton.style.fontSize = '18px';
-                closeButton.style.cursor = 'pointer';
-                closeButton.style.color = '#666';
-                closeButton.style.width = '30px';
-                closeButton.style.height = '30px';
-                closeButton.style.borderRadius = '50%';
-                closeButton.style.display = 'flex';
-                closeButton.style.alignItems = 'center';
-                closeButton.style.justifyContent = 'center';
-                closeButton.onmouseover = function() {
-                    this.style.backgroundColor = '#f0f0f0';
-                };
-                closeButton.onmouseout = function() {
-                    this.style.backgroundColor = 'transparent';
-                };
-                closeButton.onclick = function() {
-                    container.remove();
-                };
-                
-                // Добавляем элементы в контейнер
-                container.appendChild(closeButton);
-                container.appendChild(title);
-                container.appendChild(tempSelect);
-                
-                // Добавляем контейнер в body
-                document.body.appendChild(container);
-                
-                // Заполняем select
-                fillSelectWithCertificates(tempSelect, result.options);
-                
-            } else {
-                // Создаем список карточек сертификатов вместо select
-                // (существующий список уже удален выше)
-                
-                const certificatesList = document.createElement('div');
-                certificatesList.className = 'certificates-list';
-                certificatesList.style.width = '100%';
-                certificatesList.style.margin = '12px 0';
-                
-                // Заголовок с информацией о фильтрации
-                const title = document.createElement('div');
-                if (result.show_all) {
-                    title.textContent = `Доступные сертификаты (показаны все: ${result.filtered_count || result.certificates?.length || 0})`;
-                    title.style.color = '#6b7280';
-                } else {
-                    title.textContent = `Доступные сертификаты (отфильтровано: ${result.filtered_count || result.certificates?.length || 0} из ${result.total_count || 0})`;
+                    // Заголовок
+                    const title = document.createElement('div');
+                    title.style.fontWeight = '600';
+                    title.style.fontSize = '16px';
+                    title.style.marginBottom = '4px';  // Уменьшено с 16px до 4px
                     title.style.color = '#374151';
-                }
-                title.style.fontWeight = '600';
-                title.style.fontSize = '14px';
-                title.style.marginBottom = '12px';
-                title.style.fontFamily = 'system-ui, -apple-system, sans-serif';
-                
-                // Если показаны все сертификаты, добавляем кнопку для возврата к фильтрованному списку
-                if (result.show_all && result.total_count > result.filtered_count) {
-                    const backToFilteredButton = document.createElement('button');
-                    backToFilteredButton.textContent = 'Показать только мои сертификаты';
-                    backToFilteredButton.style.padding = '6px 12px';
-                    backToFilteredButton.style.marginLeft = '10px';
-                    backToFilteredButton.style.backgroundColor = '#6c757d';
-                    backToFilteredButton.style.color = 'white';
-                    backToFilteredButton.style.border = 'none';
-                    backToFilteredButton.style.borderRadius = '4px';
-                    backToFilteredButton.style.cursor = 'pointer';
-                    backToFilteredButton.style.fontSize = '12px';
-                    backToFilteredButton.style.fontWeight = '500';
                     
-                    backToFilteredButton.addEventListener('click', function() {
-                        // Перезагружаем сертификаты без show_all
-                        if (window.cryptoProIntegration) {
-                            window.cryptoProIntegration.getAvailableCertificates()
-                                .then(certificates => {
-                                    window.nicegui_handle_event('certificates_loaded', {
-                                        certificates: certificates,
-                                        count: certificates.length,
-                                        show_all: false
-                                    });
-                                })
-                                .catch(error => {
-                                    console.error('Ошибка получения сертификатов:', error);
-                                    window.nicegui_handle_event('certificates_error', {
-                                        error: error.message
-                                    });
-                                });
-                        }
-                    });
-                    
-                    title.appendChild(backToFilteredButton);
-                }
-                
-                // Поле поиска
-                const searchContainer = document.createElement('div');
-                searchContainer.style.marginBottom = '12px';
-                searchContainer.style.position = 'relative';
-                
-                const searchInput = document.createElement('input');
-                searchInput.type = 'text';
-                searchInput.placeholder = 'Поиск по имени...';
-                searchInput.style.width = '100%';
-                searchInput.style.padding = '10px 40px 10px 16px';
-                searchInput.style.border = '2px solid #e5e7eb';
-                searchInput.style.borderRadius = '8px';
-                searchInput.style.fontSize = '14px';
-                searchInput.style.fontFamily = 'system-ui, -apple-system, sans-serif';
-                searchInput.style.outline = 'none';
-                searchInput.style.transition = 'border-color 0.2s ease';
-                
-                // Иконка поиска
-                const searchIcon = document.createElement('div');
-                searchIcon.innerHTML = '🔍';
-                searchIcon.style.position = 'absolute';
-                searchIcon.style.right = '12px';
-                searchIcon.style.top = '50%';
-                searchIcon.style.transform = 'translateY(-50%)';
-                searchIcon.style.pointerEvents = 'none';
-                searchIcon.style.fontSize = '16px';
-                
-                searchInput.addEventListener('focus', function() {
-                    this.style.borderColor = '#3b82f6';
-                });
-                
-                searchInput.addEventListener('blur', function() {
-                    this.style.borderColor = '#e5e7eb';
-                });
-                
-                searchContainer.appendChild(searchInput);
-                searchContainer.appendChild(searchIcon);
-                
-                // Контейнер для карточек
-                const cardsContainer = document.createElement('div');
-                cardsContainer.style.display = 'flex';
-                cardsContainer.style.flexDirection = 'column';
-                cardsContainer.style.gap = '10px';
-                cardsContainer.style.maxHeight = '400px';
-                cardsContainer.style.overflowY = 'auto';
-                cardsContainer.style.paddingRight = '4px';
-                
-                // Стили для скроллбара
-                cardsContainer.style.scrollbarWidth = 'thin';
-                cardsContainer.style.scrollbarColor = '#cbd5e1 #f1f5f9';
-                
-                // Получаем полные данные сертификатов
-                const certificates = result.certificates || [];
-                
-                // Функция для извлечения CN из строки
-                const extractCN = (str) => {
-                    if (!str) return '';
-                    const cnMatch = str.match(/CN=([^,]+)/);
-                    if (cnMatch) {
-                        return cnMatch[1].replace(/^["']|["']$/g, '').trim();
-                    }
-                    return '';
-                };
-
-                // Фильтруем истекшие сертификаты и сортируем по дате выпуска
-                const now = new Date();
-                const validCertificates = certificates
-                    .map((cert, originalIndex) => ({
-                        ...cert,
-                        originalIndex: originalIndex  // Сохраняем оригинальный индекс в массиве
-                    }))
-                    .filter(cert => {
+                    // Фильтруем действительные сертификаты для подсчета
+                    const now = new Date();  // Объявляем один раз
+                    const validCount = certificates.filter(cert => {
                         if (!cert.validTo) return false;
                         const validToDate = new Date(cert.validTo);
                         if (isNaN(validToDate.getTime())) return false;
                         return validToDate > now && cert.isValid !== false;
-                    })
-                    .sort((a, b) => {
-                        // Сортируем по дате выпуска (validFrom) - сначала более новые
-                        const dateA = new Date(a.validFrom);
-                        const dateB = new Date(b.validFrom);
-                        return dateB - dateA; // Более новые первыми
-                    });
-                
-                // Функция для создания карточек
-                const createCertificateCards = (certsToShow) => {
-                    // Очищаем контейнер
-                    cardsContainer.innerHTML = '';
+                    }).length;
                     
-                    if (certsToShow.length === 0) {
+                    // if (result.show_all) {
+                    //     title.textContent = `Доступные сертификаты (действительных: ${validCount} из ${certificates.length})`;
+                    // } else {
+                    //     title.textContent = `Доступные сертификаты (действительных: ${validCount} из ${result.total_count || certificates.length})`;
+                    // }
+
+                    if (result.show_all) {
+                        title.textContent = `Доступные сертификаты (${validCount})`;
+                    } else {
+                        title.textContent = `Доступные сертификаты (${validCount})`;
+                    }
+                    certContainer.appendChild(title);
+
+                    // Контейнер для карточек - создаем ДО фильтрации
+                    const cardsContainer = document.createElement('div');
+                    cardsContainer.className = 'certificates-cards-container';
+                    cardsContainer.style.display = 'flex';
+                    cardsContainer.style.flexDirection = 'column';
+                    cardsContainer.style.gap = '4px';
+                    cardsContainer.style.maxHeight = '400px';
+                    cardsContainer.style.overflowY = 'auto';
+                    cardsContainer.style.paddingRight = '4px';
+                    
+                    // Стили для скроллбара
+                    cardsContainer.style.scrollbarWidth = 'thin';
+                    cardsContainer.style.scrollbarColor = '#cbd5e1 #f1f5f9';
+
+                    // Создаем карточки для каждого сертификата
+                    // Используем уже объявленную переменную now (строка 469)
+                    const validCertificates = certificates.filter(cert => {
+                        if (!cert.validTo) return false;
+                        const validToDate = new Date(cert.validTo);
+                        if (isNaN(validToDate.getTime())) return false;
+                        return validToDate > now && cert.isValid !== false;
+                    });
+                    
+                    if (validCertificates.length === 0) {
+                        // Показываем сообщение, если нет действительных сертификатов
                         const emptyMessage = document.createElement('div');
+                        emptyMessage.className = 'certificates-empty-message';
                         emptyMessage.style.padding = '20px';
                         emptyMessage.style.textAlign = 'center';
                         emptyMessage.style.color = '#9ca3af';
                         emptyMessage.style.fontSize = '14px';
-                        emptyMessage.textContent = 'Сертификаты не найдены';
-                        cardsContainer.appendChild(emptyMessage);
+                        emptyMessage.textContent = 'Сертификаты привязанные к пользователю не найдены';
+                        certContainer.appendChild(emptyMessage);
+                        ///console.log('Действительные сертификаты не найдены');
                         return;
                     }
                     
-                    certsToShow.forEach((cert, displayIndex) => {
-                        const validToDate = new Date(cert.validTo);
-                        const validFromDate = new Date(cert.validFrom);
+                    validCertificates.forEach((cert, index) => {
+                        // Функция для извлечения CN из строки
+                        const extractCN = (str) => {
+                            if (!str) return 'Неизвестно';
+                            const cnMatch = str.match(/CN=([^,]+)/i);
+                            if (cnMatch) {
+                                return cnMatch[1].replace(/^["']|["']$/g, '').trim();
+                            }
+                            return str; // Если CN не найден, возвращаем всю строку
+                        };
                         
                         const card = document.createElement('div');
                         card.className = 'certificate-card';
-                        // Используем оригинальный индекс из исходного массива
-                        card.dataset.index = cert.originalIndex;
-                        card.dataset.value = cert.originalIndex.toString();
-                        
-                        // Базовые стили карточки
-                        card.style.padding = '16px';
-                        card.style.border = '2px solid #e5e7eb';
-                        card.style.borderRadius = '8px';
+                        card.style.padding = '4px 6px';
+                        card.style.border = '1px solid #e5e7eb';
+                        card.style.borderRadius = '4px';
                         card.style.backgroundColor = '#ffffff';
                         card.style.cursor = 'pointer';
-                        card.style.transition = 'all 0.2s ease-in-out';
+                        card.style.transition = 'all 0.2s ease';
                         card.style.position = 'relative';
-                        card.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
+                        card.style.maxWidth = '350px';  // Ограничиваем ширину карточки
                         
-                        // Форматируем даты
-                        const formatDate = (date) => {
-                            return date.toLocaleDateString('ru-RU', {
-                                day: '2-digit',
-                                month: '2-digit',
-                                year: 'numeric'
+                        // Эффект при наведении
+                        card.addEventListener('mouseenter', function() {
+                            this.style.borderColor = '#3b82f6';
+                            this.style.boxShadow = '0 1px 2px -1px rgba(0, 0, 0, 0.1)';
+                            this.style.transform = 'translateY(-1px)';
+                        });
+                        
+                        card.addEventListener('mouseleave', function() {
+                            this.style.borderColor = '#e5e7eb';
+                            this.style.boxShadow = 'none';
+                            this.style.transform = 'translateY(0)';
+                        });
+                        
+                        // Обработчик клика
+                        card.addEventListener('click', function() {
+                            // Убираем выделение с других карточек
+                            cardsContainer.querySelectorAll('.certificate-card').forEach(c => {
+                                c.style.borderColor = '#e5e7eb';
+                                c.style.backgroundColor = '#ffffff';
                             });
-                        };
+                            
+                            // Выделяем выбранную карточку синей рамкой
+                            this.style.borderColor = '#3b82f6';
+                            this.style.borderWidth = '2px';
+                            this.style.backgroundColor = '#eff6ff';
+                            
+                            // Находим оригинальный индекс в массиве certificates
+                            const originalIndex = certificates.findIndex(c => 
+                                c.subject === cert.subject && 
+                                c.serialNumber === cert.serialNumber
+                            );
+                            
+                            // Отправляем событие о выборе сертификата с оригинальным индексом
+                            window.nicegui_handle_event('certificate_selected', {
+                                value: String(originalIndex >= 0 ? originalIndex : index),
+                                text: extractCN(cert.subject),
+                                certificate: cert,
+                                task_id: taskId
+                            });
+                            
+                            console.log('Выбран сертификат:', extractCN(cert.subject));
+                        });
                         
-                        const validToStr = formatDate(validToDate);
-                        const validFromStr = formatDate(validFromDate);
-                        
-                        // Иконка статуса (всегда зеленая, так как показываем только действительные)
-                        const statusIcon = document.createElement('div');
-                        statusIcon.style.position = 'absolute';
-                        statusIcon.style.top = '12px';
-                        statusIcon.style.right = '12px';
-                        statusIcon.style.width = '24px';
-                        statusIcon.style.height = '24px';
-                        statusIcon.style.borderRadius = '50%';
-                        statusIcon.style.display = 'flex';
-                        statusIcon.style.alignItems = 'center';
-                        statusIcon.style.justifyContent = 'center';
-                        statusIcon.style.fontSize = '14px';
-                        statusIcon.innerHTML = '✓';
-                        statusIcon.style.backgroundColor = '#d1fae5';
-                        statusIcon.style.color = '#059669';
-                        
-                        // CN владельца сертификата
-                        const ownerCN = extractCN(cert.subject);
-                        const nameDiv = document.createElement('div');
-                        nameDiv.style.fontWeight = '600';
-                        nameDiv.style.fontSize = '15px';
-                        nameDiv.style.color = '#1f2937';
-                        nameDiv.style.marginBottom = '8px';
-                        nameDiv.style.paddingRight = '30px';
-                        nameDiv.style.lineHeight = '1.4';
-                        nameDiv.style.wordWrap = 'break-word';
-                        nameDiv.textContent = ownerCN;
-                        
-                        // Срок действия
-                        const validityDiv = document.createElement('div');
-                        validityDiv.style.fontSize = '13px';
-                        validityDiv.style.color = '#6b7280';
-                        validityDiv.style.marginBottom = '4px';
-                        
-                        const validityLabel = document.createElement('span');
-                        validityLabel.textContent = 'Действителен: ';
-                        validityLabel.style.fontWeight = '500';
-                        
-                        const validityDates = document.createElement('span');
-                        validityDates.textContent = `${validFromStr} - ${validToStr}`;
-                        
-                        validityDiv.appendChild(validityLabel);
-                        validityDiv.appendChild(validityDates);
+                        // CN пользователя (владелец) - разрешаем перенос
+                        const subjectCN = extractCN(cert.subject);
+                        const subjectDiv = document.createElement('div');
+                        subjectDiv.style.fontWeight = '600';
+                        subjectDiv.style.fontSize = '12px';
+                        subjectDiv.style.color = '#111827';
+                        subjectDiv.style.marginBottom = '2px';
+                        subjectDiv.style.lineHeight = '1.3';
+                        subjectDiv.style.wordWrap = 'break-word';
+                        subjectDiv.style.wordBreak = 'break-word';
+                        subjectDiv.style.overflowWrap = 'break-word';
+                        subjectDiv.textContent = subjectCN;
+                        card.appendChild(subjectDiv);
                         
                         // CN издателя
                         const issuerCN = extractCN(cert.issuer);
                         const issuerDiv = document.createElement('div');
-                        issuerDiv.style.fontSize = '12px';
-                        issuerDiv.style.color = '#9ca3af';
-                        issuerDiv.style.marginTop = '4px';
+                        issuerDiv.style.fontSize = '11px';
+                        issuerDiv.style.color = '#6b7280';
+                        issuerDiv.style.marginBottom = '2px';
+                        issuerDiv.style.lineHeight = '1.2';
                         issuerDiv.style.wordWrap = 'break-word';
+                        issuerDiv.style.wordBreak = 'break-word';
                         issuerDiv.textContent = `Издатель: ${issuerCN}`;
-                        
-                        // Собираем карточку
-                        card.appendChild(statusIcon);
-                        card.appendChild(nameDiv);
-                        card.appendChild(validityDiv);
                         card.appendChild(issuerDiv);
                         
-                        // Эффекты при наведении
-                        card.addEventListener('mouseenter', function() {
-                            this.style.borderColor = '#3b82f6';
-                            this.style.backgroundColor = '#eff6ff';
-                            this.style.boxShadow = '0 4px 6px rgba(59, 130, 246, 0.15)';
-                            this.style.transform = 'translateY(-2px)';
-                        });
+                        // Срок действия
+                        const validToDate = new Date(cert.validTo);
+                        const isValid = validToDate > now;
+                        const validDiv = document.createElement('div');
+                        validDiv.style.fontSize = '11px';
+                        validDiv.style.marginBottom = '2px';
+                        validDiv.style.display = 'flex';
+                        validDiv.style.alignItems = 'center';
+                        validDiv.style.gap = '3px';
+                        validDiv.style.lineHeight = '1.2';
+                        validDiv.style.flexWrap = 'wrap';
                         
-                        card.addEventListener('mouseleave', function() {
-                            if (!this.classList.contains('selected')) {
-                                this.style.borderColor = '#e5e7eb';
-                                this.style.backgroundColor = '#ffffff';
-                                this.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
-                                this.style.transform = 'translateY(0)';
-                            }
-                        });
+                        const validIcon = document.createElement('span');
+                        validIcon.textContent = isValid ? '✅' : '❌';
+                        validIcon.style.fontSize = '10px';
+                        validDiv.appendChild(validIcon);
                         
-                        // Обработчик выбора
-                        card.addEventListener('click', function() {
-                            // Убираем выделение с других карточек
-                            cardsContainer.querySelectorAll('.certificate-card').forEach(c => {
-                                c.classList.remove('selected');
-                                c.style.borderColor = '#e5e7eb';
-                                c.style.backgroundColor = '#ffffff';
-                                c.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
-                            });
-                            
-                            // Выделяем выбранную карточку
-                            this.classList.add('selected');
-                            this.style.borderColor = '#3b82f6';
-                            this.style.backgroundColor = '#dbeafe';
-                            this.style.boxShadow = '0 4px 12px rgba(59, 130, 246, 0.25)';
-
-                            // Получаем данные выбранного сертификата
-                            const selectedIndex = parseInt(this.dataset.value);
-                            // Используем оригинальный индекс для поиска в исходном массиве
-                            const selectedCert = certificates[selectedIndex] || cert;
-                            const ownerCN = extractCN(selectedCert.subject);
-                            
-                            // Визуальная обратная связь
-                            setTimeout(() => {
-                                this.style.transform = 'scale(0.98)';
-                                setTimeout(() => {
-                                    this.style.transform = 'scale(1)';
-                                }, 100);
-                            }, 0);
-                            
-                            // Отправляем событие с правильным индексом
-                            window.nicegui_handle_event('certificate_selected', {
-                                value: selectedIndex.toString(),
-                                text: ownerCN,
-                                certificate: selectedCert
-                            });
-                        });
+                        const validText = document.createElement('span');
+                        validText.style.color = isValid ? '#059669' : '#dc2626';
+                        validText.textContent = isValid 
+                            ? `До: ${validToDate.toLocaleDateString('ru-RU')}`
+                            : `Истек: ${validToDate.toLocaleDateString('ru-RU')}`;
+                        validDiv.appendChild(validText);
+                        card.appendChild(validDiv);
+                        
+                        // Серийный номер
+                        const serialDiv = document.createElement('div');
+                        serialDiv.style.fontSize = '10px';
+                        serialDiv.style.color = '#9ca3af';
+                        serialDiv.style.fontFamily = 'monospace';
+                        serialDiv.style.lineHeight = '1.2';
+                        serialDiv.style.wordBreak = 'break-all';
+                        serialDiv.textContent = `№: ${cert.serialNumber || 'Неизвестно'}`;
+                        card.appendChild(serialDiv);
                         
                         cardsContainer.appendChild(card);
                     });
-                };
-                
-                // Обработчик поиска
-                searchInput.addEventListener('input', function() {
-                    const searchText = this.value.toLowerCase().trim();
                     
-                    if (searchText === '') {
-                        createCertificateCards(validCertificates);
-                    } else {
-                        const filtered = validCertificates.filter(cert => {
-                            const ownerCN = extractCN(cert.subject).toLowerCase();
-                            const issuerCN = extractCN(cert.issuer).toLowerCase();
-                            return ownerCN.includes(searchText) || issuerCN.includes(searchText);
-                        });
-                        createCertificateCards(filtered);
-                    }
-                });
-            // Создаем начальный список
-            createCertificateCards(validCertificates);
-
-            // Собираем все вместе
-            certificatesList.appendChild(title);
-            certificatesList.appendChild(searchContainer);
-            certificatesList.appendChild(cardsContainer);
-            
-            certArea.appendChild(certificatesList);
-            }  
-             
-        } else if (result.action === 'certificate_selected') {
+                    certContainer.appendChild(cardsContainer);
+                    
+                    console.log(`✅ Создано ${validCertificates.length} карточек сертификатов (отфильтровано ${certificates.length - validCertificates.length} просроченных)`);
+                } else {
+                    console.error('❌ Контейнер сертификатов не найден по data-task-id:', taskId);
+                }
+            }
+        }
+        
+        if (result.action === 'certificate_selected') {
             console.log('Сертификат выбран:', result.selected);
             
             // Показываем уведомление
