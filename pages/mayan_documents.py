@@ -172,6 +172,7 @@ class DocumentUploader:
             file_info = self._process_file(upload_event)
             
             # Создание документа с файлом в одном запросе используя новый метод из MayanClient
+            # Метод create_document_with_file автоматически добавляет документ в кабинет после создания
             result = await self.client.create_document_with_file(
                 label=params.label,
                 description=params.description,
@@ -194,8 +195,8 @@ class DocumentUploader:
             # Очистка формы
             upload_event.sender.clear()
             
-            # Обновление списка документов
-            load_recent_documents()
+            # Не обновляем список документов - это не нужно при загрузке нового документа
+            # Пользователь может обновить список вручную, если нужно
             
         except ValidationError as e:
             self._notify_error(f"Ошибка валидации: {e}")
@@ -204,7 +205,7 @@ class DocumentUploader:
         except DocumentCreationError as e:
             self._notify_error(f"Ошибка создания документа: {e}")
         except Exception as e:
-            logger.error(f"Неожиданная ошибка при загрузке документа: {e}")
+            logger.error(f"Неожиданная ошибка при загрузке документа: {e}", exc_info=True)
             self._notify_error(f"Неожиданная ошибка: {e}")
     
     def _validate_params(self, params: UploadParams) -> None:
@@ -278,8 +279,10 @@ class SimpleFormDataExtractor:
             logger.info(f"SimpleFormDataExtractor: Ищем кабинет по имени '{params.cabinet_name}'")
             cabinet_id = await self._get_cabinet_id_by_name(client, params.cabinet_name)
             logger.info(f"SimpleFormDataExtractor: Найден cabinet_id={cabinet_id}")
+        elif not cabinet_id:
+            logger.warning(f"SimpleFormDataExtractor: cabinet_id не найден и cabinet_name не указан")
         
-        logger.info(f"SimpleFormDataExtractor: Итоговый cabinet_id={cabinet_id}")
+        logger.info(f"SimpleFormDataExtractor: Итоговый cabinet_id={cabinet_id} (тип: {type(cabinet_id)})")
         
         # Получаем ID языка
         # language_id = await self._get_language_id_by_name(client, params.language_name)
@@ -347,7 +350,7 @@ async def get_mayan_client() -> MayanClient:
     
     try:
         # ВСЕГДА получаем текущего пользователя из контекста, чтобы использовать актуальный токен
-        current_user = get_current_user()
+        current_user = _current_user if _current_user else get_current_user()
         
         if not current_user:
             raise ValueError('Пользователь не авторизован')
@@ -1014,8 +1017,11 @@ async def load_recent_documents():
     """Загружает последние 10 документов"""
     global _recent_documents_container
     
-    if _recent_documents_container:
-        _recent_documents_container.clear()
+    if not _recent_documents_container:
+        logger.warning("Контейнер для документов не инициализирован")
+        return
+    
+    _recent_documents_container.clear()
     
     # Проверяем подключение
     if not await check_connection():
@@ -1030,7 +1036,7 @@ async def load_recent_documents():
         logger.info("Загружаем последние документы...")
         # Получаем последние 10 документов
         client = await get_mayan_client()
-        documents = await client.get_documents(page=1, page_size=10)
+        documents, total_count = await client.get_documents(page=1, page_size=10)
         logger.info(f"Получено документов: {len(documents)}")
         
         if not documents:
@@ -1049,9 +1055,10 @@ async def load_recent_documents():
             # await asyncio.gather(*tasks)
                 
     except Exception as e:
-        logger.error(f"Ошибка при загрузке документов: {e}")
-        with _recent_documents_container:
-            ui.label(f'Ошибка при загрузке документов: {str(e)}').classes('text-red-500 text-center py-8')
+        logger.error(f"Ошибка при загрузке документов: {e}", exc_info=True)
+        if _recent_documents_container:
+            with _recent_documents_container:
+                ui.label(f'Ошибка при загрузке документов: {str(e)}').classes('text-red-500 text-center py-8')
 
 async def search_documents(query: str):
     """Выполняет поиск документов"""

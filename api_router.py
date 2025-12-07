@@ -681,5 +681,4 @@ def clear_signature_result():
     global _signature_result
     _signature_result = None
 
-
 router = api_router

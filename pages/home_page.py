@@ -19,6 +19,80 @@ logger = logging.getLogger(__name__)
 
 def content() -> None:
     """Главная страница с задачами пользователя"""
+    # Добавляем CSS стили и вспомогательную функцию JavaScript
+    ui.add_head_html('''
+        <style>
+            .ag-cell.due-date-overdue {
+                background-color: #ffebee !important;
+                color: #c62828 !important;
+            }
+            .ag-cell.due-date-warning {
+                background-color: #ff9800 !important;
+                color: #ffffff !important;
+            }
+            .ag-cell.due-date-ok {
+                background-color: #e8f5e9 !important;
+                color: #2e7d32 !important;
+            }
+            /* Альтернативные селекторы на случай, если класс применяется к другому элементу */
+            .due-date-overdue {
+                background-color: #ffebee !important;
+                color: #c62828 !important;
+            }
+            .due-date-warning {
+                background-color: #ff9800 !important;
+                color: #ffffff !important;
+            }
+            .due-date-ok {
+                background-color: #e8f5e9 !important;
+                color: #2e7d32 !important;
+            }
+        </style>
+        <script>
+            window.getDueDateDiffDays = function(dueDateRaw) {
+                console.log('getDueDateDiffDays called with:', dueDateRaw);
+                if (!dueDateRaw) {
+                    console.log('dueDateRaw is null/undefined');
+                    return null;
+                }
+                try {
+                    let deadline;
+                    if (typeof dueDateRaw === 'string') {
+                        if (dueDateRaw.includes('T')) {
+                            let dateStr = dueDateRaw.replace('Z', '+00:00');
+                            const offsetMatch = dateStr.match(/([+-])(\\d{2})(\\d{2})$/);
+                            if (offsetMatch) {
+                                dateStr = dateStr.replace(/([+-])(\\d{2})(\\d{2})$/, '$1$2:$3');
+                            }
+                            deadline = new Date(dateStr);
+                        } else {
+                            deadline = new Date(dueDateRaw);
+                        }
+                    } else if (typeof dueDateRaw === 'number') {
+                        deadline = new Date(dueDateRaw);
+                    } else {
+                        console.log('Invalid type:', typeof dueDateRaw);
+                        return null;
+                    }
+                    if (isNaN(deadline.getTime())) {
+                        console.log('Invalid date:', deadline);
+                        return null;
+                    }
+                    const now = new Date();
+                    now.setHours(0, 0, 0, 0);
+                    deadline.setHours(0, 0, 0, 0);
+                    const diffTime = deadline - now;
+                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                    console.log('Diff days:', diffDays);
+                    return diffDays;
+                } catch (e) {
+                    console.error('Error in getDueDateDiffDays:', e);
+                    return null;
+                }
+            };
+        </script>
+    ''')
+    
     # Получаем текущего авторизованного пользователя
     user = get_current_user()
     if not user:
@@ -52,6 +126,8 @@ async def create_tasks_page(login: str):
     
     async def refresh_tasks(show_finished: bool = False):
         """Обновляет список задач в зависимости от состояния checkbox"""
+        nonlocal tasks_grid  # Добавляем nonlocal для доступа к tasks_grid
+        
         # Показываем/скрываем выбор периода
         if period_select:
             period_select.set_visibility(show_finished)
@@ -146,36 +222,42 @@ async def create_tasks_page(login: str):
                 # Форматируем дату окончания
                 due_date = getattr(task, 'due', '')
                 
+                # Сохраняем исходную дату ДО любых изменений
+                due_date_raw = due_date if due_date else None
+                
                 # Получаем название, описание и dueDate из переменных процесса (как в диаграмме Ганта)
                 task_description = getattr(task, 'description', '')
+                document_id = None  # Инициализируем до блока try
+                
                 if hasattr(task, 'process_instance_id') and task.process_instance_id:
                     try:
                         # Для завершенных задач используем исторические переменные
                         if show_finished:
                             process_variables = await camunda_client.get_history_process_instance_variables_by_name(
                                 task.process_instance_id,
-                                ['dueDate', 'taskName', 'documentName', 'taskDescription']
+                                ['dueDate', 'taskName', 'documentName', 'taskDescription', 'documentId', 'mayanDocumentId']
                             )
                         else:
                             process_variables = await camunda_client.get_process_instance_variables_by_name(
                                 task.process_instance_id,
-                                ['dueDate', 'taskName', 'documentName', 'taskDescription']
+                                ['dueDate', 'taskName', 'documentName', 'taskDescription', 'documentId', 'mayanDocumentId']
                             )
                         
-                        # Получаем dueDate
+                        # Получаем dueDate из переменных процесса, если его нет в задаче
                         if not due_date:
-                            due_date_raw = process_variables.get('dueDate')
-                            if due_date_raw:
-                                if isinstance(due_date_raw, dict) and 'value' in due_date_raw:
-                                    due_date = due_date_raw['value']
-                                elif isinstance(due_date_raw, str):
-                                    due_date = due_date_raw
+                            due_date_from_vars = process_variables.get('dueDate')
+                            if due_date_from_vars:
+                                if isinstance(due_date_from_vars, dict) and 'value' in due_date_from_vars:
+                                    due_date = due_date_from_vars['value']
+                                    due_date_raw = due_date_from_vars['value']  # Сохраняем исходное значение
+                                elif isinstance(due_date_from_vars, str):
+                                    due_date = due_date_from_vars
+                                    due_date_raw = due_date_from_vars  # Сохраняем исходное значение
                                 else:
-                                    due_date = str(due_date_raw) if due_date_raw else ''
+                                    due_date = str(due_date_from_vars) if due_date_from_vars else ''
+                                    due_date_raw = str(due_date_from_vars) if due_date_from_vars else None
                         
                         # Получаем название из переменных процесса (приоритет: taskName, documentName)
-                        # Используем ту же логику, что и для диаграммы Ганта
-                        # Всегда пытаемся получить название из переменных процесса, если оно доступно
                         task_name_from_vars = (
                             process_variables.get('taskName') or 
                             process_variables.get('documentName') or 
@@ -208,16 +290,46 @@ async def create_tasks_page(login: str):
                             # Используем описание из переменных процесса, если оно есть
                             if task_description_from_vars and task_description_from_vars.strip():
                                 task_description = task_description_from_vars.strip()
+                        
+                        # Получаем documentName для отображения
+                        document_name = None
+                        document_name_raw = process_variables.get('documentName')
+                        if document_name_raw:
+                            # Обрабатываем формат переменных Camunda
+                            if isinstance(document_name_raw, dict) and 'value' in document_name_raw:
+                                document_name = str(document_name_raw['value']).strip() if document_name_raw['value'] else None
+                            elif isinstance(document_name_raw, str):
+                                document_name = document_name_raw.strip() if document_name_raw else None
+                            else:
+                                document_name = str(document_name_raw).strip() if document_name_raw else None
+                        
+                        # Получаем documentId из переменных процесса
+                        document_id_raw = process_variables.get('documentId') or process_variables.get('mayanDocumentId')
+                        if document_id_raw:
+                            # Обрабатываем формат переменных Camunda
+                            if isinstance(document_id_raw, dict) and 'value' in document_id_raw:
+                                document_id = str(document_id_raw['value']).strip() if document_id_raw['value'] else None
+                            elif isinstance(document_id_raw, str):
+                                document_id = document_id_raw.strip() if document_id_raw else None
+                            else:
+                                document_id = str(document_id_raw).strip() if document_id_raw else None
                     except Exception as e:
                         logger.warning(f"Не удалось получить переменные процесса {task.process_instance_id}: {e}")
-                
+                        document_id = None  # Убеждаемся, что document_id установлен даже при ошибке
+                        document_name = None
+
+                # Форматируем дату для отображения (due_date_raw уже сохранен выше)
                 if due_date:
                     try:
                         due_date = format_date_russian(due_date)
                     except (ValueError, TypeError, OSError) as e:
                         logger.warning(f"Не удалось отформатировать дату {due_date}: {e}")
-                        # Оставляем исходное значение если не удалось распарсить
-                
+                        # Если не удалось отформатировать, оставляем исходное значение
+                        if not due_date_raw:
+                            due_date_raw = due_date
+                else:
+                    due_date_raw = None
+
                 # Получаем поля задачи - используем прямые атрибуты как на странице завершения задач
                 start_time = getattr(task, 'start_time', '')
                 end_time = getattr(task, 'end_time', '')
@@ -275,10 +387,36 @@ async def create_tasks_page(login: str):
                     'description': task_description,  # Используем описание из переменных процесса (taskDescription)
                     'start_time': start_time,
                     'due_date': due_date,
+                    'due_date_raw': due_date_raw,  # Добавляем исходную дату для сравнения
                     'end_time': end_time,
                     'duration_formatted': duration_formatted,
                     'delete_reason': delete_reason,
+                    'document_id': document_id,  # Добавляем ID документа для открытия
+                    'document_name': document_name,  # Добавляем название документа для отображения
                 }
+                
+                # Логируем для отладки
+                logger.debug(f"Данные задачи {task_id}: document_id={document_id}, name={task_name}")
+
+                # Вычисляем разницу в днях для использования в cellClassRules
+                if due_date_raw:
+                    try:
+                        from components.gantt_chart import parse_task_deadline
+                        deadline = parse_task_deadline(due_date_raw)
+                        if deadline:
+                            now = datetime.now()
+                            now = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                            deadline = deadline.replace(hour=0, minute=0, second=0, microsecond=0)
+                            diff_days = (deadline - now).days
+                            task_data['due_date_diff_days'] = diff_days
+                        else:
+                            task_data['due_date_diff_days'] = None
+                    except Exception as e:
+                        logger.warning(f"Не удалось вычислить разницу дней для {task_name}: {e}")
+                        task_data['due_date_diff_days'] = None
+                else:
+                    task_data['due_date_diff_days'] = None
+                
                 tasks.append(task_data)
                 logger.debug(f"Добавлена задача в список: {task_data['name']}")
 
@@ -417,9 +555,9 @@ async def create_tasks_page(login: str):
                     tasks_details_grid.visible = True
                     
                     # Обновляем кнопку переключения
-                    if 'tasks_details_toggle' in locals():
-                        tasks_details_toggle.text = 'Скрыть'
-                        tasks_details_toggle.icon = 'expand_less'
+                    # if 'tasks_details_toggle' in locals():
+                    #     tasks_details_toggle.text = 'Скрыть'
+                    #     tasks_details_toggle.icon = 'expand_less'
                     
                     ui.notify(f'Показано {len(detail_data)} полей задачи', type='positive')
                 else:
@@ -433,18 +571,22 @@ async def create_tasks_page(login: str):
     
     # Создаем UI элементы
     with ui.column().classes('w-full'):
-        # Заголовок и элементы управления
-        with ui.row().classes('w-full items-center justify-between mb-4'):
-            ui.label('Мои задачи').classes('text-h5 font-bold')
-            
-        # Счетчик задач
-        with ui.row().classes('w-full items-center justify-between'):
-            tasks_count_label = ui.label('Загружаем задачи...').classes('text-lg mb-2')
+        # Заголовок
+        with ui.row().classes('w-full items-center justify-between mb-1'):
+            tasks_count_label = ui.label('Загружаем задачи...').classes('text-sm mb-1')
+
+        # ДОБАВИТЬ: Раскрываемый блок для диаграммы Ганта (только для активных задач)
+        with ui.expansion('Графика', icon='timeline', value=False).classes('w-full mb-4') as gantt_expansion:
+            gantt_container = ui.column().classes('w-full')
+            gantt_container.set_visibility(False)  # Скрываем по умолчанию
+
+        # Элементы управления (после диаграммы Ганта, перед таблицей)
+        with ui.row().classes('w-full items-center justify-end mb-2'):
             finished_checkbox = ui.checkbox(
                 'Показать завершенные задачи', 
                 value=False,
-                on_change=lambda e: refresh_tasks(e.value)  # ВАЖНО: добавляем обработчик!
-            ).classes('mr-4')
+                on_change=lambda e: ui.timer(0.1, lambda: refresh_tasks(e.value), once=True)  # Исправляем вызов
+            ).classes('text-xs mr-4')
 
             # Добавляем выбор периода для завершенных задач (скрыт по умолчанию)
             period_select = ui.select(
@@ -456,13 +598,30 @@ async def create_tasks_page(login: str):
                 },
                 value=7,
                 label='Период',
-                on_change=lambda: refresh_tasks(finished_checkbox.value)  # Обновляем при изменении периода
-            ).classes('mr-4')
+                on_change=lambda: ui.timer(0.1, lambda: refresh_tasks(finished_checkbox.value), once=True)  # Исправляем вызов
+            ).classes('text-xs mr-4')
             period_select.set_visibility(False)
 
-        # ДОБАВИТЬ: Контейнер для диаграммы Ганта (только для активных задач)
-        gantt_container = ui.column().classes('w-full mb-4')
-        gantt_container.set_visibility(False)  # Скрываем по умолчанию
+        # Функция для открытия предварительного просмотра документа
+        async def open_document_preview(document_id: str):
+            """Открывает предварительный просмотр документа"""
+            try:
+                from services.mayan_connector import MayanClient
+                from components.document_viewer import show_document_viewer
+                
+                document_id = str(document_id).strip()
+                
+                if not document_id or document_id in ['null', 'None', '']:
+                    logger.warning(f"Некорректный document_id: {document_id}")
+                    return
+                
+                logger.info(f"Открываем предварительный просмотр документа с ID: {document_id}")
+                
+                mayan_client = await MayanClient.create_with_session_user()
+                await show_document_viewer(document_id, mayan_client=mayan_client)
+            except Exception as e:
+                logger.error(f"Ошибка при открытии просмотра документа {document_id}: {e}", exc_info=True)
+                ui.notify(f'Ошибка при открытии просмотра: {str(e)}', type='error')
 
         # Основная таблица задач
         tasks_grid = ui.aggrid({
@@ -470,60 +629,79 @@ async def create_tasks_page(login: str):
                 {'headerName': 'Процесс', 'field': 'name', 'sortable': True, 'filter': True},
                 {'headerName': 'Описание', 'field': 'description', 'sortable': True, 'filter': True},
                 {'headerName': 'Начало', 'field': 'start_time', 'sortable': True, 'filter': True},
-                {'headerName': 'Срок исполнения', 'field': 'due_date', 'sortable': True, 'filter': True},
+                {
+                    'headerName': 'Срок исполнения', 
+                    'field': 'due_date', 
+                    'sortable': True, 
+                    'filter': True,
+                    'cellClassRules': {
+                        'due-date-overdue': 'data.due_date_diff_days < 0',
+                        'due-date-warning': 'data.due_date_diff_days >= 0 && data.due_date_diff_days <= 2',
+                        'due-date-ok': 'data.due_date_diff_days > 2'
+                    }
+                },
                 {'headerName': 'Завершение', 'field': 'end_time', 'sortable': True, 'filter': True},
-                {'headerName': 'Длительность', 'field': 'duration_formatted', 'sortable': True, 'filter': True},
+                # {'headerName': 'Длительность', 'field': 'duration_formatted', 'sortable': True, 'filter': True},
                 {'headerName': 'Статус', 'field': 'delete_reason', 'sortable': True, 'filter': True},
+                {
+                    'headerName': 'Документ',
+                    'field': 'document_name',  # Изменяем поле на document_name
+                    'sortable': False,
+                    'filter': False,
+                    'cellRenderer': '''
+                        function(params) {
+                            // Проверяем наличие document_name и document_id
+                            const docName = params.data && params.data.document_name ? params.data.document_name : null;
+                            const docId = params.data && params.data.document_id ? params.data.document_id : null;
+                            
+                            if (!docName || docName === 'null' || docName === '' || docName === null || docName === undefined || docName === 'None') {
+                                return '';
+                            }
+                            
+                            // Обрезаем длинное название документа
+                            let displayName = String(docName).trim();
+                            if (displayName.length > 50) {
+                                displayName = displayName.substring(0, 50) + '...';
+                            }
+                            
+                            // Возвращаем название документа как ссылку
+                            return '<span style="color: #1976d2; cursor: pointer; text-decoration: underline;" title="' + String(docName) + '">' + displayName + '</span>';
+                        }
+                    ''',
+                    'width': 250
+                },
             ],
             'rowData': [],
             'rowSelection': 'single',
             'pagination': True,
             'paginationPageSize': 10,
-            'paginationPageSizeSelector': [10, 25, 50, 100],  # Явно включаем селектор размера страницы
+            'paginationPageSizeSelector': [10, 25, 50, 100],
             'localeText': AGGGRID_RUSSIAN_LOCALE,
-        }).classes('w-full h-96').on('cellDoubleClicked', on_task_dblclick)
+        }).classes('w-full h-96').on('cellDoubleClicked', on_task_dblclick).on('cellClicked', lambda event: handle_document_cell_click(event, open_document_preview))
         
-        # Применяем JavaScript локализацию для пагинации (fallback для элементов, которые не локализуются через localeText)
-        # Запускаем локализацию после создания таблицы с несколькими попытками
-        ui.timer(0.3, apply_aggrid_pagination_localization, once=True)
-        ui.timer(0.8, apply_aggrid_pagination_localization, once=True)
-        ui.timer(1.5, apply_aggrid_pagination_localization, once=True)
+        # Обработчик клика по ячейке документа
+        async def handle_document_cell_click(event, preview_func):
+            """Обрабатывает клик по ячейке документа"""
+            try:
+                # Проверяем, что клик был по колонке "Документ"
+                if event.args and 'colDef' in event.args:
+                    col_def = event.args['colDef']
+                    if col_def.get('headerName') == 'Документ':
+                        # Получаем document_id из данных строки
+                        if 'data' in event.args:
+                            row_data = event.args['data']
+                            document_id = row_data.get('document_id')
+                            
+                            if document_id and document_id not in ['null', 'None', '']:
+                                await preview_func(str(document_id))
+                            else:
+                                ui.notify('Документ не найден для этой задачи', type='warning')
+            except Exception as e:
+                logger.error(f"Ошибка при обработке клика по ячейке документа: {e}", exc_info=True)
+                ui.notify(f'Ошибка при открытии документа: {str(e)}', type='error')
+
+        # Загружаем задачи при инициализации страницы
+        async def init_tasks():
+            await refresh_tasks(False)
         
-        # Таблица детальной информации о задаче
-        with ui.card().classes('w-full mt-4') as tasks_details_card:
-            with ui.row().classes('w-full items-center justify-between mb-2'):
-                ui.label('Детали задачи').classes('text-h6 font-bold')
-                tasks_details_toggle = ui.button('Скрыть', icon='expand_less').classes('text-xs px-2 py-1 h-7')
-            
-            tasks_details_grid = ui.aggrid({
-                'columnDefs': [
-                    {'headerName': 'Поле', 'field': 'field'},
-                    {'headerName': 'Значение', 'field': 'value'},
-                ],
-                'rowData': [],
-                'rowSelection': 'none',
-                'localeText': AGGGRID_RUSSIAN_LOCALE,
-            }).classes('w-full h-48')
-            tasks_details_grid.visible = False
-            
-            # Обработчик для кнопки скрытия/показа
-            def toggle_details():
-                if tasks_details_grid.visible:
-                    tasks_details_grid.visible = False
-                    tasks_details_toggle.text = 'Показать'
-                    tasks_details_toggle.icon = 'expand_more'
-                else:
-                    tasks_details_grid.visible = True
-                    tasks_details_toggle.text = 'Скрыть'
-                    tasks_details_toggle.icon = 'expand_less'
-            
-            tasks_details_toggle.on_click(toggle_details)
-        
-        # Кнопки действий
-        with ui.row().classes('w-full mt-4 justify-center'):
-            ui.button('Принять задачу', icon='check', on_click=lambda: ui.notify('Функция в разработке')).classes('text-xs px-2 py-1 h-7')
-            ui.button('Отклонить задачу', icon='close', on_click=lambda: ui.notify('Функция в разработке')).classes('text-xs px-2 py-1 h-7')
-            ui.button('Завершить задачу', icon='done', on_click=lambda: ui.notify('Функция в разработке')).classes('text-xs px-2 py-1 h-7')
-    
-    # Загружаем задачи при инициализации
-    ui.timer(0.1, lambda: refresh_tasks(False), once=True)
+        ui.timer(0.1, lambda: init_tasks(), once=True)

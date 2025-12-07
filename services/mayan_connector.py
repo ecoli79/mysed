@@ -686,19 +686,25 @@ class MayanClient:
             doc_data = response.json()
             logger.info(f'Документ получен: {doc_data.get("label", "Без названия")}')
             
+            # Безопасно получаем file_latest
+            file_latest = doc_data.get('file_latest') or {}
+            
             return MayanDocument(
-                document_id=doc_data['id'],
-                label=doc_data['label'],
+                document_id=str(doc_data['id']),
+                label=doc_data.get('label', ''),
                 description=doc_data.get('description', ''),
-                file_latest_id=doc_data.get('file_latest', {}).get('id', ''),
-                file_latest_filename=doc_data.get('file_latest', {}).get('filename', ''),
-                file_latest_mimetype=doc_data.get('file_latest', {}).get('mimetype', ''),
-                file_latest_size=doc_data.get('file_latest', {}).get('size', 0),
+                file_latest_id=str(file_latest.get('id', '')) if file_latest else '',
+                file_latest_filename=file_latest.get('filename', '') if file_latest else '',
+                file_latest_mimetype=file_latest.get('mimetype', '') if file_latest else '',
+                file_latest_size=file_latest.get('size', 0) if file_latest else 0,
                 datetime_created=doc_data.get('datetime_created', ''),
                 datetime_modified=doc_data.get('datetime_modified', '')
             )
         except httpx.HTTPError as e:
             logger.error(f'Ошибка при получении документа {document_id}: {e}')
+            return None
+        except Exception as e:
+            logger.error(f'Неожиданная ошибка при получении документа {document_id}: {e}', exc_info=True)
             return None
     
     async def get_document_file_content_as_text(self, document_id: str) -> Optional[str]:
@@ -1666,8 +1672,45 @@ class MayanClient:
             # Добавляем в кабинет если указан
             if cabinet_id:
                 logger.info(f'Добавляем документ {document_id} в кабинет {cabinet_id}')
-                cabinet_result = await self._add_document_to_cabinet(document_id, cabinet_id)
-                logger.info(f'Результат добавления в кабинет: {cabinet_result}')
+                # Ждем, пока документ будет полностью обработан системой
+                # Mayan EDMS создает документ асинхронно, поэтому нужно подождать
+                import asyncio
+                max_retries = 5
+                retry_delay = 1.0  # секунды
+                
+                for attempt in range(max_retries):
+                    # Проверяем, что документ существует
+                    try:
+                        doc = await self.get_document(str(document_id))
+                        if doc:
+                            logger.info(f'Документ {document_id} найден, попытка {attempt + 1} добавления в кабинет')
+                            cabinet_result = await self._add_document_to_cabinet(document_id, cabinet_id)
+                            if cabinet_result:
+                                logger.info(f'Документ {document_id} успешно добавлен в кабинет {cabinet_id}')
+                                break
+                            else:
+                                if attempt < max_retries - 1:
+                                    logger.warning(f'Не удалось добавить документ в кабинет, попытка {attempt + 1}/{max_retries}, повтор через {retry_delay}с')
+                                    await asyncio.sleep(retry_delay)
+                                    retry_delay *= 1.5  # Увеличиваем задержку с каждой попыткой
+                                else:
+                                    logger.error(f'Не удалось добавить документ {document_id} в кабинет {cabinet_id} после {max_retries} попыток')
+                        else:
+                            if attempt < max_retries - 1:
+                                logger.info(f'Документ {document_id} еще не доступен, попытка {attempt + 1}/{max_retries}, ожидание {retry_delay}с')
+                                await asyncio.sleep(retry_delay)
+                                retry_delay *= 1.5
+                            else:
+                                logger.error(f'Документ {document_id} не найден после {max_retries} попыток')
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            logger.warning(f'Ошибка при проверке документа {document_id}, попытка {attempt + 1}/{max_retries}: {e}')
+                            await asyncio.sleep(retry_delay)
+                            retry_delay *= 1.5
+                        else:
+                            logger.error(f'Ошибка при добавлении документа {document_id} в кабинет: {e}')
+            else:
+                logger.warning(f'cabinet_id не указан (значение: {cabinet_id}), документ {document_id} не будет добавлен в кабинет')
             
             return {
                 'document_id': document_id,
@@ -1695,29 +1738,47 @@ class MayanClient:
             True если добавление успешно, False иначе
         """
         try:
+            json_data = {'document': document_id}
             logger.info(f'Добавляем документ {document_id} в кабинет {cabinet_id}')
+
+            logger.info(f'Отправляем POST к cabinets/{cabinet_id}/documents/add/ с JSON: {json_data}')
             
-            # Используем правильный endpoint согласно спецификации Mayan EDMS API
-            # POST /cabinets/{cabinet_id}/documents/add/ с параметром document (ID документа)
             try:
-                logger.info(f'Добавляем документ через POST к cabinets/{cabinet_id}/documents/add/')
-                # Согласно спецификации, передаем параметр document (ID документа)
-                # Используем data (form-data) вместо json, так как это POST запрос с параметром
                 response = await self._make_request(
                     'POST', 
                     f'cabinets/{cabinet_id}/documents/add/', 
-                    data={'document': document_id}
+                    json=json_data
                 )
+                
                 logger.info(f'Статус ответа: {response.status_code}')
                 logger.info(f'Ответ сервера: {response.text[:500] if response.text else "Пустой ответ"}')
-                response.raise_for_status()
-                logger.info(f'Документ {document_id} успешно добавлен в кабинет {cabinet_id}')
-                return True
-            except Exception as e:
-                logger.error(f'Ошибка при добавлении документа в кабинет через POST к /documents/add/: {e}')
+                
+                if response.status_code in [200, 201, 204]:
+                    logger.info(f'Документ {document_id} успешно добавлен в кабинет {cabinet_id}')
+                    return True
+                elif response.status_code == 400:
+                    error_text = response.text
+                    logger.error(f'Ошибка 400 при добавлении документа в кабинет: {error_text}')
+                    
+                    if 'object does not exist' in error_text or 'Invalid pk' in error_text:
+                        logger.warning(f'Документ {document_id} еще не существует в системе или не полностью обработан')
+                        return False
+                    else:
+                        logger.error(f'Другая ошибка 400: {error_text}')
+                        return False
+                else:
+                    logger.error(f'Неожиданный статус ответа при добавлении документа в кабинет: {response.status_code}')
+                    logger.error(f'Текст ответа: {response.text[:1000] if response.text else "Пустой"}')
+                    return False
+                    
+            except httpx.HTTPStatusError as e:
+                logger.error(f'Ошибка HTTP при добавлении документа в кабинет: {e}')
                 if hasattr(e, 'response') and e.response is not None:
                     logger.error(f'Статус ответа: {e.response.status_code}')
                     logger.error(f'Текст ответа: {e.response.text[:1000] if e.response.text else "Пустой"}')
+                return False
+            except Exception as e:
+                logger.error(f'Ошибка при добавлении документа в кабинет: {e}', exc_info=True)
                 return False
         
         except Exception as e:

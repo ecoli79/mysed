@@ -6,7 +6,7 @@ from services.mayan_connector import MayanClient
 from config.settings import config
 from datetime import datetime
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from models import CamundaHistoryTask, LDAPUser, GroupedHistoryTask
 from auth.middleware import get_current_user
 from auth.ldap_auth import LDAPAuthenticator
@@ -30,9 +30,11 @@ import tempfile
 import json
 import pytz
 from components.document_viewer import show_document_viewer
-from components.gantt_chart import create_gantt_chart
+from components.gantt_chart import create_gantt_chart, parse_task_deadline
 import urllib.parse
 import asyncio
+from components.gantt_chart import parse_task_deadline
+from models import CamundaTask
 
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,7 @@ logger = logging.getLogger(__name__)
 # Глобальные переменные для управления состоянием
 _tasks_container: Optional[ui.column] = None
 _completed_tasks_container: Optional[ui.column] = None
+_completed_tasks_header_container: Optional[ui.row] = None  # Добавляем контейнер для заголовка
 _details_container: Optional[ui.column] = None
 #_task_details_sidebar: Optional[ui.column] = None
 #_task_details_column: Optional[ui.column] = None  # Добавляем переменную для контейнера деталей
@@ -65,6 +68,13 @@ _task_cards = {}
 # Добавляем глобальную переменную для режима показа всех сертификатов
 _show_all_certificates = False
 
+_completed_tasks_container: Optional[ui.column] = None
+_completed_tasks_header_container: Optional[ui.row] = None
+_all_completed_tasks: List[Union[GroupedHistoryTask, CamundaHistoryTask]] = []  # Все загруженные задачи
+_current_page: int = 1  # Текущая страница
+_page_size: int = 10  # Размер страницы
+_pagination_container: Optional[ui.row] = None  # Контейнер для элементов пагинации
+
 
 async def get_mayan_client() -> MayanClient:
     """Получает клиент Mayan EDMS с учетными данными текущего пользователя"""
@@ -80,65 +90,87 @@ def _is_valid_username(username: str) -> bool:
     return all(c in allowed_chars for c in username)
 
 def content() -> None:
-    """Основная страница завершения задач"""
-    ui.label('Завершение задач').classes('text-2xl font-bold mb-6')
+    """Страница завершения задач"""
+    # Добавляем CSS стили для раскраски дат
+    ui.add_head_html('''
+        <style>
+            .due-date-overdue {
+                background-color: #ffebee !important;
+                color: #c62828 !important;
+            }
+            .due-date-warning {
+                background-color: #ff9800 !important;
+                color: #ffffff !important;
+            }
+            .due-date-ok {
+                background-color: #e8f5e9 !important;
+                color: #2e7d32 !important;
+            }
+        </style>
+    ''')
     
-    # Проверяем query параметры для открытия конкретной задачи
-    # Используем правильный способ получения query параметров в NiceGUI
     try:
-        # Получаем query параметры из URL
-        if hasattr(context, 'client') and context.client and hasattr(context.client, 'request'):
-            request = context.client.request
-            if hasattr(request, 'query_params'):
-                query_params = request.query_params
-                task_id = query_params.get('task_id', '')
-            else:
-                # Альтернативный способ - из URL
-                url = str(request.url) if hasattr(request, 'url') else ''
-                if '?' in url:
-                    query_string = url.split('?')[1]
-                    params = urllib.parse.parse_qs(query_string)
-                    task_id = params.get('task_id', [''])[0]
+        # ui.label('Завершение задач').classes('text-2xl font-bold mb-6')
+        
+        # Проверяем query параметры для открытия конкретной задачи
+        # Используем правильный способ получения query параметров в NiceGUI
+        try:
+            # Получаем query параметры из URL
+            if hasattr(context, 'client') and context.client and hasattr(context.client, 'request'):
+                request = context.client.request
+                if hasattr(request, 'query_params'):
+                    query_params = request.query_params
+                    task_id = query_params.get('task_id', '')
                 else:
-                    task_id = ''
-        else:
-            task_id = ''
+                    # Альтернативный способ - из URL
+                    url = str(request.url) if hasattr(request, 'url') else ''
+                    if '?' in url:
+                        query_string = url.split('?')[1]
+                        params = urllib.parse.parse_qs(query_string)
+                        task_id = params.get('task_id', [''])[0]
+                    else:
+                        task_id = ''
+            else:
+                task_id = ''
+            
+            if task_id:
+                logger.info(f"Получен task_id из query параметров: {task_id}")
+                # Сохраняем task_id в глобальную переменную для использования после инициализации
+                global _pending_task_id
+                _pending_task_id = task_id
+                # Используем таймер с небольшой задержкой, чтобы дождаться инициализации всех компонентов
+                ui.timer(0.5, lambda: open_task_by_id(_pending_task_id), once=True)
+        except Exception as e:
+            logger.warning(f"Не удалось получить query параметры: {e}")
+            _pending_task_id = None
         
-        if task_id:
-            logger.info(f"Получен task_id из query параметров: {task_id}")
-            # Сохраняем task_id в глобальную переменную для использования после инициализации
-            global _pending_task_id
-            _pending_task_id = task_id
-            # Используем таймер с небольшой задержкой, чтобы дождаться инициализации всех компонентов
-            ui.timer(0.5, lambda: open_task_by_id(_pending_task_id), once=True)
+        # Создаем табы
+        with ui.tabs().classes('w-full') as tabs:
+            active_tasks_tab = ui.tab('Мои активные задачи')
+            completed_tasks_tab = ui.tab('Завершенные задачи')
+            task_details_tab = ui.tab('Детали задачи')
+        
+        with ui.tab_panels(tabs, value=active_tasks_tab).classes('w-full mt-4'):
+            # Таб с активными задачами
+            with ui.tab_panel(active_tasks_tab):
+                create_active_tasks_section()
+            
+            # Таб с завершенными задачами
+            with ui.tab_panel(completed_tasks_tab):
+                create_completed_tasks_section()
+            
+            # Таб с деталями задачи
+            with ui.tab_panel(task_details_tab):
+                create_task_details_section()
+        
+        # Сохраняем ссылку на табы для использования в других функциях
+        global _tabs, _task_details_tab, _active_tasks_tab
+        _tabs = tabs
+        _task_details_tab = task_details_tab
+        _active_tasks_tab = active_tasks_tab
     except Exception as e:
-        logger.warning(f"Не удалось получить query параметры: {e}")
-        _pending_task_id = None
-    
-    # Создаем табы
-    with ui.tabs().classes('w-full') as tabs:
-        active_tasks_tab = ui.tab('Мои активные задачи')
-        completed_tasks_tab = ui.tab('Завершенные задачи')
-        task_details_tab = ui.tab('Детали задачи')
-    
-    with ui.tab_panels(tabs, value=active_tasks_tab).classes('w-full mt-4'):
-        # Таб с активными задачами
-        with ui.tab_panel(active_tasks_tab):
-            create_active_tasks_section()
-        
-        # Таб с завершенными задачами
-        with ui.tab_panel(completed_tasks_tab):
-            create_completed_tasks_section()
-        
-        # Таб с деталями задачи
-        with ui.tab_panel(task_details_tab):
-            create_task_details_section()
-    
-    # Сохраняем ссылку на табы для использования в других функциях
-    global _tabs, _task_details_tab, _active_tasks_tab
-    _tabs = tabs
-    _task_details_tab = task_details_tab
-    _active_tasks_tab = active_tasks_tab
+        logger.error(f"Ошибка при загрузке страницы: {e}")
+        ui.notify(f'Ошибка при загрузке страницы: {str(e)}', type='error')
 
 async def open_task_by_id(task_id: str):
     """Открывает задачу по ID на вкладке активных задач"""
@@ -167,20 +199,11 @@ async def open_task_by_id(task_id: str):
 def create_active_tasks_section():
     """Создает секцию с активными задачами"""
     global _tasks_container, _tasks_header_container
-    
-    ui.label('Мои активные задачи').classes('text-xl font-semibold mb-4')
-    
+        
     # Создаем контейнер для задач
     with ui.card().classes('p-6 w-full'):
-        # Кнопка обновления
-        ui.button(
-            'Обновить задачи',
-            icon='refresh',
-            on_click=lambda: load_active_tasks(_tasks_header_container)
-        ).classes('mb-4 bg-blue-500 text-white text-xs px-2 py-1 h-7')
-        
-        # Контейнер для заголовка с количеством задач
-        _tasks_header_container = ui.column().classes('w-full mb-4')
+        # Контейнер для заголовка с количеством задач и кнопкой обновления в одной строке
+        _tasks_header_container = ui.row().classes('w-full items-center gap-4 mb-4')
         
         # Контейнер для задач
         _tasks_container = ui.column().classes('w-full')
@@ -235,9 +258,14 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
         logger.info(f"Ищем задачу с ID: {target_task_id_str}")
         
         if tasks:
-            # Добавляем заголовок с количеством задач в отдельный контейнер
+            # Добавляем кнопку обновления и заголовок с количеством задач в одну строку
             if header_container:
                 with header_container:
+                    ui.button(
+                        'Обновить задачи',
+                        icon='refresh',
+                        on_click=lambda: load_active_tasks(_tasks_header_container)
+                    ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                     ui.label(f'Найдено {len(tasks)} активных задач:').classes('text-lg font-semibold')
             
             # Добавляем диаграмму Ганта перед карточками задач
@@ -301,7 +329,6 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
                             if process_tasks and len(process_tasks) > 0:
                                 # Берем первую задачу процесса
                                 task_data = process_tasks[0]
-                                from models import CamundaTask
                                 process_task = CamundaTask(
                                     id=task_data['id'],
                                     name=task_data.get('name', ''),
@@ -360,7 +387,6 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
                             
                             if process_tasks and len(process_tasks) > 0:
                                 task_data = process_tasks[0]
-                                from models import CamundaTask
                                 process_task = CamundaTask(
                                     id=task_data['id'],
                                     name=task_data.get('name', ''),
@@ -417,6 +443,53 @@ async def create_task_card_with_progress(task):
         process_id_str == _selected_task_id
     )
     
+    # Получаем наименование задачи из переменных процесса
+    task_name_display = task.name  # По умолчанию используем task.name
+    due_date_raw = None
+    due_date_formatted = None
+    due_date_diff_days = None
+    
+    try:
+        camunda_client = await create_camunda_client()
+        process_variables = await camunda_client.get_process_instance_variables(process_id_str)
+        if process_variables:
+            # Проверяем наличие taskName в переменных процесса
+            task_name_var = process_variables.get('taskName')
+            if task_name_var:
+                # Извлекаем значение, если это словарь с 'value'
+                if isinstance(task_name_var, dict) and 'value' in task_name_var:
+                    task_name_display = task_name_var['value']
+                else:
+                    task_name_display = task_name_var
+            
+            # Получаем dueDate из переменных процесса
+            due_date_var = process_variables.get('dueDate')
+            if due_date_var:
+                if isinstance(due_date_var, dict) and 'value' in due_date_var:
+                    due_date_raw = due_date_var['value']
+                else:
+                    due_date_raw = due_date_var
+    except Exception as e:
+        logger.warning(f"Не удалось получить переменные процесса для задачи {task.id}: {e}")
+        # Используем task.name по умолчанию
+    
+    # Если не получили из переменных, пробуем из атрибута задачи
+    if not due_date_raw:
+        due_date_raw = getattr(task, 'due', None)
+    
+    # Форматируем дату и вычисляем разницу в днях
+    if due_date_raw:
+        try:
+            due_date_formatted = format_date_russian(due_date_raw)
+            deadline = parse_task_deadline(due_date_raw)
+            if deadline:
+                now = datetime.now()
+                now = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                deadline = deadline.replace(hour=0, minute=0, second=0, microsecond=0)
+                due_date_diff_days = (deadline - now).days
+        except Exception as e:
+            logger.warning(f"Не удалось обработать дату дедлайна для задачи {task.id}: {e}")
+
     # Выбираем стили в зависимости от того, выбрана ли задача
     if is_selected:
         border_class = 'border-l-4 border-blue-600'
@@ -450,9 +523,32 @@ async def create_task_card_with_progress(task):
             
             with ui.row().classes('w-full justify-between items-start'):
                 with ui.column().classes('flex-1'):
-                    ui.label(task.name).classes('text-lg font-semibold')
-                    ui.label(f'ID задачи: {task.id}').classes('text-sm text-gray-600')
-                    ui.label(f'ID процесса: {task.process_instance_id}').classes('text-sm text-gray-600')
+                    ui.label(task_name_display).classes('text-lg font-semibold')
+                    
+                    # Выводим срок исполнения сразу после названия с цветовым выделением
+                    if due_date_formatted and due_date_diff_days is not None:
+                        # Определяем цвет в зависимости от количества дней
+                        if due_date_diff_days < 0:
+                            # Дедлайн прошел - красный
+                            bg_color = '#ffebee'
+                            text_color = '#c62828'
+                        elif due_date_diff_days <= 2:
+                            # Осталось 2 дня или меньше - оранжевый
+                            bg_color = '#ff9800'
+                            text_color = '#ffffff'
+                        else:
+                            # Осталось больше 2 дней - зеленый
+                            bg_color = '#e8f5e9'
+                            text_color = '#2e7d32'
+                        
+                        with ui.row().classes('items-center gap-2 mt-1'):
+                            ui.label('Срок исполнения:').classes('text-sm font-medium')
+                            ui.label(due_date_formatted).classes('text-sm font-semibold px-2 py-1 rounded').style(f'background-color: {bg_color}; color: {text_color};')
+                    elif due_date_formatted:
+                        # Если есть дата, но не удалось вычислить разницу
+                        with ui.row().classes('items-center gap-2 mt-1'):
+                            ui.label('Срок исполнения:').classes('text-sm font-medium')
+                            ui.label(due_date_formatted).classes('text-sm text-gray-600')
                     
                     # Добавляем информацию о прогрессе
                     try:
@@ -520,6 +616,23 @@ def create_task_card(task):
     
     task_id_str = str(getattr(task, 'id', ''))
     process_id_str = str(getattr(task, 'process_instance_id', ''))
+    
+    # Получаем срок исполнения и вычисляем разницу в днях
+    due_date_raw = getattr(task, 'due', None)
+    due_date_formatted = None
+    due_date_diff_days = None
+    
+    if due_date_raw:
+        try:
+            due_date_formatted = format_date_russian(due_date_raw)
+            deadline = parse_task_deadline(due_date_raw)
+            if deadline:
+                now = datetime.now()
+                now = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                deadline = deadline.replace(hour=0, minute=0, second=0, microsecond=0)
+                due_date_diff_days = (deadline - now).days
+        except Exception as e:
+            logger.warning(f"Не удалось обработать дату дедлайна для задачи {task.id}: {e}")
         
     with _tasks_container:
         card = ui.card().classes('mb-3 p-4 border-l-4 border-blue-500')
@@ -529,13 +642,35 @@ def create_task_card(task):
                 with ui.column().classes('flex-1'):
                     ui.label(f'{task.name}').classes('text-lg font-semibold')
                     
+                    # Выводим срок исполнения сразу после названия с цветовым выделением
+                    if due_date_formatted and due_date_diff_days is not None:
+                        # Определяем цвет в зависимости от количества дней
+                        if due_date_diff_days < 0:
+                            # Дедлайн прошел - красный
+                            bg_color = '#ffebee'
+                            text_color = '#c62828'
+                        elif due_date_diff_days <= 2:
+                            # Осталось 2 дня или меньше - оранжевый
+                            bg_color = '#ff9800'
+                            text_color = '#ffffff'
+                        else:
+                            # Осталось больше 2 дней - зеленый
+                            bg_color = '#e8f5e9'
+                            text_color = '#2e7d32'
+                        
+                        with ui.row().classes('items-center gap-2 mt-1'):
+                            ui.label('Срок исполнения:').classes('text-sm font-medium')
+                            ui.label(due_date_formatted).classes('text-sm font-semibold px-2 py-1 rounded').style(f'background-color: {bg_color}; color: {text_color};')
+                    elif due_date_formatted:
+                        # Если есть дата, но не удалось вычислить разницу
+                        with ui.row().classes('items-center gap-2 mt-1'):
+                            ui.label('Срок исполнения:').classes('text-sm font-medium')
+                            ui.label(due_date_formatted).classes('text-sm text-gray-600')
+                    
                     if task.description:
                         ui.label(f'Описание: {task.description}').classes('text-sm text-gray-600')
                     
                     ui.label(f'Создана: {task.start_time}').classes('text-sm text-gray-600')
-                    
-                    if task.due:
-                        ui.label(f'Срок: {task.due}').classes('text-sm text-gray-600')
                     
                     # Кнопки действий
                     with ui.row().classes('gap-2 mt-2'):
@@ -552,8 +687,8 @@ def create_task_card(task):
                         ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
                 
                 with ui.column().classes('items-end'):
-                    ui.label(f'ID: {task.id}').classes('text-xs text-gray-500 font-mono')
-                    ui.label(f'Приоритет: {task.priority}').classes('text-xs text-gray-500')
+                    ui.label(f'Статус: Завершена').classes('text-xs text-green-600')
+                    ui.label(f'Multi-user: {task.total_users} польз.').classes('text-xs text-blue-600')
         
         # Сохраняем ссылку на карточку
         # Контейнер формы завершения будет создан динамически при нажатии на кнопку
@@ -565,44 +700,66 @@ def create_task_card(task):
 
 def create_completed_tasks_section():
     """Создает секцию с завершенными задачами"""
-    global _completed_tasks_container
+    global _completed_tasks_container, _completed_tasks_header_container, _pagination_container
     
-    ui.label('Завершенные задачи').classes('text-xl font-semibold mb-4')
+    # ui.label('Завершенные задачи').classes('text-xl font-semibold mb-4')
     
     with ui.card().classes('p-6 w-full'):
-        # Кнопка обновления
-        ui.button(
-            'Обновить задачи',
-            icon='refresh',
-            on_click=load_completed_tasks
-        ).classes('mb-4 bg-blue-500 text-white text-xs px-2 py-1 h-7')
+        # Контейнер для кнопки обновления и заголовка в одной строке
+        _completed_tasks_header_container = ui.row().classes('w-full items-center gap-4 mb-4')
+        
+        with _completed_tasks_header_container:
+            ui.button(
+                'Обновить задачи',
+                icon='refresh',
+                on_click=load_completed_tasks
+            ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
         # Контейнер для задач
         _completed_tasks_container = ui.column().classes('w-full')
+        
+        # Контейнер для пагинации
+        _pagination_container = ui.row().classes('w-full items-center justify-between mt-4')
         
         # Загружаем задачи при открытии страницы
         load_completed_tasks()
 
 async def load_completed_tasks():
     """Загружает завершенные задачи"""
-    global _completed_tasks_container
+    global _completed_tasks_container, _completed_tasks_header_container, _all_completed_tasks, _current_page, _pagination_container
     
     if _completed_tasks_container is None:
         return
-        
+    
     _completed_tasks_container.clear()
+    
+    # Обновляем заголовок с количеством задач
+    if _completed_tasks_header_container:
+        _completed_tasks_header_container.clear()
+        with _completed_tasks_header_container:
+            ui.button(
+                'Обновить задачи',
+                icon='refresh',
+                on_click=load_completed_tasks
+            ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
     
     with _completed_tasks_container:
         try:
             # Получаем текущего авторизованного пользователя
             user = get_current_user()
             if not user:
+                if _completed_tasks_header_container:
+                    with _completed_tasks_header_container:
+                        ui.label('Ошибка: пользователь не авторизован').classes('text-red-600')
                 ui.label('Ошибка: пользователь не авторизован').classes('text-red-600')
                 return
             
             # Валидация логина на безопасность
             if not validate_username(user.username):
                 logger.error(f"Небезопасный логин пользователя: {user.username}")
+                if _completed_tasks_header_container:
+                    with _completed_tasks_header_container:
+                        ui.label('Ошибка: некорректный логин пользователя').classes('text-red-600')
                 ui.label('Ошибка: некорректный логин пользователя').classes('text-red-600')
                 return
             
@@ -614,28 +771,158 @@ async def load_completed_tasks():
             
             tasks = await camunda_client.get_completed_tasks_grouped(assignee=assignee)
             
-            logger.info(f"Получено {len(tasks) if tasks else 0} задач (сгруппированных)")
+            # Сохраняем все задачи
+            _all_completed_tasks = tasks if tasks else []
+            _current_page = 1  # Сбрасываем на первую страницу при новой загрузке
             
-            if tasks:
-                ui.label(f'Найдено {len(tasks)} завершенных задач:').classes('text-lg font-semibold mb-4')
-                
-                for task in tasks:
-                    # Проверяем тип задачи
-                    if isinstance(task, GroupedHistoryTask):
-                        logger.info(f"Создаем карточку для группированной задачи {task.process_instance_id}")
-                        create_grouped_completed_task_card(task)
+            logger.info(f"Получено {len(_all_completed_tasks)} задач (сгруппированных)")
+            
+            # Обновляем заголовок с количеством задач
+            if _completed_tasks_header_container:
+                _completed_tasks_header_container.clear()
+                with _completed_tasks_header_container:
+                    ui.button(
+                        'Обновить задачи',
+                        icon='refresh',
+                        on_click=load_completed_tasks
+                    ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
+                    if _all_completed_tasks:
+                        ui.label(f'Найдено {len(_all_completed_tasks)} завершенных задач:').classes('text-lg font-semibold')
                     else:
-                        logger.info(f"Создаем карточку для обычной задачи {task.id}")
-                        create_completed_task_card(task)
-            else:
-                ui.label('Нет завершенных задач').classes('text-gray-500')
+                        ui.label('Нет завершенных задач').classes('text-lg font-semibold text-gray-500')
+            
+            # Отображаем задачи текущей страницы
+            display_current_page()
                 
         except Exception as e:
             logger.error(f"Ошибка при загрузке завершенных задач: {e}", exc_info=True)
+            if _completed_tasks_header_container:
+                _completed_tasks_header_container.clear()
+                with _completed_tasks_header_container:
+                    ui.button(
+                        'Обновить задачи',
+                        icon='refresh',
+                        on_click=load_completed_tasks
+                    ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
+                    ui.label(f'Ошибка при загрузке задач').classes('text-lg font-semibold text-red-600')
             ui.label(f'Ошибка при загрузке задач: {str(e)}').classes('text-red-600')
 
+def display_current_page():
+    """Отображает задачи текущей страницы"""
+    global _completed_tasks_container, _all_completed_tasks, _current_page, _page_size, _pagination_container
+    
+    if _completed_tasks_container is None:
+        return
+    
+    # Очищаем контейнер задач
+    _completed_tasks_container.clear()
+    
+    if not _all_completed_tasks:
+        with _completed_tasks_container:
+            ui.label('Нет завершенных задач').classes('text-gray-500')
+        # Очищаем пагинацию
+        if _pagination_container:
+            _pagination_container.clear()
+        return
+    
+    # Вычисляем индексы для текущей страницы
+    total_tasks = len(_all_completed_tasks)
+    total_pages = (total_tasks + _page_size - 1) // _page_size  # Округление вверх
+    
+    # Проверяем, что текущая страница не выходит за границы
+    if _current_page > total_pages:
+        _current_page = total_pages if total_pages > 0 else 1
+    if _current_page < 1:
+        _current_page = 1
+    
+    # Вычисляем индексы для среза
+    start_idx = (_current_page - 1) * _page_size
+    end_idx = min(start_idx + _page_size, total_tasks)
+    
+    # Получаем задачи для текущей страницы
+    page_tasks = _all_completed_tasks[start_idx:end_idx]
+    
+    # Отображаем задачи
+    with _completed_tasks_container:
+        for task in page_tasks:
+            # Проверяем тип задачи
+            if isinstance(task, GroupedHistoryTask):
+                logger.info(f"Создаем карточку для группированной задачи {task.process_instance_id}")
+                create_grouped_completed_task_card(task)
+            else:
+                logger.info(f"Создаем карточку для обычной задачи {task.id}")
+                create_completed_task_card(task)
+    
+    # Обновляем элементы пагинации
+    if _pagination_container:
+        _pagination_container.clear()
+        with _pagination_container:
+            # Информация о текущей странице
+            ui.label(f'Страница {_current_page} из {total_pages} (всего задач: {total_tasks})').classes('text-sm text-gray-600')
+            
+            # Кнопки навигации
+            with ui.row().classes('items-center gap-2'):
+                # Кнопка "Первая"
+                ui.button(
+                    'Первая',
+                    icon='first_page',
+                    on_click=lambda: go_to_page(1)
+                ).classes('text-xs px-2 py-1').props('flat').set_enabled(_current_page > 1)
+                
+                # Кнопка "Предыдущая"
+                ui.button(
+                    'Предыдущая',
+                    icon='chevron_left',
+                    on_click=lambda: go_to_page(_current_page - 1)
+                ).classes('text-xs px-2 py-1').props('flat').set_enabled(_current_page > 1)
+                
+                # Выбор размера страницы
+                ui.select(
+                    [5, 10, 20, 50, 100],
+                    value=_page_size,
+                    on_change=lambda e: change_page_size(e.value),
+                    label='Задач на странице'
+                ).classes('text-xs').style('min-width: 150px')
+                
+                # Кнопка "Следующая"
+                ui.button(
+                    'Следующая',
+                    icon='chevron_right',
+                    on_click=lambda: go_to_page(_current_page + 1)
+                ).classes('text-xs px-2 py-1').props('flat').set_enabled(_current_page < total_pages)
+                
+                # Кнопка "Последняя"
+                ui.button(
+                    'Последняя',
+                    icon='last_page',
+                    on_click=lambda: go_to_page(total_pages)
+                ).classes('text-xs px-2 py-1').props('flat').set_enabled(_current_page < total_pages)
 
-def create_grouped_completed_task_card(task):
+def go_to_page(page: int):
+    """Переходит на указанную страницу"""
+    global _current_page
+    
+    total_tasks = len(_all_completed_tasks)
+    total_pages = (total_tasks + _page_size - 1) // _page_size
+    
+    if 1 <= page <= total_pages:
+        _current_page = page
+        display_current_page()
+
+def change_page_size(new_size: int):
+    """Изменяет размер страницы"""
+    global _page_size, _current_page
+    
+    _page_size = new_size
+    # Пересчитываем текущую страницу, чтобы не выйти за границы
+    total_tasks = len(_all_completed_tasks)
+    total_pages = (total_tasks + _page_size - 1) // _page_size
+    if _current_page > total_pages:
+        _current_page = total_pages if total_pages > 0 else 1
+    
+    display_current_page()
+
+async def create_grouped_completed_task_card(task):
     """Создает карточку для группированной завершенной задачи"""
     global _completed_tasks_container
     
@@ -691,7 +978,6 @@ def create_grouped_completed_task_card(task):
                         ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                 
                 with ui.column().classes('items-end'):
-                    ui.label(f'ID процесса: {task.process_instance_id}').classes('text-xs text-gray-500 font-mono')
                     ui.label(f'Статус: Завершена').classes('text-xs text-green-600')
                     ui.label(f'Multi-user: {task.total_users} польз.').classes('text-xs text-blue-600')
 
@@ -720,7 +1006,7 @@ async def show_grouped_task_details_in_tab(task):
                 ui.label('Multi-user задача').classes('text-sm font-medium text-blue-600')
             
             ui.label(f'Название: {task.name}').classes('text-sm mb-2')
-            ui.label(f'ID процесса: {task.process_instance_id}').classes('text-sm mb-2')
+            # ui.label(f'ID процесса: {task.process_instance_id}').classes('text-sm mb-2')  # УБРАНО
             ui.label(f'Создана: {task.start_time}').classes('text-sm mb-2')
             
             if task.end_time:
@@ -735,8 +1021,8 @@ async def show_grouped_task_details_in_tab(task):
             if task.description:
                 ui.label(f'Описание: {task.description}').classes('text-sm mb-2')
             
-            if task.due:
-                ui.label(f'Срок: {task.due}').classes('text-sm mb-2')
+            # if task.due:
+            #     ui.label(f'Срок: {task.due}').classes('text-sm mb-2')
             
             # Прогресс
             ui.label(f'Прогресс завершения: {task.completed_users}/{task.total_users} пользователей ({task.completion_percent:.0f}%)').classes('text-sm mb-2')
@@ -755,7 +1041,7 @@ async def show_grouped_task_details_in_tab(task):
                             user_display_name = get_user_display_name(user_task.assignee)
                             ui.label(f'{user_display_name}').classes('text-sm font-semibold')
                         
-                        ui.label(f'ID задачи: {user_task.task_id}').classes('text-xs text-gray-500 mb-1')
+                        # ui.label(f'ID задачи: {user_task.task_id}').classes('text-xs text-gray-500 mb-1')  # УБРАНО
                         ui.label(f'Начата: {user_task.start_time}').classes('text-xs mb-1')
                         
                         if user_task.end_time:
@@ -787,7 +1073,7 @@ async def show_grouped_task_details_in_tab(task):
             
             if process_variables:
                 with ui.card().classes('p-4 bg-purple-50 mb-4'):
-                    ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
+                    # ui.label('Переменные процесса').classes('text-lg font-semibold mb-1')
                     
                     for key, value in process_variables.items():
                         # Форматируем значение для лучшего отображения
@@ -848,8 +1134,8 @@ def create_completed_task_card(task):
                         # ).classes('bg-green-500 text-white text-xs')
                 
                 with ui.column().classes('items-end'):
-                    ui.label(f'ID: {task.id}').classes('text-xs text-gray-500 font-mono')
                     ui.label(f'Статус: Завершена').classes('text-xs text-green-600')
+                    ui.label(f'Multi-user: {task.total_users} польз.').classes('text-xs text-blue-600')
 
 
 async def show_completed_task_details_in_tab(task):
@@ -957,7 +1243,7 @@ async def show_completed_task_details_in_tab(task):
                     
                     if process_variables:
                         with ui.card().classes('p-4 bg-purple-50 mb-4'):
-                            ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
+                            # ui.label('Переменные процесса').classes('text-lg font-semibold mb-1')
                             
                             # documentName
                             if 'documentName' in process_variables:
@@ -1117,14 +1403,14 @@ async def show_completed_task_details_in_tab(task):
                                                     ui.label(comment).classes('text-xs text-gray-700 italic')
                     else:
                         with ui.card().classes('p-4 bg-gray-50 mb-4'):
-                            ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
+                            # ui.label('Переменные процесса').classes('text-lg font-semibold mb-1')
                             ui.label('Переменные процесса недоступны или не найдены').classes('text-sm text-gray-600')
                 else:
                     logger.warning("process_instance_id не найден для получения переменных процесса")
             except Exception as e:
                 logger.warning(f"Не удалось загрузить переменные процесса: {e}")
                 with ui.card().classes('p-4 bg-gray-50 mb-4'):
-                    ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
+                    # ui.label('Переменные процесса').classes('text-lg font-semibold mb-1')
                     ui.label(f'Не удалось загрузить переменные процесса: {str(e)}').classes('text-sm text-gray-600')
                 
         except Exception as e:
@@ -1174,61 +1460,6 @@ async def load_task_details(task_id: str):
         ui.notify('Введите ID задачи', type='error')
         return
     
-    # _details_container.clear()
-    
-    # with _details_container:
-    #     ui.label('Загрузка деталей...').classes('text-gray-600')
-        
-    #     try:
-    #         # Получаем задачу по ID - используем асинхронный клиент
-    #         camunda_client = await create_camunda_client()  # ИСПРАВЛЕНО: await
-    #         task = await camunda_client.get_task_by_id(task_id)  # ИСПРАВЛЕНО: await
-            
-    #         if not task:
-    #             ui.label('Задача не найдена').classes('text-red-600')
-    #             logger.warning(f"Задача {task_id} не найдена")
-    #             return
-            
-    #         # Отображаем детали задачи
-    #         with ui.card().classes('p-4 bg-gray-50'):
-    #             ui.label('Информация о задаче').classes('text-lg font-semibold mb-3')
-                
-    #             ui.label(f'Название: {task.name}').classes('text-sm mb-2')
-    #             ui.label(f'ID: {task.id}').classes('text-sm mb-2')
-    #             ui.label(f'Исполнитель: {task.assignee or "Не назначен"}').classes('text-sm mb-2')
-    #             ui.label(f'Создана: {task.start_time}').classes('text-sm mb-2')
-    #             ui.label(f'Приоритет: {task.priority}').classes('text-sm mb-2')
-    #             ui.label(f'Статус: {"Активна" if not task.suspended else "Приостановлена"}').classes('text-sm mb-2')
-                
-    #             if task.description:
-    #                 ui.label(f'Описание: {task.description}').classes('text-sm mb-2')
-                
-    #             if task.due:
-    #                 ui.label(f'Срок: {task.due}').classes('text-sm mb-2')
-            
-    #         # Пытаемся получить переменные (с обработкой ошибок)
-    #         try:
-    #             variables = await camunda_client.get_task_variables(task_id)  # ИСПРАВЛЕНО: await и правильный метод
-    #             if variables:
-    #                 with ui.card().classes('p-4 bg-blue-50 mt-4'):
-    #                     ui.label('Переменные задачи').classes('text-lg font-semibold mb-3')
-                        
-    #                     for key, value in variables.items():
-    #                         # Обрабатываем формат переменных Camunda
-    #                         if isinstance(value, dict) and 'value' in value:
-    #                             display_value = value['value']
-    #                         else:
-    #                             display_value = value
-    #                         ui.label(f'{key}: {display_value}').classes('text-sm mb-1')
-    #         except Exception as e:
-    #             logger.warning(f"Не удалось получить переменные задачи {task_id}: {e}")
-    #             with ui.card().classes('p-4 bg-yellow-50 mt-4'):
-    #                 ui.label('Переменные задачи недоступны').classes('text-sm text-yellow-600')
-            
-    #     except Exception as e:
-    #         ui.label(f'Ошибка при загрузке деталей: {str(e)}').classes('text-red-600')
-    #         logger.error(f"Ошибка при загрузке деталей задачи {task_id}: {e}", exc_info=True)
-
 async def complete_task(task):
     """Завершает задачу"""
     # Проверяем, является ли это задачей подписания
@@ -1279,8 +1510,8 @@ def complete_regular_task(task):
         # Информация о задаче
         with ui.card().classes('p-3 bg-white mb-4'):
             ui.label(f'Задача: {task.name}').classes('text-base font-semibold')
-            ui.label(f'ID задачи: {task.id}').classes('text-sm text-gray-600')
-            ui.label(f'ID процесса: {task.process_instance_id}').classes('text-sm text-gray-600')
+            # ui.label(f'ID задачи: {task.id}').classes('text-sm text-gray-600')  # УБРАНО
+            # ui.label(f'ID процесса: {task.process_instance_id}').classes('text-sm text-gray-600')  # УБРАНО
         
         # Форма завершения
         with ui.column().classes('w-full'):
@@ -3129,7 +3360,7 @@ async def show_task_details(task):
     details_container.clear()
     
     with details_container:
-        ui.label('Загрузка деталей...').classes('text-gray-600')
+        # ui.label('Загрузка деталей...').classes('text-gray-600')
         
         try:
             # Получаем детальную информацию о задаче
@@ -3172,7 +3403,11 @@ async def show_task_details(task):
                 process_variables = await camunda_client.get_process_instance_variables(task_details.process_instance_id)
                 if process_variables:
                     with ui.card().classes('p-4 bg-yellow-50 mb-4'):
-                        ui.label('Переменные процесса').classes('text-lg font-semibold mb-3')
+                        # ui.label('Переменные процесса').classes('text-lg font-semibold mb-1')
+                        
+                        # Добавляем ID задачи и ID процесса
+                        # ui.label(f'ID задачи: {task_details.id}').classes('text-sm text-gray-600 mb-2')
+                        # ui.label(f'ID процесса: {task_details.process_instance_id}').classes('text-sm text-gray-600 mb-3')
                         
                         # Проверяем, является ли это задачей подписания документа
                         is_signing_task = hasattr(task_details, 'name') and task_details.name == "Подписать документ"
@@ -3227,7 +3462,35 @@ async def show_task_details(task):
                         if due_date:
                             # Форматируем дату
                             formatted_date = format_date_russian(due_date)
-                            ui.label(f'Срок: {formatted_date}').classes('text-sm mb-2')
+                            
+                            # Вычисляем разницу в днях для раскраски
+                            due_date_diff_days = None
+                            try:
+                                deadline = parse_task_deadline(due_date)
+                                if deadline:
+                                    now = datetime.now()
+                                    now = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                                    deadline = deadline.replace(hour=0, minute=0, second=0, microsecond=0)
+                                    due_date_diff_days = (deadline - now).days
+                            except Exception as e:
+                                logger.warning(f"Не удалось вычислить разницу дней для срока: {e}")
+                            
+                            # Определяем класс для раскраски
+                            if due_date_diff_days is not None:
+                                if due_date_diff_days < 0:
+                                    # Дедлайн прошел - красный
+                                    date_class = 'due-date-overdue'
+                                elif due_date_diff_days <= 2:
+                                    # Осталось 2 дня или меньше - оранжевый
+                                    date_class = 'due-date-warning'
+                                else:
+                                    # Осталось больше 2 дней - зеленый
+                                    date_class = 'due-date-ok'
+                                
+                            #     ui.label(f'Срок: ').classes('text-sm mb-2 inline')
+                            #     ui.label(formatted_date).classes(f'text-sm font-semibold px-2 py-1 rounded {date_class} mb-2 inline')
+                            # else:
+                            #     ui.label(f'Срок: {formatted_date}').classes('text-sm mb-2')
                         
                         # Добавляем кнопки для работы с документом, если documentId найден
                         if document_id:
@@ -3265,7 +3528,12 @@ async def show_task_details(task):
                         
             except Exception as e:
                 logger.warning(f"Не удалось получить переменные процесса {task_details.process_instance_id}: {e}")
-                ui.label('Переменные процесса недоступны').classes('text-sm text-gray-500')
+                # Даже если переменные недоступны, показываем ID задачи и процесса
+                with ui.card().classes('p-4 bg-yellow-50 mb-4'):
+                    # ui.label('Переменные процесса').classes('text-lg font-semibold mb-1')
+                    # ui.label(f'ID задачи: {task_details.id}').classes('text-sm text-gray-600 mb-2')  # УБРАНО
+                    # ui.label(f'ID процесса: {task_details.process_instance_id}').classes('text-sm text-gray-600 mb-2')  # УБРАНО
+                    ui.label('Переменные процесса недоступны').classes('text-sm text-gray-500')
             
             # Кнопка для скрытия деталей
             with ui.row().classes('w-full mt-3'):

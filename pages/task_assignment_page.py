@@ -35,9 +35,12 @@ class TaskAssignmentPage:
                 
                 # Список для хранения выбранных пользователей
                 selected_users = []
+                # Список для хранения выбранных ролей (при выборе пользователей по роли)
+                selected_roles_from_selection = []
                 all_users = await get_users()
                 
                 # Инициализация Camunda клиента с использованием конфигурации
+                camunda_client = None
                 try:
                     if not config.camunda_url:
                         raise ValueError("Camunda URL не настроен. Установите переменную CAMUNDA_URL в файле .env")
@@ -57,6 +60,93 @@ class TaskAssignmentPage:
                     print(f"Ошибка при инициализации Camunda клиента: {e}")
                     ui.notify(f'Ошибка подключения к Camunda: {str(e)}', type='negative')
                     camunda_client = None
+                
+                # Кеш для ролей пользователей (username -> [роли])
+                user_roles_cache = {}
+                
+                async def load_user_roles():
+                    """Загружает роли для всех пользователей через группы ролей"""
+                    try:
+                        logger.info('Начинаем загрузку ролей пользователей...')
+                        system_client = await MayanClient.create_default()
+                        
+                        # Получаем все роли
+                        roles = await system_client.get_roles(page=1, page_size=1000)
+                        logger.info(f'Получено {len(roles)} ролей')
+                        
+                        # Для каждой роли получаем группы, затем пользователей групп
+                        for role in roles:
+                            role_id = role.get('id')
+                            role_label = role.get('label')
+                            
+                            if not role_id or not role_label:
+                                continue
+                            
+                            try:
+                                # Получаем группы роли
+                                role_groups = await system_client.get_role_groups(role_id)
+                                
+                                # Для каждой группы получаем пользователей
+                                for group in role_groups:
+                                    group_id = group.get('id')
+                                    if not group_id:
+                                        continue
+                                    
+                                    try:
+                                        # Получаем пользователей группы
+                                        group_users = await system_client.get_group_users(str(group_id))
+                                        
+                                        # Добавляем роль к каждому пользователю
+                                        for group_user in group_users:
+                                            username = group_user.get('username')
+                                            if username:
+                                                if username not in user_roles_cache:
+                                                    user_roles_cache[username] = []
+                                                if role_label not in user_roles_cache[username]:
+                                                    user_roles_cache[username].append(role_label)
+                                        
+                                    except Exception as e:
+                                        logger.warning(f'Ошибка при получении пользователей группы {group_id}: {e}')
+                                        continue
+                                
+                            except Exception as e:
+                                logger.warning(f'Ошибка при получении групп роли {role_label}: {e}')
+                                continue
+                        
+                        logger.info(f'Загружены роли для {len(user_roles_cache)} пользователей')
+                        
+                        # Обновляем данные в таблицах
+                        update_users_table_with_roles()
+                        update_selected_users_table()
+                        
+                    except Exception as e:
+                        logger.error(f'Ошибка при загрузке ролей пользователей: {e}', exc_info=True)
+                
+                def update_users_table_with_roles():
+                    """Обновляет таблицу всех пользователей с ролями"""
+                    try:
+                        users_data = []
+                        for user in all_users:
+                            user_dict = user.__dict__ if hasattr(user, '__dict__') else {
+                                'login': getattr(user, 'login', None) or getattr(user, 'username', None),
+                                'first_name': getattr(user, 'first_name', ''),
+                                'last_name': getattr(user, 'last_name', ''),
+                                'email': getattr(user, 'email', '')
+                            }
+                            
+                            # Добавляем роли пользователя
+                            user_login = user_dict.get('login')
+                            if user_login and user_login in user_roles_cache:
+                                user_dict['roles'] = ', '.join(user_roles_cache[user_login])
+                            else:
+                                user_dict['roles'] = ''
+                            
+                            users_data.append(user_dict)
+                        
+                        all_users_grid.options['rowData'] = users_data
+                        all_users_grid.update()
+                    except Exception as e:
+                        logger.error(f'Ошибка при обновлении таблицы пользователей: {e}', exc_info=True)
                
                 async def on_row_dblclick(event):
                     row_data = event.args.get('data') if isinstance(event.args, dict) else None
@@ -66,23 +156,25 @@ class TaskAssignmentPage:
                         ui.notify("Could not get row data")
                 
                 # Контейнер с двумя таблицами рядом
-                with ui.row().classes('w-full gap-4'):
+                with ui.row().classes('w-full gap-4 items-stretch'):
                     # Левая колонка - таблица всех пользователей
-                    with ui.column().classes('flex-1'):
+                    with ui.column().classes('flex-1 flex flex-col'):
                         # Заголовок и поле поиска в одной строке
-                        with ui.row().classes('w-full items-center gap-2'):
+                        with ui.row().classes('w-full items-center gap-2 mb-2'):
                             ui.label('Все пользователи:').classes('text-lg font-bold')
                             search_input = ui.input(
                                 placeholder='Введите логин, имя, фамилию или email...',
                                 on_change=lambda e: filter_users(e.value, all_users, all_users_grid)
                             ).classes('w-80')
                         
+                        # Таблица всех пользователей - увеличенная высота, чтобы начиналась там же где select в правой колонке
                         all_users_grid = ui.aggrid({
                             'columnDefs': [
                                 {'headerName': 'Логин', 'field': 'login'},
                                 {'headerName': 'Имя', 'field': 'first_name'},
                                 {'headerName': 'Фамилия', 'field': 'last_name'},
                                 {'headerName': 'Email', 'field': 'email'},
+                                {'headerName': 'Роли', 'field': 'roles', 'sortable': True, 'filter': True, 'width': 200},
                             ],
                             'rowData': [ user.__dict__ for user in all_users],
                             'rowSelection': 'multiple',
@@ -98,25 +190,164 @@ class TaskAssignmentPage:
                                 </div>
                             ''',
                             'suppressNoRowsOverlay': False,  # Показывать заглушку когда нет данных
-                        }).classes('w-full').on('cellDoubleClicked', on_row_dblclick)
+                        }).classes('w-full').style('height: 356px;').on('cellDoubleClicked', on_row_dblclick)
                        
                         user_count_label = ui.label(f'Найдено пользователей: {len(all_users)}').classes('text-xs text-gray-600 mt-2')
                     
                     # Правая колонка - таблица выбранных пользователей
-                    with ui.column().classes('flex-1'):
+                    with ui.column().classes('flex-1 flex flex-col'):
                         # Заголовок и скрытое поле для выравнивания с левой колонкой
                         with ui.row().classes('w-full items-center gap-2'):
                             ui.label('Выбранные пользователи:').classes('text-lg font-bold')
                             # Скрытое поле для выравнивания с полем поиска слева (такая же высота)
                             ui.input().classes('w-80').style('visibility: hidden;')
                         
-                        # Таблица выбранных пользователей
+                        # Добавляем select для выбора роли
+                        role_select_container = ui.column().classes('w-full mb-2')
+                        role_select = None
+                        
+                        async def load_roles_for_selection():
+                            """Загружает роли для выбора"""
+                            nonlocal role_select
+                            try:
+                                system_client = await MayanClient.create_default()
+                                roles = await system_client.get_roles(page=1, page_size=1000)
+                                
+                                role_options = {}
+                                for role in roles:
+                                    role_label = role.get('label')
+                                    if role_label:
+                                        role_options[role_label] = role_label
+                                
+                                if role_options:
+                                    with role_select_container:
+                                        role_select = ui.select(
+                                            options=role_options,
+                                            label='Выбрать пользователей по роли',
+                                            value=None,
+                                            clearable=True,
+                                            with_input=True,
+                                            on_change=lambda: ui.timer(0.1, lambda: handle_role_selection(), once=True)
+                                        ).classes('w-full')
+                                
+                            except Exception as e:
+                                logger.error(f'Ошибка при загрузке ролей: {e}', exc_info=True)
+                        
+                        async def handle_role_selection():
+                            """Обрабатывает выбор роли и добавляет пользователей в выбор через группы"""
+                            nonlocal selected_roles_from_selection
+                            
+                            if not role_select or not role_select.value:
+                                # Если роль очищена, очищаем список выбранных ролей
+                                selected_roles_from_selection = []
+                                # Пересоздаем форму, если она видна, чтобы обновить отображение ролей
+                                if process_form_container.visible:
+                                    ui.timer(0.1, lambda: create_process_form(), once=True)
+                                return
+                            
+                            try:
+                                selected_role_label = role_select.value
+                                ui.notify(f'Загрузка пользователей роли: {selected_role_label}', type='info')
+                                
+                                # Сохраняем выбранную роль
+                                if selected_role_label not in selected_roles_from_selection:
+                                    selected_roles_from_selection.append(selected_role_label)
+                                
+                                # Получаем роль по label и находим её ID
+                                system_client = await MayanClient.create_default()
+                                roles = await system_client.get_roles(page=1, page_size=1000)
+                                
+                                role_id = None
+                                for role in roles:
+                                    if role.get('label') == selected_role_label:
+                                        role_id = role.get('id')
+                                        break
+                                
+                                if not role_id:
+                                    ui.notify(f'Роль {selected_role_label} не найдена', type='error')
+                                    return
+                                
+                                # Получаем группы, состоящие в выбранной роли
+                                role_groups = await system_client.get_role_groups(role_id)
+                                
+                                if not role_groups:
+                                    ui.notify(f'В роли {selected_role_label} нет групп', type='warning')
+                                    return
+                                
+                                # Собираем всех пользователей из всех групп роли
+                                all_role_usernames = set()
+                                
+                                for group in role_groups:
+                                    group_id = group.get('id')
+                                    if not group_id:
+                                        continue
+                                    
+                                    try:
+                                        # Получаем пользователей группы
+                                        group_users = await system_client.get_group_users(str(group_id))
+                                        
+                                        # Добавляем username в множество
+                                        for group_user in group_users:
+                                            username = group_user.get('username')
+                                            if username:
+                                                all_role_usernames.add(username)
+                                        
+                                        logger.info(f'Группа {group.get("name", group_id)} содержит {len(group_users)} пользователей')
+                                    except Exception as e:
+                                        logger.warning(f'Ошибка при получении пользователей группы {group_id}: {e}')
+                                        continue
+                                
+                                if not all_role_usernames:
+                                    ui.notify(f'В группах роли {selected_role_label} не найдено пользователей', type='warning')
+                                    return
+                                
+                                # Находим соответствующих пользователей в all_users по username
+                                added_count = 0
+                                for user in all_users:
+                                    user_login = getattr(user, 'login', None) or getattr(user, 'username', None)
+                                    if user_login and user_login in all_role_usernames:
+                                        # Проверяем, не выбран ли уже этот пользователь
+                                        if not any(selected_user['login'] == user_login for selected_user in selected_users):
+                                            user_dict = user.__dict__ if hasattr(user, '__dict__') else {
+                                                'login': user_login,
+                                                'first_name': getattr(user, 'first_name', ''),
+                                                'last_name': getattr(user, 'last_name', ''),
+                                                'email': getattr(user, 'email', '')
+                                            }
+                                            selected_users.append(user_dict)
+                                            added_count += 1
+                                
+                                # Обновляем таблицу
+                                update_selected_users_table()
+                                ui.timer(0.1, lambda: update_selected_count(), once=True)
+                                
+                                if added_count > 0:
+                                    ui.notify(f'Добавлено {added_count} пользователей из {len(role_groups)} групп роли {selected_role_label}', type='positive')
+                                else:
+                                    ui.notify('Все пользователи этой роли уже выбраны', type='info')
+                                
+                                # Пересоздаем форму, если она видна, чтобы обновить отображение ролей
+                                if process_form_container.visible:
+                                    ui.timer(0.1, lambda: create_process_form(), once=True)
+                                
+                            except Exception as e:
+                                logger.error(f'Ошибка при выборе роли: {e}', exc_info=True)
+                                ui.notify(f'Ошибка при загрузке пользователей роли: {str(e)}', type='error')
+                        
+                        # Загружаем роли при инициализации
+                        ui.timer(0.1, lambda: load_roles_for_selection(), once=True)
+                        
+                        # Загружаем роли пользователей в фоне
+                        ui.timer(0.5, lambda: load_user_roles(), once=True)
+                        
+                        # Таблица выбранных пользователей - высота вычисляется автоматически через calc()
                         selected_users_grid = ui.aggrid({
                             'columnDefs': [
                                 {'headerName': 'Логин', 'field': 'login'},
                                 {'headerName': 'Имя', 'field': 'first_name'},
                                 {'headerName': 'Фамилия', 'field': 'last_name'},
                                 {'headerName': 'Email', 'field': 'email'},
+                                {'headerName': 'Роли', 'field': 'roles', 'sortable': True, 'filter': True, 'width': 200},
                             ],
                             'rowData': [],
                             'rowSelection': 'multiple',
@@ -131,15 +362,16 @@ class TaskAssignmentPage:
                                     <span style="font-size: 14px; color: #999;">Выберите пользователей из верхнего списка чтобы назначить им задачу</span>
                                 </div>
                             ''',
-                        }).classes('w-full').style('margin-bottom: 0;')
+                        }).classes('w-full').style('height: calc(356px - 72px); margin-bottom: 0;')
                         
-                        # Счетчик выбранных пользователей
-                        selected_count_label = ui.label('Выбрано пользователей: 0').classes('text-xs text-gray-600').style('margin-top: 4px; margin-bottom: 0;')
-                        
-                        # Кнопки для работы с выбранными пользователями (выровнены вправо)
-                        with ui.row().classes('w-full justify-end').style('margin-top: 0;'):
-                            ui.button('Очистить выбор', on_click=lambda: clear_selection()).classes('mr-2 text-xs px-2 py-1 h-7')
-                            ui.button('Удалить выбранного', on_click=lambda: show_selected_rows_selected_users()).classes('text-xs px-2 py-1 h-7')
+                        # Счетчик выбранных пользователей и кнопки в одной строке
+                        with ui.row().classes('w-full items-center justify-between').style('margin-top: 4px;'):
+                            selected_count_label = ui.label('Выбрано пользователей: 0').classes('text-xs text-gray-600')
+                            
+                            # Кнопки для работы с выбранными пользователями
+                            with ui.row().classes('gap-2'):
+                                ui.button('Очистить выбор', on_click=lambda: clear_selection()).classes('text-xs px-2 py-1 h-7')
+                                ui.button('Удалить выбранного', on_click=lambda: show_selected_rows_selected_users()).classes('text-xs px-2 py-1 h-7')
                 
                 # # Контейнер для выбора типа процесса
                 # with ui.column().classes('w-full mt-4'):
@@ -246,6 +478,14 @@ class TaskAssignmentPage:
                 # Функция для обновления таблицы выбранных пользователей
                 def update_selected_users_table():
                     print(f"Обновление таблицы. Выбранных пользователей: {len(selected_users)}")
+                    # Добавляем роли к выбранным пользователям
+                    for user in selected_users:
+                        user_login = user.get('login')
+                        if user_login and user_login in user_roles_cache:
+                            user['roles'] = ', '.join(user_roles_cache[user_login])
+                        elif 'roles' not in user:
+                            user['roles'] = ''
+                    
                     selected_users_grid.options['rowData'] = selected_users
                     selected_users_grid.update()
                 
@@ -266,6 +506,7 @@ class TaskAssignmentPage:
                 # Функция для очистки выбора
                 def clear_selection():
                     selected_users.clear()
+                    selected_roles_from_selection.clear()
                     update_selected_users_table()
                     ui.timer(0.1, lambda: update_selected_count(), once=True)
                     ui.notify('Выбор очищен', type='info')
@@ -273,13 +514,31 @@ class TaskAssignmentPage:
                 async def filter_users(query: str, users: list, grid_component, count_label=user_count_label):
                     if query:
                         filtered_users = await users_filter(users, query)
-                        grid_component.options['rowData'] = filtered_users
+                        # Добавляем роли к отфильтрованным пользователям
+                        users_data = []
+                        for user in filtered_users:
+                            user_dict = user.__dict__ if hasattr(user, '__dict__') else {
+                                'login': getattr(user, 'login', None) or getattr(user, 'username', None),
+                                'first_name': getattr(user, 'first_name', ''),
+                                'last_name': getattr(user, 'last_name', ''),
+                                'email': getattr(user, 'email', '')
+                            }
+                            
+                            # Добавляем роли пользователя
+                            user_login = user_dict.get('login')
+                            if user_login and user_login in user_roles_cache:
+                                user_dict['roles'] = ', '.join(user_roles_cache[user_login])
+                            else:
+                                user_dict['roles'] = ''
+                            
+                            users_data.append(user_dict)
+                        
+                        grid_component.options['rowData'] = users_data
                         grid_component.update()
                         count_label.text = f'Найдено пользователей: {len(filtered_users)}'
                     else:
                         # Если поиск пустой, показываем всех пользователей
-                        grid_component.options['rowData'] = [user.__dict__ for user in users]
-                        grid_component.update()
+                        update_users_table_with_roles()
                         count_label.text = f'Найдено пользователей: {len(users)}'
                 
                 def clear_filter(users: list, grid_component, search_input_component, count_label=user_count_label):
@@ -368,8 +627,19 @@ class TaskAssignmentPage:
                                 roles_select_container = ui.column().classes('flex-[4]')
                                 roles_select = None
                                 
-                                # Загружаем роли, если это процесс с документами
-                                if process_template_select.value and ('DocumentSigningProcess' in process_template_select.value or 'DocumentReviewProcess' in process_template_select.value or 'Ознаком' in process_template_select.value):
+                                # Проверяем, есть ли уже выбранные роли при выборе пользователей
+                                # Если роли выбраны вверху, не показываем select для ролей в форме
+                                if selected_roles_from_selection:
+                                    # Роли уже выбраны вверху, показываем информацию о выбранных ролях
+                                    with roles_select_container:
+                                        ui.label(f'Роли для доступа (выбраны при выборе пользователей):').classes('text-sm font-semibold mb-1')
+                                        roles_text = ', '.join(selected_roles_from_selection)
+                                        ui.label(roles_text).classes('text-sm text-gray-600 mb-2')
+                                    # Используем выбранные роли
+                                    roles_select = None
+                                    logger.info(f'Используются роли, выбранные при выборе пользователей: {selected_roles_from_selection}')
+                                # Загружаем роли, если это процесс с документами и роли не выбраны вверху
+                                elif process_template_select.value and ('DocumentSigningProcess' in process_template_select.value or 'DocumentReviewProcess' in process_template_select.value or 'Ознаком' in process_template_select.value):
                                     try:
                                         # Используем системный клиент для получения ролей
                                         system_client = await MayanClient.create_default()
@@ -893,7 +1163,8 @@ class TaskAssignmentPage:
                                     start_button,
                                     document_id_input.value if document_id_input else '',
                                     document_name_input.value if document_name_input else '',
-                                    roles_select.value if roles_select else []
+                                    # Используем роли из выбранных вверху, если они есть, иначе из select
+                                    selected_roles_from_selection if selected_roles_from_selection else (roles_select.value if roles_select else [])
                                 ),
                                 icon='play_arrow'
                             ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
@@ -1105,4 +1376,15 @@ class TaskAssignmentPage:
                 
                 # Загружаем шаблоны процессов при инициализации страницы с задержкой
                 ui.timer(2.0, lambda: load_process_templates(), once=True)
+
+                # Добавляем CSS переменную для высоты таблиц
+                ui.add_head_html('''
+                    <style>
+                        :root {
+                            --left-table-height: 356px;
+                            --role-select-height: 56px;
+                            --right-table-height: calc(var(--left-table-height) - var(--role-select-height));
+                        }
+                    </style>
+                ''')
 

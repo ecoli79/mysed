@@ -170,9 +170,10 @@ def create_task_card(task):
                             on_click=lambda t=task: complete_review_task(t)
                         ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                 
-                with ui.column().classes('items-end'):
-                    ui.label(f'ID задачи: {task.id}').classes('text-xs text-gray-500 font-mono')
-                    ui.label(f'ID процесса: {task.process_instance_id}').classes('text-xs text-gray-500 font-mono')
+                # Блок с ID удален полностью, так как больше не содержит содержимого
+                # with ui.column().classes('items-end'):
+                #     ui.label(f'ID задачи: {task.id}').classes('text-xs text-gray-500 font-mono')
+                #     ui.label(f'ID процесса: {task.process_instance_id}').classes('text-xs text-gray-500 font-mono')
 
 def create_documents_section():
     """Создает секцию с документами из Mayan EDMS"""
@@ -666,8 +667,8 @@ def complete_review_task(task):
         # Информация о задаче
         with ui.card().classes('p-4 bg-gray-50 mb-4'):
             ui.label(f'Задача: {task.name}').classes('text-lg font-semibold')
-            ui.label(f'ID задачи: {task.id}').classes('text-sm text-gray-600')
-            ui.label(f'ID процесса: {task.process_instance_id}').classes('text-sm text-gray-600')
+            # ui.label(f'ID задачи: {task.id}').classes('text-sm text-gray-600')  # УБРАНО
+            # ui.label(f'ID процесса: {task.process_instance_id}').classes('text-sm text-gray-600')  # УБРАНО
         
         # Форма завершения
         with ui.column().classes('w-full'):

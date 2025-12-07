@@ -6,6 +6,7 @@ import logging
 from typing import Optional, List, Dict, Any
 import json
 from components.gantt_chart import create_gantt_chart, parse_task_deadline, prepare_tasks_for_gantt
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -196,9 +197,20 @@ def content():
                 ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
         # Создаем структуру: диаграмма Ганта сверху на всю ширину, под ней процессы
-        # Контейнер для диаграммы Ганта (на всю ширину)
-        gantt_container = ui.column().classes('w-full mb-4')
-        
+        # Контейнер для диаграммы Ганта (на всю ширину) - обернут в expansion для сворачивания
+        with ui.expansion('Графика', icon='timeline', value=False).classes('w-full mb-4') as gantt_expansion:
+            gantt_container = ui.column().classes('w-full')
+            gantt_container.set_visibility(False)  # Скрываем по умолчанию
+            
+            # Обработчик открытия/закрытия expansion
+            def on_gantt_expansion_change(e):
+                if e.value:
+                    gantt_container.set_visibility(True)
+                else:
+                    gantt_container.set_visibility(False)
+            
+            gantt_expansion.on('update:modelValue', on_gantt_expansion_change)
+
         # Контейнер для процессов (занимает всю ширину)
         with ui.column().classes('w-full'):
             processes_container = ui.column().classes('w-full')
@@ -325,6 +337,9 @@ async def load_my_processes(processes_container, completed_processes_container, 
                 process_instance_id_field='process_instance_id'
             )
             
+            # Показываем контейнер после создания диаграммы
+            gantt_container.set_visibility(True)
+            
             # Добавляем отладочную информацию (можно убрать после проверки)
             if not tasks_for_gantt and active_processes:
                 logger.info(f"Диаграмма Ганта: найдено {len(active_processes)} процессов, но ни у одного нет дедлайна")
@@ -371,6 +386,8 @@ async def load_my_processes(processes_container, completed_processes_container, 
 def create_process_card(process, is_active=True):
     """Создает карточку процесса с расширенной информацией"""
     from utils.date_utils import format_date_russian
+    from components.gantt_chart import parse_task_deadline
+    from datetime import datetime
     global _selected_process_id, _process_cards
     
     process_id = process.get('id', 'Неизвестно')
@@ -434,12 +451,59 @@ def create_process_card(process, is_active=True):
         task_description = task_description[:100] + '...'
     
     # Получаем дату дедлайна и форматируем её
-    due_date = variables.get('dueDate', '')
-    if due_date:
-        due_date = format_date_russian(due_date)
+    due_date_raw = variables.get('dueDate', '')
+    due_date_formatted = None
+    due_date_diff_days = None
+    
+    if due_date_raw:
+        # Обрабатываем разные форматы переменных Camunda
+        if isinstance(due_date_raw, dict):
+            due_date_raw = due_date_raw.get('value', '')
+        
+        if due_date_raw:
+            try:
+                due_date_formatted = format_date_russian(due_date_raw)
+                deadline = parse_task_deadline(due_date_raw)
+                if deadline:
+                    now = datetime.now()
+                    now = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                    deadline = deadline.replace(hour=0, minute=0, second=0, microsecond=0)
+                    due_date_diff_days = (deadline - now).days
+            except Exception as e:
+                logger.warning(f"Не удалось обработать дату дедлайна для процесса {process_id}: {e}")
+
+    # Извлекаем documentId из переменных процесса
+    document_id = None
+    document_id_raw = variables.get('documentId') or variables.get('mayanDocumentId')
+    if document_id_raw:
+        # Обрабатываем разные форматы переменных Camunda
+        if isinstance(document_id_raw, dict) and 'value' in document_id_raw:
+            document_id = str(document_id_raw['value']).strip() if document_id_raw['value'] else None
+        elif isinstance(document_id_raw, str):
+            document_id = document_id_raw.strip() if document_id_raw else None
+        else:
+            document_id = str(document_id_raw).strip() if document_id_raw else None
+    
+    # Определяем фон карточки в зависимости от дедлайна (только для активных процессов)
+    card_bg_class = ''
+    if is_active and due_date_diff_days is not None:
+        if due_date_diff_days < 0:
+            # Дедлайн прошел - красный фон для всей карточки
+            card_bg_class = 'bg-red-50'
+        elif due_date_diff_days <= 2:
+            # Осталось 2 дня или меньше - оранжевый фон для всей карточки
+            card_bg_class = 'bg-orange-50'
     
     # Создаем карточку с условными стилями и data-атрибутами
-    card = ui.card().classes(f'mb-3 p-4 border-l-4 {status_color} w-full max-w-full {bg_class} {border_style} {shadow_class}')
+    # Добавляем card_bg_class к существующим классам, но только если процесс не выбран
+    if is_selected:
+        # Если процесс выбран, используем синий фон (приоритет выше)
+        final_bg_class = bg_class
+    else:
+        # Если не выбран, применяем цвет фона в зависимости от дедлайна
+        final_bg_class = card_bg_class if card_bg_class else bg_class
+    
+    card = ui.card().classes(f'mb-3 p-4 border-l-4 {status_color} w-full max-w-full {final_bg_class} {border_style} {shadow_class}')
     # Добавляем data-атрибуты для поиска через JavaScript
     card.props(f'data-process-id="{process_id}"')
     
@@ -515,14 +579,69 @@ def create_process_card(process, is_active=True):
                         with ui.row().classes('w-full items-center gap-2 my-2 mb-2'):
                             ui.linear_progress(value=progress_percent / 100, show_value=False).classes('flex-1 h-4 min-w-0')
                             ui.label(f'{completed}/{total} ({progress_percent}%)').classes('text-xs text-gray-600 whitespace-nowrap')
+                    
+                    # Список пользователей и их статус
+                    if progress_info.get('user_status'):
+                        with ui.expansion('Статус пользователей', icon='people').classes('w-full mt-2 mb-2'):
+                            for user_status in progress_info.get('user_status', []):
+                                status_color = 'text-green-600' if user_status['completed'] else 'text-orange-600'
+                                status_icon = 'check_circle' if user_status['completed'] else 'schedule'
+                                
+                                # Получаем данные пользователя вместо логина
+                                user_login = user_status['user']
+                                user_display_name = get_user_display_name(user_login)
+                                
+                                with ui.row().classes('w-full items-center gap-2 mb-1'):
+                                    ui.icon(status_icon).classes(f'{status_color} text-sm')
+                                    ui.label(f'{user_display_name}').classes(f'text-sm {status_color} font-medium')
+                                    ui.label(f'({user_status["status"]})').classes('text-xs text-gray-500')
                 
                 # Описание задачи (если есть)
                 if task_description:
                     ui.label(f'Описание: {task_description}').classes('text-sm text-gray-600 italic break-words mb-1')
                 
-                # Дедлайн (если есть) - теперь отформатирован
-                if due_date:
-                    ui.label(f'Срок исполнения: {due_date}').classes('text-sm text-orange-600 mb-1')
+                # Дедлайн (если есть) - с раскраской в зависимости от количества дней
+                if due_date_formatted:
+                    # Определяем цвет в зависимости от количества дней до дедлайна
+                    if due_date_diff_days is not None:
+                        if due_date_diff_days < 0:
+                            # Дедлайн прошел - красный
+                            bg_color = '#c62828'
+                            text_color = '#ffffff'
+                        elif due_date_diff_days <= 2:
+                            # Осталось 2 дня или меньше - оранжевый
+                            bg_color = '#ff9800'
+                            text_color = '#ffffff'
+                        else:
+                            # Осталось больше 2 дней - зеленый
+                            bg_color = '#e8f5e9'
+                            text_color = '#2e7d32'
+                        
+                        with ui.row().classes('items-center gap-2 mb-1'):
+                            ui.label('Срок исполнения:').classes('text-sm font-medium')
+                            ui.label(due_date_formatted).classes('text-sm font-semibold px-2 py-1 rounded').style(f'background-color: {bg_color}; color: {text_color};')
+                    else:
+                        # Если не удалось вычислить разницу дней, показываем без раскраски
+                        ui.label(f'Срок исполнения: {due_date_formatted}').classes('text-sm text-orange-600 mb-1')
+
+                # Ссылка на документ (если есть)
+                if document_id:
+                    async def open_document():
+                        try:
+                            from services.mayan_connector import MayanClient
+                            from components.document_viewer import show_document_viewer
+                            
+                            mayan_client = await MayanClient.create_with_session_user()
+                            await show_document_viewer(str(document_id), mayan_client=mayan_client)
+                        except Exception as e:
+                            logger.error(f"Ошибка при открытии документа {document_id}: {e}", exc_info=True)
+                            ui.notify(f'Ошибка при открытии документа: {str(e)}', type='error')
+                    
+                    ui.button(
+                        'Открыть документ',
+                        icon='description',
+                        on_click=open_document
+                    ).classes('bg-green-500 text-white whitespace-nowrap text-xs px-2 py-1 h-7 mt-1')
             
             with ui.column().classes('items-end flex-shrink-0'):
                 if is_active:

@@ -238,25 +238,22 @@ def create_gantt_chart(
                     # Ширина блока 190px, поэтому нужно учесть половину ширины
                     block_half_width = 95  # половина ширины блока (190px / 2)
                     
-                    if delta >= 0:
-                        # Для будущих задач: правый край блока должен быть слева от красной линии
-                        # Позиция центра блока = центр строки - offset_px - block_half_width
-                        x_pos_offset = offset_px - block_half_width
-                        bg, border = '#e8f5e8', '#4caf50'  # Зеленый для задач с deadline в будущем
-                    else:
-                        # Для просроченных задач: левый край блока должен быть справа от красной линии
-                        # Позиция центра блока = центр строки + offset_px + block_half_width
+                    # Определяем цвет блока в зависимости от количества дней до deadline
+                    if delta < 0:
+                        # Дедлайн прошел - красный
                         x_pos_offset = offset_px + block_half_width
-                        bg, border = '#ffe8e8', '#f44336'  # Красный для просроченных задач
+                        bg, border, text_color = '#ffebee', '#c62828', '#c62828'
+                    elif delta <= 2:
+                        # Осталось 2 дня или меньше - оранжевый
+                        x_pos_offset = offset_px - block_half_width
+                        bg, border, text_color = '#ff9800', '#e65100', '#ffffff'
+                    else:
+                        # Осталось больше 2 дней - зеленый
+                        x_pos_offset = offset_px - block_half_width
+                        bg, border, text_color = '#e8f5e9', '#2e7d32', '#2e7d32'
                     
                     # Позиция блока = центр строки (50%) + смещение
                     x_pos_percent = 50
-                    
-                    # Цвет блока в зависимости от того, прошел ли deadline
-                    if delta >= 0:
-                        bg, border = '#e8f5e8', '#4caf50'  # Зеленый для задач с deadline в будущем
-                    else:
-                        bg, border = '#ffe8e8', '#f44336'  # Красный для просроченных задач
                     
                     # Обрезаем имя как в примере, но немного длиннее для трех строк
                     # Увеличиваем длину имени пропорционально увеличению блока
@@ -295,9 +292,9 @@ def create_gantt_chart(
                                 onmouseover="this.style.opacity='0.9';"
                                 onmouseout="this.style.opacity='1';"
                             >
-                                <div style="font-weight: bold; font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; width: 100%; white-space: nowrap; margin-bottom: 4px; padding-top: 2px;">{display_name}</div>
-                                <div style="font-size: 11px; color: #555; line-height: 1.3; margin-bottom: 3px; white-space: nowrap;">{date_str}</div>
-                                <div style="font-size: 11px; color: #777; font-weight: 600; line-height: 1.3; white-space: nowrap;">{days_text}</div>
+                                <div style="font-weight: bold; font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; width: 100%; white-space: nowrap; margin-bottom: 4px; padding-top: 2px; color: {text_color};">{display_name}</div>
+                                <div style="font-size: 11px; color: {text_color}; line-height: 1.3; margin-bottom: 3px; white-space: nowrap; opacity: 0.9;">{date_str}</div>
+                                <div style="font-size: 11px; color: {text_color}; font-weight: 600; line-height: 1.3; white-space: nowrap; opacity: 0.9;">{days_text}</div>
                             </div>
                         ''')
                     else:
@@ -325,9 +322,9 @@ def create_gantt_chart(
                                     z-index: 10;
                                 "
                             >
-                                <div style="font-weight: bold; font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; width: 100%; white-space: nowrap; margin-bottom: 4px; padding-top: 2px;">{display_name}</div>
-                                <div style="font-size: 11px; color: #555; line-height: 1.3; margin-bottom: 3px; white-space: nowrap;">{date_str}</div>
-                                <div style="font-size: 11px; color: #777; font-weight: 600; line-height: 1.3; white-space: nowrap;">{days_text}</div>
+                                <div style="font-weight: bold; font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; width: 100%; white-space: nowrap; margin-bottom: 4px; padding-top: 2px; color: {text_color};">{display_name}</div>
+                                <div style="font-size: 11px; color: {text_color}; line-height: 1.3; margin-bottom: 3px; white-space: nowrap; opacity: 0.9;">{date_str}</div>
+                                <div style="font-size: 11px; color: {text_color}; font-weight: 600; line-height: 1.3; white-space: nowrap; opacity: 0.9;">{days_text}</div>
                             </div>
                         ''')
         

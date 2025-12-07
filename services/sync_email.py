@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 # Добавляем путь к проекту
-project_path = Path(__file__).parent
+project_path = Path(__file__).parent.parent
 sys.path.insert(0, str(project_path))
 
 import logging
