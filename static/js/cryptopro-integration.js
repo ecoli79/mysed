@@ -548,26 +548,35 @@ window.nicegui_handle_event = async function(event_name, event_data) {
                         
                         // Эффект при наведении
                         card.addEventListener('mouseenter', function() {
-                            this.style.borderColor = '#3b82f6';
-                            this.style.boxShadow = '0 1px 2px -1px rgba(0, 0, 0, 0.1)';
-                            this.style.transform = 'translateY(-1px)';
+                            // Не меняем стили, если карточка уже выбрана
+                            if (!this.hasAttribute('data-selected')) {
+                                this.style.borderColor = '#3b82f6';
+                                this.style.boxShadow = '0 1px 2px -1px rgba(0, 0, 0, 0.1)';
+                                this.style.transform = 'translateY(-1px)';
+                            }
                         });
                         
                         card.addEventListener('mouseleave', function() {
-                            this.style.borderColor = '#e5e7eb';
-                            this.style.boxShadow = 'none';
-                            this.style.transform = 'translateY(0)';
+                            // Не сбрасываем стили, если карточка выбрана
+                            if (!this.hasAttribute('data-selected')) {
+                                this.style.borderColor = '#e5e7eb';
+                                this.style.boxShadow = 'none';
+                                this.style.transform = 'translateY(0)';
+                            }
                         });
                         
                         // Обработчик клика
                         card.addEventListener('click', function() {
                             // Убираем выделение с других карточек
                             cardsContainer.querySelectorAll('.certificate-card').forEach(c => {
+                                c.removeAttribute('data-selected');
                                 c.style.borderColor = '#e5e7eb';
+                                c.style.borderWidth = '1px';
                                 c.style.backgroundColor = '#ffffff';
                             });
                             
                             // Выделяем выбранную карточку синей рамкой
+                            this.setAttribute('data-selected', 'true');
                             this.style.borderColor = '#3b82f6';
                             this.style.borderWidth = '2px';
                             this.style.backgroundColor = '#eff6ff';

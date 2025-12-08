@@ -530,8 +530,8 @@ async def create_task_card_with_progress(task):
                         # Определяем цвет в зависимости от количества дней
                         if due_date_diff_days < 0:
                             # Дедлайн прошел - красный
-                            bg_color = '#ffebee'
-                            text_color = '#c62828'
+                            bg_color = '#c62828'
+                            text_color = '#ffffff'
                         elif due_date_diff_days <= 2:
                             # Осталось 2 дня или меньше - оранжевый
                             bg_color = '#ff9800'
@@ -1135,7 +1135,9 @@ def create_completed_task_card(task):
                 
                 with ui.column().classes('items-end'):
                     ui.label(f'Статус: Завершена').classes('text-xs text-green-600')
-                    ui.label(f'Multi-user: {task.total_users} польз.').classes('text-xs text-blue-600')
+                    # Показываем информацию о multi-user только если это группированная задача
+                    if hasattr(task, 'total_users'):
+                        ui.label(f'Multi-user: {task.total_users} польз.').classes('text-xs text-blue-600')
 
 
 async def show_completed_task_details_in_tab(task):
@@ -1982,8 +1984,15 @@ async def complete_signing_task_with_result(task, document_id, document_name, co
             ui.notify('Результат подписания не найден', type='error')
             return
         
-        signed = signature_result.get('action') == 'signed_document_created'
-        signature_data = signature_result.get('signed_document', '')
+        # Проверяем, что подписание завершено (есть signature или action == 'signature_completed')
+        signed = (
+            signature_result.get('action') == 'signature_completed' or 
+            signature_result.get('action') == 'signed_document_created' or
+            bool(signature_result.get('signature'))
+        )
+        
+        # Получаем данные подписи (может быть 'signature' или 'signed_document')
+        signature_data = signature_result.get('signature') or signature_result.get('signed_document', '')
         certificate_info = signature_result.get('certificate_info', {})
         
         await submit_signing_task_completion(

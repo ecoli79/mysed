@@ -559,7 +559,8 @@ async def handle_cryptopro_event(request: Request):
                 'signature': signature,
                 'certificate_info': certificate_info,
                 'original_data': original_data,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'action': 'signature_completed'  # Добавляем action
             }
             
             
