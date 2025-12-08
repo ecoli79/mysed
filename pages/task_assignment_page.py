@@ -164,7 +164,7 @@ class TaskAssignmentPage:
                             ui.label('Все пользователи:').classes('text-lg font-bold')
                             search_input = ui.input(
                                 placeholder='Введите логин, имя, фамилию или email...',
-                                on_change=lambda e: filter_users(e.value, all_users, all_users_grid)
+                                on_change=lambda e: ui.timer(0.1, lambda: filter_users(e.value, all_users, all_users_grid), once=True)
                             ).classes('w-80')
                         
                         # Таблица всех пользователей - увеличенная высота, чтобы начиналась там же где select в правой колонке
@@ -514,16 +514,9 @@ class TaskAssignmentPage:
                 async def filter_users(query: str, users: list, grid_component, count_label=user_count_label):
                     if query:
                         filtered_users = await users_filter(users, query)
-                        # Добавляем роли к отфильтрованным пользователям
+                        # users_filter уже возвращает словари, добавляем роли
                         users_data = []
-                        for user in filtered_users:
-                            user_dict = user.__dict__ if hasattr(user, '__dict__') else {
-                                'login': getattr(user, 'login', None) or getattr(user, 'username', None),
-                                'first_name': getattr(user, 'first_name', ''),
-                                'last_name': getattr(user, 'last_name', ''),
-                                'email': getattr(user, 'email', '')
-                            }
-                            
+                        for user_dict in filtered_users:
                             # Добавляем роли пользователя
                             user_login = user_dict.get('login')
                             if user_login and user_login in user_roles_cache:

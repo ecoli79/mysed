@@ -1127,12 +1127,6 @@ def create_completed_task_card(task):
                             on_click=lambda t=task: show_details(t)
                         ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                         
-                        # ui.button(
-                        #     'Просмотр результатов',
-                        #     icon='folder_open',
-                        #     on_click=lambda t=task: show_task_results(t)
-                        # ).classes('bg-green-500 text-white text-xs')
-                
                 with ui.column().classes('items-end'):
                     ui.label(f'Статус: Завершена').classes('text-xs text-green-600')
                     # Показываем информацию о multi-user только если это группированная задача

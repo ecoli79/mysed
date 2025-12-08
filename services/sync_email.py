@@ -32,16 +32,26 @@ async def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None, i
         dry_run: Если True, только проверяет подключение, не обрабатывает письма
         max_emails: Максимальное количество писем для обработки за один запуск
         include_read: Если True, обрабатывает все письма (включая прочитанные), 
-                     иначе только непрочитанные
+                     иначе только непрочитанные. При обработке прочитанных писем
+                     проверяет, какие вложения уже обработаны, и пропускает их.
     
     Returns:
-        Словарь с результатами синхронизации
+        Словарь с результатами синхронизации:
+        {
+            'success': bool,
+            'checked': int,              # Количество проверенных писем
+            'processed': int,            # Количество обработанных писем
+            'attachments_saved': int,   # Количество сохраненных вложений
+            'skipped_attachments': int,  # Количество пропущенных вложений (уже обработаны)
+            'errors': List[str]          # Список ошибок
+        }
     """
     result = {
         'success': False,
         'checked': 0,
         'processed': 0,
         'attachments_saved': 0,
+        'skipped_attachments': 0,
         'errors': []
     }
     
@@ -49,6 +59,10 @@ async def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None, i
         logger.info("=" * 60)
         logger.info("Начало синхронизации входящих писем")
         logger.info(f"Режим: {'DRY RUN (тестовый)' if dry_run else 'PRODUCTION'}")
+        if include_read:
+            logger.info("Режим обработки: ВСЕ письма (включая прочитанные)")
+        else:
+            logger.info("Режим обработки: ТОЛЬКО непрочитанные письма")
         logger.info("=" * 60)
         
         # Проверяем конфигурацию
@@ -129,9 +143,11 @@ async def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None, i
         # Обрабатываем каждое письмо
         for email in emails:
             try:
+                logger.info("-" * 60)
                 logger.info(f"Обрабатываем письмо: {email.message_id}")
                 logger.info(f"  От: {email.from_address}")
                 logger.info(f"  Тема: {email.subject}")
+                logger.info(f"  Дата получения: {email.received_date}")
                 
                 # Проверяем отправителя
                 # Извлекаем чистый email для логирования
@@ -157,29 +173,70 @@ async def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None, i
                     f"✓ Отправитель разрешен: {email.from_address} "
                     f"(извлечен: {clean_email}), обрабатываем письмо..."
                 )
-                logger.info(f"  Вложений: {len(email.attachments)}")
+                logger.info(f"  Вложений в письме: {len(email.attachments)}")
+                
+                # Если включена обработка прочитанных писем, проверяем статус обработки
+                processed_filenames = None
+                if include_read:
+                    logger.info(f"  Проверяем статус обработки письма {email.message_id}...")
+                    email_status = await email_processor.check_email_processed(email.message_id)
+                    processed_filenames = email_status['processed_attachments']
+                    
+                    if email_status['total_found'] > 0:
+                        logger.info(
+                            f"  Письмо уже частично обработано. "
+                            f"Найдено документов: {email_status['total_found']}, "
+                            f"обработанных вложений: {len(processed_filenames)}"
+                        )
+                        if processed_filenames:
+                            logger.info(f"  Уже обработанные вложения: {', '.join(processed_filenames)}")
+                        
+                        # Если все вложения уже обработаны, пропускаем письмо
+                        if len(processed_filenames) >= len(email.attachments):
+                            logger.info(
+                                f"  ✓ Все вложения из письма {email.message_id} уже обработаны. Пропускаем."
+                            )
+                            result['skipped_attachments'] += len(email.attachments)
+                            continue
+                    else:
+                        logger.info(f"  Письмо {email.message_id} еще не обрабатывалось")
                 
                 # Обрабатываем письмо (сохраняем вложения)
-                process_result = await email_processor.process_email(email)
+                # Передаем список обработанных файлов для пропуска дубликатов
+                process_result = await email_processor.process_email(
+                    email, 
+                    check_duplicates=True,
+                    processed_filenames=processed_filenames
+                )
                 
                 if process_result['success']:
                     result['processed'] += 1
                     result['attachments_saved'] += len(process_result['processed_attachments'])
+                    result['skipped_attachments'] += process_result.get('skipped', 0)
                     
                     logger.info(
                         f"✓ Письмо обработано успешно. "
-                        f"Сохранено вложений: {len(process_result['processed_attachments'])}"
+                        f"Сохранено новых вложений: {len(process_result['processed_attachments'])}, "
+                        f"пропущено (уже обработано): {process_result.get('skipped', 0)}"
                     )
                     if process_result.get('registered_numbers'):
                         logger.info(f"  Присвоены номера: {', '.join(process_result['registered_numbers'])}")
                     
-                    # Помечаем письмо как прочитанное (только если это непрочитанное письмо)
+                    # Помечаем письмо как прочитанное только если это непрочитанное письмо
+                    # и все вложения успешно обработаны
                     if not include_read:
-                        await email_client.mark_as_read(email.message_id)
+                        # Помечаем как прочитанное только если хотя бы одно вложение обработано
+                        # или если письмо не содержит вложений
+                        if len(process_result['processed_attachments']) > 0 or len(email.attachments) == 0:
+                            await email_client.mark_as_read(email.message_id)
                 else:
                     error_msg = f"Ошибка обработки письма: {', '.join(process_result['errors'])}"
                     logger.error(error_msg)
                     result['errors'].append(error_msg)
+                    
+                    # Если письмо не содержит вложений, все равно помечаем как прочитанное
+                    if not include_read and len(email.attachments) == 0:
+                        await email_client.mark_as_read(email.message_id)
                     
             except Exception as e:
                 error_msg = f"Ошибка при обработке письма {email.message_id}: {str(e)}"
@@ -192,9 +249,12 @@ async def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None, i
         logger.info("Синхронизация завершена")
         logger.info(f"Проверено писем: {result['checked']}")
         logger.info(f"Обработано писем: {result['processed']}")
-        logger.info(f"Сохранено вложений: {result['attachments_saved']}")
+        logger.info(f"Сохранено новых вложений: {result['attachments_saved']}")
+        logger.info(f"Пропущено вложений (уже обработаны): {result['skipped_attachments']}")
         if result['errors']:
             logger.warning(f"Ошибок: {len(result['errors'])}")
+            for error in result['errors']:
+                logger.warning(f"  - {error}")
         logger.info("=" * 60)
         
     except Exception as e:
@@ -202,6 +262,14 @@ async def sync_emails(dry_run: bool = False, max_emails: Optional[int] = None, i
         logger.error(error_msg, exc_info=True)
         result['errors'].append(error_msg)
         result['success'] = False
+    
+    finally:
+        # Закрываем соединения
+        try:
+            if 'email_client' in locals():
+                await email_client.disconnect()
+        except Exception as e:
+            logger.warning(f"Ошибка при закрытии соединения с почтовым сервером: {e}")
     
     return result
 
@@ -223,7 +291,8 @@ def main():
     parser.add_argument(
         '--include-read',
         action='store_true',
-        help='Обрабатывать все письма, включая прочитанные'
+        help='Обрабатывать все письма, включая прочитанные. '
+             'При этом проверяет, какие вложения уже обработаны и пропускает их.'
     )
     
     args = parser.parse_args()
