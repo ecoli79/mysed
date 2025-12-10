@@ -1821,10 +1821,96 @@ async def load_documents_by_cabinets():
                         with content_container:
                             loading_label = ui.label('Загрузка...').classes('text-sm text-gray-500')
                         
-                        # Получаем документы кабинета через специальный endpoint
-                        logger.info(f"Загружаем документы кабинета {cabinet_id} ({cabinet_label})...")
-                        documents = await client.get_cabinet_documents(cabinet_id, page=1, page_size=100)
-                        logger.info(f"Получено документов для кабинета {cabinet_id}: {len(documents)}")
+                        # Переменные для пагинации
+                        current_page = 1
+                        page_size = 10
+                        total_count = 0
+                        documents_container = None
+                        pagination_container = None
+                        
+                        # Функция для загрузки документов с пагинацией
+                        async def load_documents_page(page: int, size: int):
+                            """Загружает страницу документов"""
+                            nonlocal current_page, page_size, total_count
+                            
+                            try:
+                                # Показываем индикатор загрузки
+                                if documents_container:
+                                    documents_container.clear()
+                                    with documents_container:
+                                        loading_label = ui.label('Загрузка...').classes('text-sm text-gray-500')
+                                
+                                # Получаем документы кабинета
+                                logger.info(f"Загружаем документы кабинета {cabinet_id} ({cabinet_label}): страница {page}, размер {size}...")
+                                documents, total_count = await client.get_cabinet_documents(cabinet_id, page=page, page_size=size)
+                                logger.info(f"Получено документов для кабинета {cabinet_id}: {len(documents)} из {total_count}")
+                                
+                                current_page = page
+                                page_size = size
+                                
+                                # Обновляем контейнер документов
+                                if documents_container:
+                                    documents_container.clear()
+                                    
+                                    if documents:
+                                        with documents_container:
+                                            # Создаем label для счетчика документов
+                                            documents_count_label = ui.label(
+                                                f'Найдено документов: {total_count} (показано {len(documents)} из {total_count})'
+                                            ).classes('text-sm text-gray-600 mb-2')
+                                            
+                                            for document in documents:
+                                                # Передаем функцию обновления заголовка, текущий счетчик и label счетчика
+                                                create_document_card(
+                                                    document, 
+                                                    update_cabinet_title, 
+                                                    total_count,
+                                                    documents_count_label
+                                                )
+                                    else:
+                                        with documents_container:
+                                            ui.label('Документы не найдены').classes('text-sm text-gray-500 text-center py-4')
+                                
+                                # Обновляем пагинацию
+                                if pagination_container:
+                                    pagination_container.clear()
+                                    update_pagination_ui()
+                                    
+                            except Exception as e:
+                                logger.error(f"Ошибка при загрузке страницы документов кабинета {cabinet_id}: {e}", exc_info=True)
+                                if documents_container:
+                                    documents_container.clear()
+                                    with documents_container:
+                                        ui.label(f'Ошибка при загрузке: {str(e)}').classes('text-sm text-red-500')
+                        
+                        # Функция для обновления UI пагинации
+                        def update_pagination_ui():
+                            """Обновляет элементы управления пагинацией"""
+                            if not pagination_container:
+                                return
+                            
+                            with pagination_container:
+                                with ui.row().classes('w-full items-center gap-2'):
+                                    # Кнопка "Предыдущая"
+                                    prev_button = ui.button('◄', on_click=lambda: load_documents_page(current_page - 1, page_size))
+                                    prev_button.set_enabled(current_page > 1)
+                                    
+                                    # Информация о странице
+                                    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+                                    page_info = ui.label(f'Страница {current_page} из {total_pages}').classes('text-sm')
+                                    
+                                    # Кнопка "Следующая"
+                                    next_button = ui.button('►', on_click=lambda: load_documents_page(current_page + 1, page_size))
+                                    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+                                    next_button.set_enabled(current_page < total_pages)
+                                    
+                                    # Выбор размера страницы
+                                    ui.label('Размер страницы:').classes('text-sm ml-4')
+                                    page_size_select = ui.select(
+                                        [10, 20, 50, 100],
+                                        value=page_size,
+                                        on_change=lambda e: load_documents_page(1, int(e.value))
+                                    ).classes('text-sm')
                         
                         # Находим подкабинеты
                         child_cabinets = [cab for cab in cabinets if cab.get('parent_id') == cabinet_id]
@@ -1838,26 +1924,19 @@ async def load_documents_by_cabinets():
                                 for child_cab in child_cabinets:
                                     create_cabinet_tree(child_cab, level + 1)
                         
-                        # Показываем документы
-                        if documents:
-                            with content_container:
-                                if child_cabinets:
-                                    ui.label('Документы:').classes('text-sm font-semibold mb-2 mt-4')
-                                
-                                # Создаем label для счетчика документов и сохраняем ссылку
-                                documents_count_label = ui.label(f'Найдено документов: {len(documents)}').classes('text-sm text-gray-600 mb-2')
-                                
-                                for document in documents:
-                                    # Передаем функцию обновления заголовка, текущий счетчик и label счетчика
-                                    create_document_card(
-                                        document, 
-                                        update_cabinet_title, 
-                                        len(documents),
-                                        documents_count_label
-                                    )
-                        elif not child_cabinets:
-                            with content_container:
-                                ui.label('Документы не найдены').classes('text-sm text-gray-500 text-center py-4')
+                        # Создаем контейнер для документов
+                        with content_container:
+                            if child_cabinets:
+                                ui.label('Документы:').classes('text-sm font-semibold mb-2 mt-4')
+                            
+                            # Контейнер для списка документов
+                            documents_container = ui.column().classes('w-full')
+                            
+                            # Контейнер для пагинации
+                            pagination_container = ui.column().classes('w-full mt-4')
+                        
+                        # Загружаем первую страницу документов
+                        await load_documents_page(1, 10)
                                 
                     except Exception as e:
                         logger.error(f"Ошибка при загрузке содержимого кабинета {cabinet_id}: {e}", exc_info=True)

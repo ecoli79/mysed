@@ -3282,7 +3282,7 @@ class MayanClient:
             user__id=user__id
         )
 
-    async def get_cabinet_documents(self, cabinet_id: int, page: int = 1, page_size: int = 100) -> List[MayanDocument]:
+    async def get_cabinet_documents(self, cabinet_id: int, page: int = 1, page_size: int = 100) -> tuple[List[MayanDocument], int]:
         """
         Получает документы конкретного кабинета через endpoint /cabinets/{cabinet_id}/documents/
         
@@ -3292,7 +3292,7 @@ class MayanClient:
             page_size: Размер страницы
             
         Returns:
-            Список документов кабинета
+            Кортеж (список документов кабинета, общее количество)
         """
         endpoint = f'cabinets/{cabinet_id}/documents/'
         params = {
@@ -3309,8 +3309,9 @@ class MayanClient:
             
             data = response.json()
             documents = []
+            total_count = data.get('count', 0)  # Получаем общее количество
             
-            logger.info(f'Получено {len(data.get("results", []))} документов из кабинета {cabinet_id}')
+            logger.info(f'Получено {len(data.get("results", []))} документов из {total_count} в кабинете {cabinet_id}')
             
             for i, doc_data in enumerate(data.get('results', [])):
                 try:
@@ -3420,11 +3421,21 @@ class MayanClient:
                     continue
             
             logger.info(f'Успешно создано {len(documents)} документов из {len(data.get("results", []))}')
-            return documents
+            
+            # Сортируем документы по дате создания (свежие вверху)
+            # datetime_created имеет формат ISO 8601 (например: "2024-01-15T10:30:00Z")
+            def sort_key(doc: MayanDocument) -> str:
+                # Используем обратную сортировку (свежие вверху)
+                # Если дата отсутствует, помещаем в конец
+                return doc.datetime_created if doc.datetime_created else ''
+            
+            documents.sort(key=sort_key, reverse=True)
+            
+            return documents, total_count
             
         except httpx.HTTPError as e:
             logger.error(f'Ошибка при получении документов кабинета {cabinet_id}: {e}')
-            return []
+            return [], 0
 
     async def get_cabinet_documents_count(self, cabinet_id: int) -> int:
         """

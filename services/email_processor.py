@@ -414,7 +414,13 @@ class EmailProcessor:
         
         return result
     
-    def _format_email_metadata(self, email_metadata: Dict[str, Any], filename: str) -> str:
+    def _format_email_metadata(
+            self, 
+            email_metadata: Dict[str, Any], 
+            filename: str, 
+            file_hash: Optional[str] = None, 
+            file_size: Optional[int] = None
+        ) -> str:
         """
         Форматирует метаданные письма для сохранения в description документа
         
@@ -493,7 +499,13 @@ class EmailProcessor:
         
         return None
     
-    async def _check_duplicate(self, message_id: str, filename: str) -> bool:
+    async def _check_duplicate(
+            self, 
+            message_id: str, 
+            filename: str, 
+            file_hash: Optional[str] = None,
+            file_size: Optional[int] = None
+        ) -> bool:
         """
         Проверяет, существует ли уже документ с таким же message_id и filename
         
