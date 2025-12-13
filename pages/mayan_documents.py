@@ -711,8 +711,17 @@ def create_document_card(document: MayanDocument, update_cabinet_title_func=None
                 # Кнопка предоставления доступа
                 current_user = get_current_user()
                 if current_user:
-                    ui.button('Предоставить доступ', icon='share', color='blue').classes('text-xs px-2 py-1 h-7').on_click(
-                        lambda doc=document: show_grant_access_dialog(doc)
+                    # ui.button('Предоставить доступ', icon='share', color='blue').classes('text-xs px-2 py-1 h-7').on_click(
+                    #     lambda doc=document: show_grant_access_dialog(doc)
+                    # )
+                    
+                    # Кнопки быстрого запуска процессов
+                    ui.button('Запустить процесс ознакомления', icon='verified', color='blue').classes('text-xs px-2 py-1 h-7').on_click(
+                        lambda doc=document: ui.navigate.to(f'/task-assignment?document_id={doc.document_id}&process_type=signing')
+                    )
+                    
+                    ui.button('Подписание', icon='edit', color='green').classes('text-xs px-2 py-1 h-7').on_click(
+                        lambda doc=document: ui.navigate.to(f'/task-assignment?document_id={doc.document_id}&process_type=signing')
                     )
                     
                     # Кнопка избранного

@@ -33,6 +33,46 @@ class TaskAssignmentPage:
                     ui.navigate.to('/login')
                     return
                 
+                # Получаем query параметры из URL
+                document_id_from_url = None
+                process_type_from_url = None
+                
+                try:
+                    from nicegui import context
+                    import urllib.parse
+                    
+                    if hasattr(context, 'client') and context.client and hasattr(context.client, 'request'):
+                        request = context.client.request
+                        if hasattr(request, 'query_params'):
+                            query_params = request.query_params
+                            document_id_from_url = query_params.get('document_id', '')
+                            process_type_from_url = query_params.get('process_type', '')
+                        else:
+                            url = str(request.url) if hasattr(request, 'url') else ''
+                            if '?' in url:
+                                query_string = url.split('?')[1]
+                                params = urllib.parse.parse_qs(query_string)
+                                document_id_from_url = params.get('document_id', [''])[0]
+                                process_type_from_url = params.get('process_type', [''])[0]
+                except Exception as e:
+                    logger.warning(f"Не удалось получить query параметры: {e}")
+                
+                # Сохраняем для использования после инициализации компонентов
+                pending_document_id = document_id_from_url if document_id_from_url else None
+                pending_process_type = process_type_from_url if process_type_from_url else None
+                
+                # ===== ДОБАВИТЬ: Переменная для хранения названия документа =====
+                pending_document_name = None
+                # ===== КОНЕЦ ДОБАВЛЕНИЯ =====
+                
+                # Словарь для хранения ссылок на элементы формы документа
+                document_form_elements = {
+                    'document_id_input': None,
+                    'document_name_input': None,
+                    'selected_doc_label': None,
+                    'selected_doc_label_review': None
+                }
+                
                 # Список для хранения выбранных пользователей
                 selected_users = []
                 # Список для хранения выбранных ролей (при выборе пользователей по роли)
@@ -562,6 +602,13 @@ class TaskAssignmentPage:
                         process_template_select.update()
                         print("Вызван update() для process_template_select")
                         
+                        # ===== ДОБАВИТЬ ЭТОТ КОД =====
+                        # Автоматически заполняем документ и выбираем шаблон, если передан document_id
+                        if pending_document_id:
+                            # Используем таймер с небольшой задержкой, чтобы дождаться полной инициализации
+                            ui.timer(0.5, lambda: auto_fill_document_from_url(), once=True)
+                        # ===== КОНЕЦ ДОБАВЛЕНИЯ =====
+                        
                     except Exception as e:
                         ui.notify(f'Ошибка при загрузке шаблонов процессов: {str(e)}', type='negative')
                         logger.error(f"Ошибка при загрузке шаблонов процессов: {e}", exc_info=True)
@@ -579,6 +626,27 @@ class TaskAssignmentPage:
                         process_form_container.clear()
                         return
                     
+                    # Сохраняем значения document_id и document_name из старых полей (если они были заполнены)
+                    saved_document_id = None
+                    saved_document_name = None
+                    
+                    if document_form_elements['document_id_input']:
+                        try:
+                            saved_document_id = document_form_elements['document_id_input'].value
+                        except:
+                            pass
+                    
+                    if document_form_elements['document_name_input']:
+                        try:
+                            saved_document_name = document_form_elements['document_name_input'].value
+                        except:
+                            pass
+                    
+                    # Если значения не были сохранены из полей, но есть pending_document_id, используем его
+                    if not saved_document_id and pending_document_id:
+                        saved_document_id = pending_document_id
+                    # ===== КОНЕЦ СОХРАНЕНИЯ =====
+                    
                     # Очищаем контейнер перед созданием новой формы
                     process_form_container.clear()
                     
@@ -591,10 +659,9 @@ class TaskAssignmentPage:
                     with process_form_container:
                        
                         # Инициализируем переменные для процессов с документами ДО использования в лямбде
-                        # Это нужно, чтобы лямбда на кнопке "Запустить процесс" могла безопасно обращаться к этим переменным
                         document_id_input = None
                         document_name_input = None
-                        roles_select = None  # Инициализируем как None, будет переопределено в блоке if для DocumentSigningProcess
+                        roles_select = None
                         
                         # Основные переменные
                         with ui.column().classes('w-full mb-4'):
@@ -670,7 +737,8 @@ class TaskAssignmentPage:
                                 # ui.label('Параметры подписания:').classes('font-bold mb-2')
                                 
                                 # Секция выбора документа из Mayan EDMS
-                                selected_doc_label = ui.label('Документ не выбран').classes('text-sm text-gray-500 mb-2')
+                                selected_document_container = ui.column().classes('w-full mb-4')
+                                document_form_elements['selected_doc_label'] = selected_document_container  # Сохраняем контейнер вместо label
                                 
                                 with ui.column().classes('w-full mb-4 p-3 bg-blue-50 rounded border'):
                                     ui.label('Выбор документа из Mayan EDMS:').classes('font-semibold mb-2')
@@ -713,6 +781,18 @@ class TaskAssignmentPage:
                                 # Скрытые переменные для document_id и document_name (не показываем пользователю)
                                 document_id_input = ui.input(value='').classes('hidden')
                                 document_name_input = ui.input(value='').classes('hidden')
+                                # Сохраняем ссылки
+                                document_form_elements['document_id_input'] = document_id_input
+                                document_form_elements['document_name_input'] = document_name_input
+                                
+                                # ===== ВОССТАНАВЛИВАЕМ ЗНАЧЕНИЯ =====
+                                if saved_document_id:
+                                    document_id_input.value = saved_document_id
+                                    document_id_input.update()
+                                if saved_document_name:
+                                    document_name_input.value = saved_document_name
+                                    document_name_input.update()
+                                # ===== КОНЕЦ ВОССТАНОВЛЕНИЯ =====
                                 
                                 # Определяем функции после объявления всех переменных
                                 async def search_and_display_documents_for_task(query: str = ''):
@@ -830,17 +910,10 @@ class TaskAssignmentPage:
                                         document_name_input.value = doc.label
                                         
                                         # Обновляем метку выбранного документа
-                                        selected_doc_label.text = f'✓ Выбран: {doc.label} (ID: {doc.document_id})'
-                                        selected_doc_label.classes('text-sm text-green-600 font-semibold mb-2')
-                                        
-                                        # Показываем уведомление
-                                        ui.notify(f'Выбран документ: {doc.label} (ID: {doc.document_id})', type='positive')
-                                        
-                                        # Сворачиваем результаты поиска и показываем подтверждение
-                                        document_results_container.clear()
-                                        with document_results_container:
+                                        selected_document_container.clear()
+                                        with selected_document_container:
                                             with ui.card().classes('p-3 bg-green-50 border-l-4 border-green-500'):
-                                                with ui.row().classes('items-center'):
+                                                with ui.row().classes('items-start gap-4 w-full'):
                                                     ui.icon('check_circle').classes('text-green-500 mr-2 text-xl')
                                                     with ui.column().classes('flex-1'):
                                                         ui.label(f'Выбран документ: {doc.label}').classes('text-sm font-semibold')
@@ -880,12 +953,8 @@ class TaskAssignmentPage:
                                         document_results_container.clear()
                                         
                                         # Сбрасываем выбранный документ
-                                        selected_doc_label.text = 'Документ не выбран'
-                                        selected_doc_label.classes('text-sm text-gray-500 mb-2')
-                                        
-                                        # Очищаем поля документа
-                                        document_id_input.value = ''
-                                        document_name_input.value = ''
+                                        selected_document_container.clear()
+                                        selected_document_container.update()
                                         
                                         ui.notify('Поиск сброшен', type='info')
                                     
@@ -907,6 +976,8 @@ class TaskAssignmentPage:
                                 
                                 # Секция выбора документа из Mayan EDMS
                                 selected_doc_label_review = ui.label('Документ не выбран').classes('text-sm text-gray-500 mb-2')
+                                # Сохраняем ссылку
+                                document_form_elements['selected_doc_label_review'] = selected_doc_label_review
                                 
                                 with ui.column().classes('w-full mb-4 p-3 bg-blue-50 rounded border'):
                                     ui.label('Выбор документа из Mayan EDMS:').classes('font-semibold mb-2')
@@ -944,6 +1015,18 @@ class TaskAssignmentPage:
                                 # Скрытые переменные для document_id и document_name (не показываем пользователю)
                                 document_id_input = ui.input(value='').classes('hidden')
                                 document_name_input = ui.input(value='').classes('hidden')
+                                # Сохраняем ссылки
+                                document_form_elements['document_id_input'] = document_id_input
+                                document_form_elements['document_name_input'] = document_name_input
+                                
+                                # ===== ВОССТАНАВЛИВАЕМ ЗНАЧЕНИЯ =====
+                                if saved_document_id:
+                                    document_id_input.value = saved_document_id
+                                    document_id_input.update()
+                                if saved_document_name:
+                                    document_name_input.value = saved_document_name
+                                    document_name_input.update()
+                                # ===== КОНЕЦ ВОССТАНОВЛЕНИЯ =====
                                 
                                 # Определяем функции после объявления всех переменных
                                 async def search_and_display_documents_for_review(query: str = ''):
@@ -1154,8 +1237,8 @@ class TaskAssignmentPage:
                                     category_input.value if category_input else '',
                                     tags_input.value if tags_input else '',
                                     start_button,
-                                    document_id_input.value if document_id_input else '',
-                                    document_name_input.value if document_name_input else '',
+                                    document_form_elements['document_id_input'].value if document_form_elements['document_id_input'] else '',
+                                    document_form_elements['document_name_input'].value if document_form_elements['document_name_input'] else '',
                                     # Используем роли из выбранных вверху, если они есть, иначе из select
                                     selected_roles_from_selection if selected_roles_from_selection else (roles_select.value if roles_select else [])
                                 ),
@@ -1293,9 +1376,27 @@ class TaskAssignmentPage:
                                 ui.notify('ID документа обязателен для процесса подписания!', type='error')
                                 return
                             
-                            if not document_name or not document_name.strip():
+                            # ===== ИСПРАВЛЕНИЕ: Получаем document_name из Mayan, если он не указан =====
+                            final_document_name = document_name.strip() if document_name and document_name.strip() else None
+                            
+                            # Если document_name не указан, получаем его из Mayan по document_id
+                            if not final_document_name and document_id.strip():
+                                try:
+                                    mayan_client = await MayanClient.create_with_session_user()
+                                    document_info = await mayan_client.get_document_info_for_review(document_id.strip())
+                                    if document_info:
+                                        final_document_name = document_info.get('label', '')
+                                        # Обновляем также поле в форме для будущего использования
+                                        if document_form_elements['document_name_input']:
+                                            document_form_elements['document_name_input'].value = final_document_name
+                                            document_form_elements['document_name_input'].update()
+                                except Exception as e:
+                                    logger.warning(f"Не удалось получить название документа {document_id}: {e}")
+                            
+                            if not final_document_name or not final_document_name.strip():
                                 ui.notify('Название документа обязательно для процесса подписания!', type='error')
                                 return
+                            # ===== КОНЕЦ ИСПРАВЛЕНИЯ =====
                             
                             # Проверяем, что document_id является числовым
                             if not document_id.strip().isdigit():
@@ -1312,7 +1413,7 @@ class TaskAssignmentPage:
                             
                             process_id = await camunda_client.start_document_signing_process(
                                 document_id=document_id.strip(),
-                                document_name=document_name.strip(),
+                                document_name=final_document_name.strip(),  # Используем final_document_name
                                 signer_list=assignee_list,
                                 role_names=selected_roles,
                                 business_key=f"signing_{int(time.time())}",
@@ -1380,4 +1481,89 @@ class TaskAssignmentPage:
                         }
                     </style>
                 ''')
+
+                # Добавляем функцию автоматического заполнения
+                async def auto_fill_document_from_url():
+                    """Автоматически заполняет документ из URL параметров"""
+                    if not pending_document_id:
+                        return
+                    
+                    try:
+                        mayan_client = await MayanClient.create_with_session_user()
+                        document_info = await mayan_client.get_document_info_for_review(pending_document_id)
+                        
+                        if not document_info:
+                            ui.notify('Документ не найден', type='warning')
+                            return
+                        
+                        # ===== ДОБАВИТЬ: Сохраняем document_name для использования при пересоздании формы =====
+                        # Используем nonlocal или глобальную переменную для сохранения
+                        # Но лучше использовать pending_document_name, который будет использоваться при сохранении
+                        document_name_from_info = document_info.get('label', '')
+                        # ===== КОНЕЦ ДОБАВЛЕНИЯ =====
+                        
+                        # Сохраняем для использования при пересоздании формы
+                        pending_document_name = document_name_from_info
+                        
+                        # Сначала выбираем шаблон процесса, чтобы создать форму
+                        if pending_process_type == 'review':
+                            # Ищем шаблон для ознакомления
+                            found_template = False
+                            for key, name in process_template_select.options.items():
+                                if 'DocumentReviewProcess' in key or 'Ознаком' in name:
+                                    process_template_select.value = key
+                                    process_template_select.update()
+                                    found_template = True
+                                    # Вызываем обработчик изменения шаблона, чтобы создать форму
+                                    await handle_template_change()
+                                    # Ждем, чтобы форма успела создаться
+                                    await asyncio.sleep(0.5)
+                                    break
+                            
+                            if not found_template:
+                                ui.notify('Шаблон процесса ознакомления не найден', type='warning')
+                                return
+                                
+                        elif pending_process_type == 'signing':
+                            # Ищем шаблон для подписания
+                            found_template = False
+                            for key, name in process_template_select.options.items():
+                                if 'DocumentSigningProcess' in key or 'Подписан' in name:
+                                    process_template_select.value = key
+                                    process_template_select.update()
+                                    found_template = True
+                                    # Вызываем обработчик изменения шаблона, чтобы создать форму
+                                    await handle_template_change()
+                                    # Ждем, чтобы форма успела создаться
+                                    await asyncio.sleep(0.5)
+                                    break
+                            
+                            if not found_template:
+                                ui.notify('Шаблон процесса подписания не найден', type='warning')
+                                return
+                        
+                        # Теперь заполняем поля документа (форма уже должна быть создана)
+                        if document_form_elements['document_id_input']:
+                            document_form_elements['document_id_input'].value = pending_document_id
+                            document_form_elements['document_id_input'].update()
+                        
+                        if document_form_elements['document_name_input']:
+                            document_form_elements['document_name_input'].value = document_name_from_info
+                            document_form_elements['document_name_input'].update()
+                        
+                        # Обновляем label выбранного документа
+                        if pending_process_type == 'review' and document_form_elements['selected_doc_label_review']:
+                            document_form_elements['selected_doc_label_review'].text = f'✓ Выбран: {document_info.get("label")} (ID: {pending_document_id})'
+                            document_form_elements['selected_doc_label_review'].classes('text-sm text-green-600 font-semibold mb-2')
+                            document_form_elements['selected_doc_label_review'].update()
+                        elif pending_process_type == 'signing' and document_form_elements['selected_doc_label']:
+                            document_form_elements['selected_doc_label'].text = f'✓ Выбран: {document_info.get("label")} (ID: {pending_document_id})'
+                            document_form_elements['selected_doc_label'].classes('text-sm text-green-600 font-semibold mb-2')
+                            document_form_elements['selected_doc_label'].update()
+                        
+                        ui.notify(f'Документ "{document_info.get("label")}" выбран автоматически', type='success')
+                        
+                    except Exception as e:
+                        logger.error(f"Ошибка при автоматическом заполнении: {e}", exc_info=True)
+                        ui.notify(f'Ошибка при автоматическом заполнении: {str(e)}', type='error')
 
