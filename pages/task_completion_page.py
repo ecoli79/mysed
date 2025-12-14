@@ -74,6 +74,9 @@ _all_completed_tasks: List[Union[GroupedHistoryTask, CamundaHistoryTask]] = []  
 _current_page: int = 1  # Текущая страница
 _page_size: int = 10  # Размер страницы
 _pagination_container: Optional[ui.row] = None  # Контейнер для элементов пагинации
+_sort_type: str = 'start_time_desc'  # Тип сортировки по умолчанию
+_active_tasks_sort_type: str = 'start_time_desc'  # Тип сортировки для активных задач
+_active_tasks_list: List[CamundaTask] = []  # Список активных задач для сортировки
 
 
 async def get_mayan_client() -> MayanClient:
@@ -214,9 +217,88 @@ def create_active_tasks_section():
         
         ui.timer(0.1, lambda: init_tasks(), once=True)
 
+async def apply_active_tasks_sorting(sortType: str):
+    """Применяет сортировку к активным задачам"""
+    global _active_tasks_list, _active_tasks_sort_type, _tasks_container, _task_cards
+    
+    _active_tasks_sort_type = sortType
+    
+    if not _active_tasks_list:
+        return
+    
+    # Обогащаем задачи deadline из переменных процесса перед сортировкой
+    camunda_client = await create_camunda_client()
+    for task in _active_tasks_list:
+        # Если у задачи нет due, пытаемся получить из переменных процесса
+        if not getattr(task, 'due', None):
+            try:
+                process_id = getattr(task, 'process_instance_id', '')
+                if process_id:
+                    process_variables = await camunda_client.get_process_instance_variables(process_id)
+                    if process_variables:
+                        due_date_var = process_variables.get('dueDate')
+                        if due_date_var:
+                            if isinstance(due_date_var, dict) and 'value' in due_date_var:
+                                task.due = due_date_var['value']
+                            else:
+                                task.due = due_date_var
+            except Exception as e:
+                logger.warning(f"Не удалось получить deadline из переменных процесса для задачи {task.id}: {e}")
+    
+    # Сортируем задачи
+    sorted_tasks = sorted(_active_tasks_list, key=lambda task: get_active_task_sort_key(task, sortType))
+    
+    _active_tasks_list = sorted_tasks
+    
+    # Пересоздаем карточки задач в отсортированном порядке
+    _tasks_container.clear()
+    _task_cards.clear()
+    
+    for task in sorted_tasks:
+        await create_task_card_with_progress(task)
+
+def get_active_task_sort_key(task: CamundaTask, sortType: str) -> tuple:
+    """Возвращает ключ для сортировки активной задачи"""
+    from components.gantt_chart import parse_task_deadline
+    
+    # Используем безопасную максимальную дату вместо datetime.max
+    MAX_TIMESTAMP = datetime(2099, 12, 31, 23, 59, 59).timestamp()
+    MIN_TIMESTAMP = datetime(1970, 1, 1).timestamp()
+    
+    # Для сортировки по дате создания
+    if sortType.startswith('start_time'):
+        start_time = getattr(task, 'start_time', '')
+        if start_time:
+            try:
+                start_dt = parse_task_deadline(start_time)
+                if start_dt:
+                    # Для desc используем отрицательное время, для asc - положительное
+                    return (0 if sortType.endswith('_desc') else 1, -start_dt.timestamp() if sortType.endswith('_desc') else start_dt.timestamp())
+            except:
+                pass
+        # Если не удалось распарсить, ставим в конец
+        return (1, MAX_TIMESTAMP)
+    
+    # Для сортировки по deadline
+    elif sortType.startswith('due'):
+        due = getattr(task, 'due', None)
+        if due:
+            try:
+                due_dt = parse_task_deadline(due)
+                if due_dt:
+                    # Для desc используем отрицательное время, для asc - положительное
+                    return (0 if sortType.endswith('_desc') else 1, -due_dt.timestamp() if sortType.endswith('_desc') else due_dt.timestamp())
+            except:
+                pass
+        # Если deadline отсутствует, ставим в конец
+        return (1, MAX_TIMESTAMP)
+    
+    # По умолчанию
+    return (0, MIN_TIMESTAMP)
+
 async def load_active_tasks(header_container=None, target_task_id: Optional[str] = None):
     """Загружает и отображает активные задачи пользователя"""
-    global _tasks_container, _task_cards
+    global _tasks_container, _task_cards, _active_tasks_list, _active_tasks_sort_type
     
     if _tasks_container is None:
         return
@@ -253,6 +335,15 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
             filter_completed=True
         )
         
+        # Сохраняем задачи для сортировки
+        _active_tasks_list = tasks if tasks else []
+        
+        # Применяем сортировку после загрузки
+        if _active_tasks_list:
+            await apply_active_tasks_sorting(_active_tasks_sort_type)
+            # Используем отсортированный список
+            tasks = _active_tasks_list
+        
         # Нормализуем target_task_id для сравнения (приводим к строке)
         target_task_id_str = str(target_task_id).strip() if target_task_id else None
         logger.info(f"Ищем задачу с ID: {target_task_id_str}")
@@ -266,6 +357,23 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
                         icon='refresh',
                         on_click=lambda: load_active_tasks(_tasks_header_container)
                     ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
+                    
+                    # Добавляем select для сортировки
+                    async def handle_sort_change(e):
+                        await apply_active_tasks_sorting(e.value)
+                    
+                    ui.select(
+                        options={
+                            'start_time_desc': 'По дате создания (новые сначала)',
+                            'start_time_asc': 'По дате создания (старые сначала)',
+                            'due_desc': 'По сроку исполнения (поздние сначала)',
+                            'due_asc': 'По сроку исполнения (ранние сначала)'
+                        },
+                        value=_active_tasks_sort_type,
+                        label='Сортировка',
+                        on_change=handle_sort_change
+                    ).classes('w-64').props('dense')
+                    
                     ui.label(f'Найдено {len(tasks)} активных задач:').classes('text-lg font-semibold')
             
             # Добавляем диаграмму Ганта перед карточками задач
@@ -367,6 +475,28 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
             # Показываем сообщение об отсутствии задач
             if header_container:
                 with header_container:
+                    ui.button(
+                        'Обновить задачи',
+                        icon='refresh',
+                        on_click=lambda: load_active_tasks(_tasks_header_container)
+                    ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
+                    
+                    # Добавляем select для сортировки даже когда нет задач
+                    async def handle_sort_change_empty(e):
+                        await apply_active_tasks_sorting(e.value)
+                    
+                    ui.select(
+                        options={
+                            'start_time_desc': 'По дате создания (новые сначала)',
+                            'start_time_asc': 'По дате создания (старые сначала)',
+                            'due_desc': 'По сроку исполнения (поздние сначала)',
+                            'due_asc': 'По сроку исполнения (ранние сначала)'
+                        },
+                        value=_active_tasks_sort_type,
+                        label='Сортировка',
+                        on_change=handle_sort_change_empty
+                    ).classes('w-64').props('dense')
+                    
                     ui.label('Нет активных задач').classes('text-gray-500')
             
             # Если есть target_task_id, но нет задач в списке, пробуем загрузить напрямую
@@ -426,6 +556,28 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
         logger.error(f"Ошибка при загрузке активных задач: {e}", exc_info=True)
         if header_container:
             with header_container:
+                ui.button(
+                    'Обновить задачи',
+                    icon='refresh',
+                    on_click=lambda: load_active_tasks(_tasks_header_container)
+                ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
+                
+                # Добавляем select для сортировки даже при ошибке
+                async def handle_sort_change_error(e):
+                    await apply_active_tasks_sorting(e.value)
+                
+                ui.select(
+                    options={
+                        'start_time_desc': 'По дате создания (новые сначала)',
+                        'start_time_asc': 'По дате создания (старые сначала)',
+                        'due_desc': 'По сроку исполнения (поздние сначала)',
+                        'due_asc': 'По сроку исполнения (ранние сначала)'
+                    },
+                    value=_active_tasks_sort_type,
+                    label='Сортировка',
+                    on_change=handle_sort_change_error
+                ).classes('w-64').props('dense')
+                
                 ui.label(f'Ошибка при загрузке задач: {str(e)}').classes('text-red-600')
 
 async def create_task_card_with_progress(task):
@@ -714,6 +866,19 @@ def create_completed_tasks_section():
                 icon='refresh',
                 on_click=load_completed_tasks
             ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
+            
+            # Добавляем select для сортировки
+            ui.select(
+                options={
+                    'start_time_desc': 'По дате создания (новые сначала)',
+                    'start_time_asc': 'По дате создания (старые сначала)',
+                    'due_desc': 'По deadline (поздние сначала)',
+                    'due_asc': 'По deadline (ранние сначала)'
+                },
+                value=_sort_type,
+                label='Сортировка',
+                on_change=lambda e: apply_sorting(e.value)
+            ).classes('w-64').props('dense')
         
         # Контейнер для задач
         _completed_tasks_container = ui.column().classes('w-full')
@@ -724,9 +889,66 @@ def create_completed_tasks_section():
         # Загружаем задачи при открытии страницы
         load_completed_tasks()
 
+def apply_sorting(sortType: str):
+    """Применяет сортировку к задачам"""
+    global _all_completed_tasks, _sort_type, _current_page
+    
+    _sort_type = sortType
+    
+    if not _all_completed_tasks:
+        return
+    
+    # Сортируем задачи
+    sorted_tasks = sorted(_all_completed_tasks, key=lambda task: get_sort_key(task, sortType))
+    
+    _all_completed_tasks = sorted_tasks
+    _current_page = 1  # Сбрасываем на первую страницу после сортировки
+    
+    # Обновляем отображение
+    display_current_page()
+
+def get_sort_key(task: Union[GroupedHistoryTask, CamundaHistoryTask], sortType: str) -> tuple:
+    """Возвращает ключ для сортировки задачи"""
+    from components.gantt_chart import parse_task_deadline
+    
+    # Используем безопасную максимальную дату вместо datetime.max
+    MAX_TIMESTAMP = datetime(2099, 12, 31, 23, 59, 59).timestamp()
+    MIN_TIMESTAMP = datetime(1970, 1, 1).timestamp()
+    
+    # Для сортировки по дате создания
+    if sortType.startswith('start_time'):
+        start_time = getattr(task, 'start_time', '')
+        if start_time:
+            try:
+                start_dt = parse_task_deadline(start_time)
+                if start_dt:
+                    # Для desc используем отрицательное время, для asc - положительное
+                    return (0 if sortType.endswith('_desc') else 1, -start_dt.timestamp() if sortType.endswith('_desc') else start_dt.timestamp())
+            except:
+                pass
+        # Если не удалось распарсить, ставим в конец
+        return (1, MAX_TIMESTAMP)
+    
+    # Для сортировки по deadline
+    elif sortType.startswith('due'):
+        due = getattr(task, 'due', None)
+        if due:
+            try:
+                due_dt = parse_task_deadline(due)
+                if due_dt:
+                    # Для desc используем отрицательное время, для asc - положительное
+                    return (0 if sortType.endswith('_desc') else 1, -due_dt.timestamp() if sortType.endswith('_desc') else due_dt.timestamp())
+            except:
+                pass
+        # Если deadline отсутствует, ставим в конец
+        return (1, MAX_TIMESTAMP)
+    
+    # По умолчанию
+    return (0, MIN_TIMESTAMP)
+
 async def load_completed_tasks():
     """Загружает завершенные задачи"""
-    global _completed_tasks_container, _completed_tasks_header_container, _all_completed_tasks, _current_page, _pagination_container
+    global _completed_tasks_container, _completed_tasks_header_container, _all_completed_tasks, _current_page, _pagination_container, _sort_type
     
     if _completed_tasks_container is None:
         return
@@ -742,6 +964,19 @@ async def load_completed_tasks():
                 icon='refresh',
                 on_click=load_completed_tasks
             ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
+            
+            # Добавляем select для сортировки
+            ui.select(
+                options={
+                    'start_time_desc': 'По дате создания (новые сначала)',
+                    'start_time_asc': 'По дате создания (старые сначала)',
+                    'due_desc': 'По deadline (поздние сначала)',
+                    'due_asc': 'По deadline (ранние сначала)'
+                },
+                value=_sort_type,
+                label='Сортировка',
+                on_change=lambda e: apply_sorting(e.value)
+            ).classes('w-64').props('dense')
     
     with _completed_tasks_container:
         try:
@@ -777,6 +1012,10 @@ async def load_completed_tasks():
             
             logger.info(f"Получено {len(_all_completed_tasks)} задач (сгруппированных)")
             
+            # Применяем сортировку после загрузки
+            if _all_completed_tasks:
+                apply_sorting(_sort_type)
+            
             # Обновляем заголовок с количеством задач
             if _completed_tasks_header_container:
                 _completed_tasks_header_container.clear()
@@ -786,6 +1025,20 @@ async def load_completed_tasks():
                         icon='refresh',
                         on_click=load_completed_tasks
                     ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
+                    
+                    # Добавляем select для сортировки
+                    ui.select(
+                        options={
+                            'start_time_desc': 'По дате создания (новые сначала)',
+                            'start_time_asc': 'По дате создания (старые сначала)',
+                            'due_desc': 'По deadline (поздние сначала)',
+                            'due_asc': 'По deadline (ранние сначала)'
+                        },
+                        value=_sort_type,
+                        label='Сортировка',
+                        on_change=lambda e: apply_sorting(e.value)
+                    ).classes('w-64').props('dense')
+                    
                     if _all_completed_tasks:
                         ui.label(f'Найдено {len(_all_completed_tasks)} завершенных задач:').classes('text-lg font-semibold')
                     else:
@@ -804,6 +1057,20 @@ async def load_completed_tasks():
                         icon='refresh',
                         on_click=load_completed_tasks
                     ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
+                    
+                    # Добавляем select для сортировки даже при ошибке
+                    ui.select(
+                        options={
+                            'start_time_desc': 'По дате создания (новые сначала)',
+                            'start_time_asc': 'По дате создания (старые сначала)',
+                            'due_desc': 'По deadline (поздние сначала)',
+                            'due_asc': 'По deadline (ранние сначала)'
+                        },
+                        value=_sort_type,
+                        label='Сортировка',
+                        on_change=lambda e: apply_sorting(e.value)
+                    ).classes('w-64').props('dense')
+                    
                     ui.label(f'Ошибка при загрузке задач').classes('text-lg font-semibold text-red-600')
             ui.label(f'Ошибка при загрузке задач: {str(e)}').classes('text-red-600')
 
