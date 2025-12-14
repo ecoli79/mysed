@@ -5,8 +5,8 @@ from services.camunda_connector import create_camunda_client
 from services.mayan_connector import MayanClient
 from config.settings import config
 from datetime import datetime
-import logging
 from typing import List, Dict, Any, Optional, Union
+from app_logging.logger import get_logger
 from models import CamundaHistoryTask, LDAPUser, GroupedHistoryTask
 from auth.middleware import get_current_user
 from auth.ldap_auth import LDAPAuthenticator
@@ -37,7 +37,7 @@ from components.gantt_chart import parse_task_deadline
 from models import CamundaTask
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Глобальные переменные для управления состоянием
 _tasks_container: Optional[ui.column] = None

@@ -6,15 +6,12 @@
 import os
 import glob
 import tempfile
-import logging
 from datetime import datetime, timedelta
+from app_logging.logger import setup_logging, get_logger
 
 # Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+setup_logging()
+logger = get_logger(__name__)
 
 def find_temp_bpmn_files():
     """Находит все временные BPMN файлы в системе"""

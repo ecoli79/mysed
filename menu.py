@@ -1,9 +1,9 @@
 from typing import List, Tuple
-import logging
 from nicegui import ui
 from models import UserSession
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def menu(user: UserSession) -> None:
     # Проверяем, является ли пользователь администратором

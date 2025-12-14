@@ -9,9 +9,9 @@ import base64
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-import logging
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MayanTokenExpiredError(Exception):

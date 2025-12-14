@@ -5,7 +5,6 @@
 
 import sys
 import os
-import logging
 from datetime import datetime
 
 # Добавляем путь к проекту
@@ -14,18 +13,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services.mayan_connector import MayanClient
 from services.user_sync_manager import UserSyncManager
 from config.settings import config
+from app_logging.logger import setup_logging, get_logger
 
 # Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/user_sync.log'),
-        logging.StreamHandler()
-    ]
-)
-
-logger = logging.getLogger(__name__)
+setup_logging()
+logger = get_logger(__name__)
 
 def test_mayan_connection():
     """Тестирует подключение к Mayan EDMS"""

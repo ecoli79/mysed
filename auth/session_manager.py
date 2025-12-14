@@ -2,10 +2,10 @@ from typing import Dict, Optional
 from models import UserSession
 from datetime import datetime, timedelta
 import json
-import logging
+from app_logging.logger import get_logger
 
 # Создаем logger для этого модуля
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class SessionManager:
     def __init__(self):

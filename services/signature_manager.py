@@ -1,4 +1,3 @@
-import logging
 import base64
 import hashlib
 import json
@@ -19,8 +18,9 @@ from reportlab.lib.colors import HexColor  # ИСПРАВЛЕНИЕ: Убира�
 import reportlab.lib.colors as colors  # ИСПРАВЛЕНИЕ: Импортируем colors как модуль
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase.pdfmetrics import registerFontFamily
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class SignatureManager:
     '''Менеджер для работы с электронными подписями документов'''

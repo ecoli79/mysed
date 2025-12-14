@@ -4,14 +4,14 @@
 Использует SQLite для быстрого поиска дубликатов по хешу файла.
 """
 import sqlite3
-import logging
 from pathlib import Path
 from typing import Optional, Set, List, Dict, Any
 from datetime import datetime
 import json
 import asyncio
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class DocumentHashCache:

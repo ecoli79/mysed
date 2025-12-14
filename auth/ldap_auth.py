@@ -4,11 +4,11 @@ from models import UserSession, AuthResponse, LDAPUser
 from config.settings import config
 from datetime import datetime
 import secrets
-import logging
 from typing import Optional
+from app_logging.logger import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class LDAPAuthenticator:
     def __init__(self):

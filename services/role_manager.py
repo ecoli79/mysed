@@ -1,9 +1,9 @@
-import logging
 from typing import List, Optional, Dict, Any
 from services.mayan_connector import MayanClient
 from models import Role, Permission, UserRole
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class RoleManager:
     """Менеджер управления ролями и разрешениями"""

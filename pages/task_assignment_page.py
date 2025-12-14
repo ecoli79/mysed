@@ -9,11 +9,11 @@ from services.mayan_connector import MayanClient
 from config.settings import config
 from datetime import datetime, timezone
 import time
-import logging
 import asyncio
 from utils.aggrid_locale import AGGGRID_RUSSIAN_LOCALE
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class TaskAssignmentPage:
 

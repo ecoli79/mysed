@@ -2,13 +2,13 @@ from nicegui import ui
 from services.camunda_connector import CamundaClient, create_camunda_client
 from auth.middleware import get_current_user, require_auth
 from config.settings import config
-import logging
 from typing import Optional, List, Dict, Any
 import json
 from components.gantt_chart import create_gantt_chart, parse_task_deadline, prepare_tasks_for_gantt
 from datetime import datetime
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Глобальная переменная для контейнера деталей процесса
 _details_container = None

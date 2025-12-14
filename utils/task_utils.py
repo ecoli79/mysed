@@ -1,7 +1,7 @@
 from typing import Dict, List
-import logging
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def create_task_detail_data(row_data: Dict) -> List[Dict]:
     """Создает данные для детальной таблицы задачи"""

@@ -3,10 +3,10 @@ from services.camunda_connector import CamundaClient
 from services.mayan_connector import MayanClient, MayanDocument
 from config.settings import config
 from datetime import datetime
-import logging
 from typing import Optional, List, Dict, Any
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Глобальные переменные для управления состоянием
 _tasks_container: Optional[ui.column] = None

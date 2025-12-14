@@ -3,13 +3,13 @@
 """
 from nicegui import ui
 from typing import Optional
-import logging
 import base64
 
 from components.loading_indicator import LoadingIndicator
 from services.mayan_connector import MayanClient
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def show_document_viewer(document_id: str, document_name: Optional[str] = None, mayan_client=None):

@@ -14,14 +14,14 @@ from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-import logging
 import ssl
 import socket
 
 from models import IncomingEmail
 from config.settings import config
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Таймаут для подключения (в секундах)
 CONNECTION_TIMEOUT = 30

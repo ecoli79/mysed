@@ -4,7 +4,6 @@
 """
 
 import asyncio
-import logging
 import sys
 import os
 from pathlib import Path
@@ -15,10 +14,11 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from ldap3 import Server, Connection, SUBTREE, ALL
 from services.mayan_connector import MayanClient
 from config.settings import config
+from app_logging.logger import setup_logging, get_logger
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+setup_logging()
+logger = get_logger(__name__)
 
 class SyncTester:
     """Класс для тестирования компонентов синхронизации"""

@@ -2,15 +2,15 @@
 from typing import Optional, List, Dict, Any, Set
 from datetime import datetime
 import json
-import logging
 from services.mayan_connector import MayanClient
 from services.document_hash_cache import DocumentHashCache
 from models import IncomingEmail
 from config.settings import config
 import hashlib
 import asyncio
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class EmailProcessor:

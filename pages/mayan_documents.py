@@ -18,7 +18,6 @@ import tempfile
 import os
 import base64
 from components.loading_indicator import LoadingIndicator, with_loading
-import logging
 import asyncio
 from auth.ldap_auth import LDAPAuthenticator
 from auth.session_manager import session_manager
@@ -27,8 +26,9 @@ from components.document_viewer import show_document_viewer
 from services.signature_manager import SignatureManager
 import traceback
 import re
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Глобальные переменные для управления состоянием
 _recent_documents_container: Optional[ui.column] = None

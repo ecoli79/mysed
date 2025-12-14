@@ -1,8 +1,8 @@
 from enum import Enum
 from typing import List, Dict, Any
-import logging
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class AccessType(Enum):
     """Типы доступа к документам"""

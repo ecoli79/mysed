@@ -2,11 +2,11 @@
 Менеджер синхронизации пользователей между Mayan EDMS и OpenLDAP
 """
 
-import logging
 from typing import List, Dict, Any, Optional, Set
 from datetime import datetime
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class UserSyncManager:
     """Менеджер синхронизации пользователей между Mayan EDMS и OpenLDAP"""

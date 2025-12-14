@@ -1,8 +1,8 @@
 import re
-import logging
 from typing import Optional
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def validate_username(username: str) -> bool:
     """Валидирует имя пользователя на безопасность"""

@@ -5,7 +5,6 @@
 """
 
 import asyncio
-import logging
 import json
 import os
 import sys
@@ -20,17 +19,11 @@ from ldap3 import Server, Connection, SUBTREE, ALL
 from services.mayan_connector import MayanClient
 from config.settings import config
 from models import LDAPUser, UserGroup
+from app_logging.logger import setup_logging, get_logger
 
 # Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/user_sync.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+setup_logging()
+logger = get_logger(__name__)
 
 class LDAPGroupSyncManager:
     """Менеджер синхронизации групп между LDAP и Mayan EDMS"""

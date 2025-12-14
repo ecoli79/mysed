@@ -11,10 +11,9 @@ from nicegui import app, ui
 from app_logging.logger import setup_logging, get_logger
 from config.settings import config
 
-import logging
-logging.basicConfig(level=logging.DEBUG)
 
 # Настраиваем логирование при старте приложения
+setup_logging()
 logger = get_logger(__name__)
 
 # Настройка статических файлов

@@ -4,18 +4,18 @@ from message import message
 from nicegui import ui
 from fastapi import APIRouter, Request
 import json
-import logging
 import re
 from auth.middleware import get_current_user
 from auth.ldap_auth import LDAPAuthenticator
 from typing import Optional
 from auth.session_manager import session_manager, UserSession
 from auth.token_storage import token_storage, get_last_token
+from app_logging.logger import get_logger
 
 # Создаем FastAPI роутер для API endpoints
 api_router = APIRouter(prefix='/api')
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Глобальные переменные для КриптоПро
 _certificates_cache = []

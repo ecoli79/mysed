@@ -4,9 +4,9 @@
 from nicegui import ui
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-import logging
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def parse_task_deadline(due_date: Any) -> Optional[datetime]:

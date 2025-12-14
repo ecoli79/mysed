@@ -3,10 +3,10 @@ from services.signature_manager import SignatureManager
 from services.mayan_connector import MayanClient
 from auth.middleware import get_current_user
 from datetime import datetime
-import logging
 import json
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def get_mayan_client() -> MayanClient:
     return MayanClient.create_with_session_user()

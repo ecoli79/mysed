@@ -1,10 +1,10 @@
 # services/email_validator.py
 import re
 from typing import List, Optional
-import logging
 from config.settings import config
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class EmailValidator:

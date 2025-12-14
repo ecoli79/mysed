@@ -7,15 +7,15 @@ from auth.middleware import get_current_user
 from config.settings import config
 from utils import validate_username, format_due_date, create_task_detail_data
 import theme
-import logging
 import asyncio
 from components.gantt_chart import create_gantt_chart
 from models import GroupedHistoryTask, CamundaHistoryTask
 from utils.date_utils import format_date_russian
 from utils.aggrid_locale import AGGGRID_RUSSIAN_LOCALE, apply_aggrid_pagination_localization
+from app_logging.logger import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def content() -> None:
     """Главная страница с задачами пользователя"""

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
-import logging
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def format_due_date(due_date) -> str:
     """Форматирует дату окончания задачи"""

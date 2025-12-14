@@ -11,9 +11,9 @@ import requests
 from urllib.parse import urljoin
 import re
 import xml.etree.ElementTree as ET
-import logging
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 from config.settings import config
 

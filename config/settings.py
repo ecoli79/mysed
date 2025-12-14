@@ -1,8 +1,8 @@
 # config/settings.py
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Dict, Any, List
-from pydantic import Field, ConfigDict
+from typing import Optional, List
+from pydantic import Field, ConfigDict, field_validator
 from pydantic_settings import BaseSettings
 import os
 
@@ -30,44 +30,86 @@ class DatabaseType(str, Enum):
     SQLITE = "sqlite"
 
 
-class DatabaseConfig:
+class DatabaseConfig(BaseSettings):
     """Конфигурация базы данных для логов"""
-    def __init__(self, **data):
-        self.db_type = data.get('db_type', DatabaseType.SQLITE)
-        self.host = data.get('host', 'localhost')
-        self.port = data.get('port', 5432)
-        self.database = data.get('database', 'logs')
-        self.username = data.get('username', 'postgres')
-        self.password = data.get('password', '')
-        self.sqlite_path = data.get('sqlite_path', 'logs/app_logs.db')
-        self.table_name = data.get('table_name', 'application_logs')
+    
+    db_type: DatabaseType = Field(default=DatabaseType.SQLITE, env="LOG_DB_TYPE")
+    host: str = Field(default='localhost', env="LOG_DB_HOST")
+    port: int = Field(default=5432, env="LOG_DB_PORT")
+    database: str = Field(default='logs', env="LOG_DB_NAME")
+    username: str = Field(default='postgres', env="LOG_DB_USERNAME")
+    password: str = Field(default='', env="LOG_DB_PASSWORD")
+    sqlite_path: str = Field(default='logs/app_logs.db', env="LOG_SQLITE_PATH")
+    table_name: str = Field(default='application_logs', env="LOG_TABLE_NAME")
+    
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
 
-class LoggingConfig:
+class LoggingConfig(BaseSettings):
     """Конфигурация системы логирования"""
     
+    # Основные настройки
+    level: LogLevel = Field(default=LogLevel.INFO, env="LOG_LEVEL")
+    handlers: List[LogHandler] = Field(
+        default=[LogHandler.CONSOLE, LogHandler.FILE],
+        env="LOG_HANDLERS"
+    )
+    
+    # Настройки файлового логирования
+    log_dir: Path = Field(default=Path("logs"), env="LOG_DIR")
+    log_file: str = Field(default='app.log', env="LOG_FILE")
+    max_file_size: int = Field(default=10 * 1024 * 1024, env="LOG_MAX_FILE_SIZE")  # 10MB
+    backup_count: int = Field(default=5, env="LOG_BACKUP_COUNT")
+    
+    # Настройки форматирования
+    log_format: str = Field(
+        default="%(asctime)s - %(name)s - %(levelname)s - %(module)s:%(lineno)d - %(message)s",
+        env="LOG_FORMAT"
+    )
+    date_format: str = Field(default="%Y-%m-%d %H:%M:%S", env="LOG_DATE_FORMAT")
+    
+    # Настройки базы данных
+    database: Optional[DatabaseConfig] = None
+    
+    # Дополнительные настройки
+    enable_json_logging: bool = Field(default=False, env="LOG_JSON_FORMAT")
+    enable_context_logging: bool = Field(default=True, env="LOG_CONTEXT")
+    
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore"
+    )
+    
+    @field_validator('handlers', mode='before')
+    @classmethod
+    def parse_handlers(cls, v):
+        """Парсит строку handlers из .env в список"""
+        if isinstance(v, str):
+            # Разделяем по запятой и очищаем пробелы
+            handlers = [h.strip() for h in v.split(',')]
+            return [LogHandler(h) for h in handlers if h]
+        return v
+    
+    @field_validator('log_dir', mode='before')
+    @classmethod
+    def parse_log_dir(cls, v):
+        """Преобразует строку в Path"""
+        if isinstance(v, str):
+            return Path(v)
+        return v
+    
     def __init__(self, **data):
-        # Основные настройки
-        self.level = data.get('level', LogLevel.INFO)
-        self.handlers = data.get('handlers', [LogHandler.CONSOLE, LogHandler.FILE])
-        
-        # Настройки файлового логирования
-        self.log_dir = data.get('log_dir', Path("logs"))
-        self.log_file = data.get('log_file', 'app.log')
-        self.max_file_size = data.get('max_file_size', 10 * 1024 * 1024)  # 10MB
-        self.backup_count = data.get('backup_count', 5)
-        
-        # Настройки форматирования
-        self.log_format = data.get('log_format', 
-            "%(asctime)s - %(name)s - %(levelname)s - %(module)s:%(lineno)d - %(message)s")
-        self.date_format = data.get('date_format', "%Y-%m-%d %H:%M:%S")
-        
-        # Настройки базы данных
-        self.database = data.get('database', None)
-        
-        # Дополнительные настройки
-        self.enable_json_logging = data.get('enable_json_logging', False)
-        self.enable_context_logging = data.get('enable_context_logging', True)
+        super().__init__(**data)
+        # Инициализируем database config если handlers содержит DATABASE
+        if LogHandler.DATABASE in self.handlers and self.database is None:
+            self.database = DatabaseConfig()
 
 
 class AppConfig(BaseSettings):
@@ -106,9 +148,8 @@ class AppConfig(BaseSettings):
     email_allowed_senders: str = Field(default="", env="EMAIL_ALLOWED_SENDERS")  # Через запятую
     email_check_interval: int = Field(default=300, env="EMAIL_CHECK_INTERVAL")  # Интервал проверки в секундах
     
-    
     # Логирование
-    logging: LoggingConfig = Field(default_factory=lambda: LoggingConfig())
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
     
     model_config = ConfigDict(
         env_file=".env",

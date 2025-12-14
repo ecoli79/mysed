@@ -1,11 +1,11 @@
 # services/document_access_manager.py
 
-import logging
 from typing import List, Optional, Dict, Any
 from services.mayan_connector import MayanClient, MayanDocument
 from models import UserSession
+from app_logging.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class DocumentAccessManager:
     """Менеджер управления доступом к документам"""
