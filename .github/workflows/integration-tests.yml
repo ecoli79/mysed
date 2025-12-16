@@ -1,0 +1,54 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  integration-tests:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v1
+      with:
+        version: "latest"
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        uv sync --extra test
+    
+    - name: Run integration tests (fast)
+      env:
+        TEST_USE_REAL_SERVERS: false
+        ENVIRONMENT: test
+      run: |
+        uv run pytest tests/integration/ -m "not slow" -v --tb=short
+    
+    - name: Run integration tests with coverage
+      env:
+        TEST_USE_REAL_SERVERS: false
+        ENVIRONMENT: test
+      run: |
+        uv run pytest tests/integration/ -m "not slow" --cov=services --cov=api_router --cov-report=xml --cov-report=html
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: integration
+        name: codecov-integration
+

@@ -1,0 +1,4 @@
+"""
+Тесты FastAPI endpoints
+"""
+
