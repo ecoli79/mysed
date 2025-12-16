@@ -18,3 +18,41 @@ dependencies = [
     "reportlab>=4.4.4",
     "requests>=2.32.5",  # Оставляем для обратной совместимости на время миграции
 ]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.11.0",
+    "pytest-cov>=4.1.0",
+    "pytest-xdist>=3.3.0",
+    "responses>=0.23.0",
+    "playwright>=1.40.0",
+    "pytest-timeout>=2.1.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "7.4"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+markers = [
+    "integration: интеграционные тесты",
+    "unit: unit тесты",
+    "e2e: end-to-end тесты",
+    "camunda: тесты Camunda интеграции",
+    "mayan: тесты Mayan EDMS интеграции",
+    "ldap: тесты LDAP интеграции",
+    "email: тесты Email обработки",
+    "api: тесты API endpoints",
+    "workflow: тесты полных workflows",
+    "slow: медленные тесты",
+    "real_server: требуют реального сервера",
+]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+]
