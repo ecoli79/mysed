@@ -17,6 +17,7 @@ class TestAuthentication:
         login_page = LoginPage(page)
         
         print(f'\n[E2E] Начало теста входа. URL: {test_app_url}')
+        print(f'[E2E] Учетные данные: username={test_user_credentials["username"]}, password={"*" * len(test_user_credentials["password"]) if test_user_credentials["password"] else "не указан"}')
         print(f'[E2E] Текущий URL до перехода: {page.url}')
         
         try:
@@ -39,21 +40,37 @@ class TestAuthentication:
             )
             print('[E2E] Форма заполнена, ожидание обработки...')
             
-            # Ждем немного для обработки
-            await page.wait_for_timeout(3000)
-            print(f'[E2E] Текущий URL после входа: {page.url}')
+            # Ждем сообщения о статусе (успех или ошибка)
+            print('[E2E] Ожидание сообщения о статусе входа...')
+            await page.wait_for_timeout(2000)  # Даем время на обработку
             
-            # Проверяем редирект (может быть не сразу)
+            # Проверяем сообщение о статусе
+            status_message = await login_page.get_status_message()
+            print(f'[E2E] Сообщение о статусе: {status_message}')
+            
+            if status_message and any(keyword in status_message.lower() for keyword in ['ошибка', 'неверный', 'не найден', 'error']):
+                # Вход не удался
+                await page.screenshot(path='test_successful_login_error.png')
+                pytest.fail(f'Вход не удался: {status_message}. URL: {page.url}')
+            
+            # Ждем сообщения об успешном входе (если есть)
+            print('[E2E] Ожидание сообщения об успешном входе...')
+            success_detected = await login_page.wait_for_success_message(timeout=5000)
+            if success_detected:
+                print('[E2E] Сообщение об успешном входе обнаружено')
+            
+            # Редирект происходит через 1 секунду после успешного входа
+            # Ждем редиректа (уход со страницы /login)
+            print('[E2E] Ожидание редиректа (может занять до 2 секунд)...')
             try:
-                print('[E2E] Ожидание редиректа...')
-                await login_page.wait_for_redirect(test_app_url, timeout=15000)
+                await login_page.wait_for_redirect(test_app_url, timeout=5000)
                 print(f'[E2E] Редирект произошел. Текущий URL: {page.url}')
             except Exception as redirect_error:
                 # Если редирект не произошел, проверяем текущий URL
                 current_url = page.url
                 print(f'[E2E] Редирект не произошел. Текущий URL: {current_url}')
                 if '/login' in current_url:
-                    # Проверяем сообщение об ошибке
+                    # Проверяем сообщение об ошибке еще раз
                     status_message = await login_page.get_status_message()
                     if status_message:
                         pytest.fail(f'Вход не удался: {status_message}. URL: {current_url}')
@@ -64,10 +81,6 @@ class TestAuthentication:
                 else:
                     # Возможно, редирект уже произошел, но мы его не поймали
                     print(f'[E2E] Редирект возможно уже произошел: {current_url}')
-            
-            # Проверяем, что вход успешен
-            is_successful = await login_page.is_login_successful(test_app_url)
-            assert is_successful, f'Вход не успешен, текущий URL: {page.url}'
             
             # Проверяем, что мы не на странице входа
             assert '/login' not in page.url, f'Остались на странице входа: {page.url}'

@@ -1,6 +1,7 @@
 """
 Page Object для страницы входа
 """
+import asyncio
 from playwright.async_api import Page
 from typing import Optional
 
@@ -61,11 +62,22 @@ class LoginPage:
     async def get_status_message(self) -> Optional[str]:
         """Получает сообщение о статусе входа"""
         try:
-            status_label = self.page.locator('text=/Пожалуйста|Проверка|Успешный|не найден|Неверный/').first
+            # Ищем сообщение о статусе (может быть в разных форматах)
+            status_label = self.page.locator('text=/Пожалуйста|Проверка|Успешный|не найден|Неверный|ошибка|Ошибка/').first
             await status_label.wait_for(state='visible', timeout=5000)
             return await status_label.text_content()
         except:
             return None
+    
+    async def wait_for_success_message(self, timeout: int = 5000) -> bool:
+        """Ждет сообщения об успешном входе"""
+        try:
+            # Ждем появления сообщения "Успешный вход!"
+            success_message = self.page.locator('text=/Успешный вход|успешный вход|Успешно/i').first
+            await success_message.wait_for(state='visible', timeout=timeout)
+            return True
+        except:
+            return False
     
     async def is_login_successful(self, base_url: str) -> bool:
         """Проверяет, успешен ли вход (редирект на главную страницу)"""
@@ -78,10 +90,27 @@ class LoginPage:
             return False
     
     async def wait_for_redirect(self, base_url: str, timeout: int = 10000):
-        """Ждет редиректа после входа"""
+        """Ждет редиректа после входа (уходит со страницы /login)"""
         try:
-            await self.page.wait_for_url(f'{base_url}/**', timeout=timeout)
-            await self.page.wait_for_load_state('domcontentloaded', timeout=5000)
+            # Ждем, пока URL изменится и не будет содержать /login
+            # Редирект происходит через 1 секунду после успешного входа
+            # Используем простой цикл с проверкой URL
+            import time
+            start_time = time.time()
+            timeout_seconds = timeout / 1000.0
+            
+            while True:
+                current_url = self.page.url
+                if '/login' not in current_url:
+                    # Редирект произошел
+                    await self.page.wait_for_load_state('domcontentloaded', timeout=5000)
+                    return
+                
+                # Проверяем таймаут
+                if time.time() - start_time > timeout_seconds:
+                    raise Exception(f'Таймаут ожидания редиректа')
+                
+                await asyncio.sleep(0.2)  # Небольшая задержка перед следующей проверкой
         except Exception as e:
             # Логируем текущий URL для отладки
             current_url = self.page.url

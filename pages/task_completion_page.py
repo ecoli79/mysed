@@ -254,6 +254,23 @@ async def apply_active_tasks_sorting(sortType: str):
     _tasks_container.clear()
     _task_cards.clear()
     
+    # Добавляем диаграмму Ганта перед карточками задач в сворачиваемом блоке
+    # Фильтруем задачи, у которых есть дедлайн
+    tasks_with_due = [task for task in sorted_tasks if hasattr(task, 'due') and task.due]
+    if tasks_with_due:
+        # Важно: оборачиваем в контекст _tasks_container, чтобы диаграмма добавлялась в правильный контейнер
+        with _tasks_container:
+            # Создаем сворачиваемый блок для диаграммы Ганта (свернут по умолчанию)
+            with ui.expansion('Диаграмма Ганта', icon='timeline', value=False).classes('w-full mb-4'):
+                create_gantt_chart(
+                    tasks_with_due, 
+                    title='Диаграмма Ганта активных задач',
+                    name_field='name',
+                    due_field='due',
+                    id_field='id',
+                    process_instance_id_field='process_instance_id'
+                )
+    
     for task in sorted_tasks:
         await create_task_card_with_progress(task)
 
@@ -338,67 +355,48 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
         # Сохраняем задачи для сортировки
         _active_tasks_list = tasks if tasks else []
         
-        # Применяем сортировку после загрузки
-        if _active_tasks_list:
-            await apply_active_tasks_sorting(_active_tasks_sort_type)
-            # Используем отсортированный список
-            tasks = _active_tasks_list
+        # Добавляем кнопку обновления и заголовок с количеством задач в одну строку
+        if header_container:
+            with header_container:
+                ui.button(
+                    'Обновить задачи',
+                    icon='refresh',
+                    on_click=lambda: load_active_tasks(_tasks_header_container)
+                ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
+                
+                # Добавляем select для сортировки
+                async def handle_sort_change(e):
+                    await apply_active_tasks_sorting(e.value)
+                
+                ui.select(
+                    options={
+                        'start_time_desc': 'По дате создания (новые сначала)',
+                        'start_time_asc': 'По дате создания (старые сначала)',
+                        'due_desc': 'По сроку исполнения (поздние сначала)',
+                        'due_asc': 'По сроку исполнения (ранние сначала)'
+                    },
+                    value=_active_tasks_sort_type,
+                    label='Сортировка',
+                    on_change=handle_sort_change
+                ).classes('w-64').props('dense')
+                
+                ui.label(f'Найдено {len(_active_tasks_list)} активных задач:').classes('text-lg font-semibold')
         
         # Нормализуем target_task_id для сравнения (приводим к строке)
         target_task_id_str = str(target_task_id).strip() if target_task_id else None
         logger.info(f"Ищем задачу с ID: {target_task_id_str}")
         
-        if tasks:
-            # Добавляем кнопку обновления и заголовок с количеством задач в одну строку
-            if header_container:
-                with header_container:
-                    ui.button(
-                        'Обновить задачи',
-                        icon='refresh',
-                        on_click=lambda: load_active_tasks(_tasks_header_container)
-                    ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
-                    
-                    # Добавляем select для сортировки
-                    async def handle_sort_change(e):
-                        await apply_active_tasks_sorting(e.value)
-                    
-                    ui.select(
-                        options={
-                            'start_time_desc': 'По дате создания (новые сначала)',
-                            'start_time_asc': 'По дате создания (старые сначала)',
-                            'due_desc': 'По сроку исполнения (поздние сначала)',
-                            'due_asc': 'По сроку исполнения (ранние сначала)'
-                        },
-                        value=_active_tasks_sort_type,
-                        label='Сортировка',
-                        on_change=handle_sort_change
-                    ).classes('w-64').props('dense')
-                    
-                    ui.label(f'Найдено {len(tasks)} активных задач:').classes('text-lg font-semibold')
-            
-            # Добавляем диаграмму Ганта перед карточками задач
-            # Фильтруем задачи, у которых есть дедлайн
-            tasks_with_due = [task for task in tasks if hasattr(task, 'due') and task.due]
-            if tasks_with_due:
-                create_gantt_chart(
-                    tasks_with_due, 
-                    title='Диаграмма Ганта активных задач',
-                    name_field='name',
-                    due_field='due',
-                    id_field='id',
-                    process_instance_id_field='process_instance_id'
-                )
+        # Применяем сортировку после загрузки - это создаст диаграмму Ганта и карточки задач
+        if _active_tasks_list:
+            await apply_active_tasks_sorting(_active_tasks_sort_type)
             
             # Переменная для хранения найденной задачи
             found_task = None
             
-            # Добавляем карточки задач в основной контейнер
-            for task in tasks:
-                await create_task_card_with_progress(task)
-                
-                # Проверяем, является ли это задача, которую нужно открыть
-                # Приводим все ID к строкам для надежного сравнения
-                if target_task_id_str:
+            # Ищем задачу для открытия
+            if target_task_id_str:
+                for task in _active_tasks_list:
+                    # Приводим все ID к строкам для надежного сравнения
                     task_id_str = str(getattr(task, 'id', '')).strip()
                     process_id_str = str(getattr(task, 'process_instance_id', '')).strip()
                     
@@ -408,69 +406,67 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
                         found_task = task
                         logger.info(f"Найдена задача в списке: task_id={task_id_str}, process_id={process_id_str}")
                         break
-            
-            # Если нашли задачу в списке, показываем её детали
-            if found_task:
-                logger.info(f"Показываем детали найденной задачи {found_task.id}")
-                # Вызываем напрямую, а не через ui.timer, чтобы сохранить контекст
-                await show_task_details(found_task)
-            elif target_task_id_str:
-                # Если задача не найдена в списке, пробуем загрузить её напрямую по ID
-                logger.info(f"Задача {target_task_id_str} не найдена в списке активных задач, пробуем загрузить напрямую")
-                try:
-                    # Пробуем загрузить задачу напрямую
-                    direct_task = await camunda_client.get_task_by_id(target_task_id_str)
-                    if direct_task:
-                        logger.info(f"Задача {target_task_id_str} найдена напрямую, показываем детали")
-                        # Используем небольшую задержку, чтобы UI успел обновиться
-                        ui.timer(0.1, lambda: show_task_details(direct_task), once=True)
-                    else:
-                        # Если не нашли как активную, пробуем найти по process_instance_id
-                        logger.info(f"Задача {target_task_id_str} не найдена как активная, пробуем найти задачи процесса")
-                        try:
-                            # Получаем задачи процесса
-                            endpoint = f'task?processInstanceId={target_task_id_str}'
-                            response = await camunda_client._make_request('GET', endpoint)
-                            response.raise_for_status()
-                            process_tasks = response.json()
-                            
-                            if process_tasks and len(process_tasks) > 0:
-                                # Берем первую задачу процесса
-                                task_data = process_tasks[0]
-                                process_task = CamundaTask(
-                                    id=task_data['id'],
-                                    name=task_data.get('name', ''),
-                                    assignee=task_data.get('assignee'),
-                                    start_time=task_data.get('created', ''),
-                                    due=task_data.get('due'),
-                                    follow_up=task_data.get('followUp'),
-                                    delegation_state=task_data.get('delegationState'),
-                                    description=task_data.get('description'),
-                                    execution_id=task_data.get('executionId', ''),
-                                    owner=task_data.get('owner'),
-                                    parent_task_id=task_data.get('parentTaskId'),
-                                    priority=task_data.get('priority', 0),
-                                    process_definition_id=task_data.get('processDefinitionId', ''),
-                                    process_instance_id=task_data.get('processInstanceId', ''),
-                                    task_definition_key=task_data.get('taskDefinitionKey', ''),
-                                    case_execution_id=task_data.get('caseExecutionId'),
-                                    case_instance_id=task_data.get('caseInstanceId'),
-                                    case_definition_id=task_data.get('caseDefinitionId'),
-                                    suspended=task_data.get('suspended', False),
-                                    form_key=task_data.get('formKey'),
-                                    tenant_id=task_data.get('tenantId')
-                                )
-                                logger.info(f"Найдена задача процесса {target_task_id_str}, показываем детали")
-                                ui.timer(0.1, lambda: show_task_details(process_task), once=True)
-                            else:
-                                logger.warning(f"Задача {target_task_id_str} не найдена ни в списке, ни напрямую")
-                                ui.notify(f'Задача {target_task_id_str} не найдена в ваших активных задачах', type='warning')
-                        except Exception as e2:
-                            logger.warning(f"Не удалось найти задачу по process_instance_id {target_task_id_str}: {e2}")
-                            ui.notify(f'Задача {target_task_id_str} не найдена', type='warning')
-                except Exception as e:
-                    logger.error(f"Ошибка при загрузке задачи {target_task_id_str} напрямую: {e}", exc_info=True)
-                    ui.notify(f'Ошибка при загрузке задачи: {str(e)}', type='error')
+                
+                # Если нашли задачу в списке, показываем её детали
+                if found_task:
+                    logger.info(f"Показываем детали найденной задачи {found_task.id}")
+                    await show_task_details(found_task)
+                elif target_task_id_str:
+                    # Если задача не найдена в списке, пробуем загрузить её напрямую по ID
+                    logger.info(f"Задача {target_task_id_str} не найдена в списке активных задач, пробуем загрузить напрямую")
+                    try:
+                        # Пробуем загрузить задачу напрямую
+                        direct_task = await camunda_client.get_task_by_id(target_task_id_str)
+                        if direct_task:
+                            logger.info(f"Задача {target_task_id_str} найдена напрямую, показываем детали")
+                            ui.timer(0.1, lambda: show_task_details(direct_task), once=True)
+                        else:
+                            # Если не нашли как активную, пробуем найти по process_instance_id
+                            logger.info(f"Задача {target_task_id_str} не найдена как активная, пробуем найти задачи процесса")
+                            try:
+                                # Получаем задачи процесса
+                                endpoint = f'task?processInstanceId={target_task_id_str}'
+                                response = await camunda_client._make_request('GET', endpoint)
+                                response.raise_for_status()
+                                process_tasks = response.json()
+                                
+                                if process_tasks and len(process_tasks) > 0:
+                                    # Берем первую задачу процесса
+                                    task_data = process_tasks[0]
+                                    process_task = CamundaTask(
+                                        id=task_data['id'],
+                                        name=task_data.get('name', ''),
+                                        assignee=task_data.get('assignee'),
+                                        start_time=task_data.get('created', ''),
+                                        due=task_data.get('due'),
+                                        follow_up=task_data.get('followUp'),
+                                        delegation_state=task_data.get('delegationState'),
+                                        description=task_data.get('description'),
+                                        execution_id=task_data.get('executionId', ''),
+                                        owner=task_data.get('owner'),
+                                        parent_task_id=task_data.get('parentTaskId'),
+                                        priority=task_data.get('priority', 0),
+                                        process_definition_id=task_data.get('processDefinitionId', ''),
+                                        process_instance_id=task_data.get('processInstanceId', ''),
+                                        task_definition_key=task_data.get('taskDefinitionKey', ''),
+                                        case_execution_id=task_data.get('caseExecutionId'),
+                                        case_instance_id=task_data.get('caseInstanceId'),
+                                        case_definition_id=task_data.get('caseDefinitionId'),
+                                        suspended=task_data.get('suspended', False),
+                                        form_key=task_data.get('formKey'),
+                                        tenant_id=task_data.get('tenantId')
+                                    )
+                                    logger.info(f"Найдена задача процесса {target_task_id_str}, показываем детали")
+                                    ui.timer(0.1, lambda: show_task_details(process_task), once=True)
+                                else:
+                                    logger.warning(f"Задача {target_task_id_str} не найдена ни в списке, ни напрямую")
+                                    ui.notify(f'Задача {target_task_id_str} не найдена в ваших активных задачах', type='warning')
+                            except Exception as e2:
+                                logger.warning(f"Не удалось найти задачу по process_instance_id {target_task_id_str}: {e2}")
+                                ui.notify(f'Задача {target_task_id_str} не найдена', type='warning')
+                    except Exception as e:
+                        logger.error(f"Ошибка при загрузке задачи {target_task_id_str} напрямую: {e}", exc_info=True)
+                        ui.notify(f'Ошибка при загрузке задачи: {str(e)}', type='error')
         else:
             # Показываем сообщение об отсутствии задач
             if header_container:

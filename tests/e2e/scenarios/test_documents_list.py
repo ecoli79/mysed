@@ -16,10 +16,11 @@ class TestDocumentsList:
         documents_page = MayanDocumentsPage(authenticated_page)
         
         # Переходим на страницу документов
+        # navigate_to уже проверяет, что не произошел редирект на /login
         await documents_page.navigate_to(test_app_url)
         
         # Проверяем, что мы на странице документов
-        assert await documents_page.is_on_documents_page()
+        assert await documents_page.is_on_documents_page(), f'Не на странице документов. Текущий URL: {authenticated_page.url}'
     
     @pytest.mark.asyncio
     async def test_documents_page_loads(self, authenticated_page, test_app_url):
@@ -67,7 +68,20 @@ class TestDocumentsList:
             username=test_user_credentials['username'],
             password=test_user_credentials['password']
         )
+        
+        # Ждем обработки
+        await page.wait_for_timeout(2000)
+        
+        # Проверяем сообщение о статусе
+        status_message = await login_page.get_status_message()
+        if status_message and any(keyword in status_message.lower() for keyword in ['ошибка', 'неверный', 'не найден', 'error']):
+            pytest.fail(f'Вход не удался: {status_message}')
+        
+        # Ждем редиректа
         await login_page.wait_for_redirect(test_app_url)
+        
+        # Проверяем, что мы не на странице входа
+        assert '/login' not in page.url, f'Остались на странице входа: {page.url}'
         
         # Переходим на страницу документов
         documents_page = MayanDocumentsPage(page)
@@ -78,7 +92,7 @@ class TestDocumentsList:
         await documents_page.wait_for_loading_complete()
         
         # Проверяем, что страница загрузилась
-        assert await documents_page.is_on_documents_page()
+        assert await documents_page.is_on_documents_page(), f'Не на странице документов. Текущий URL: {page.url}'
         assert await documents_page.is_documents_list_visible()
     
     @pytest.mark.asyncio

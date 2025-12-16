@@ -13,8 +13,18 @@ class MayanDocumentsPage:
     
     async def navigate_to(self, base_url: str):
         """Переходит на страницу документов"""
-        await self.page.goto(f'{base_url}/mayan_documents')
-        await self.page.wait_for_load_state('networkidle')
+        # Переходим на страницу документов
+        await self.page.goto(f'{base_url}/mayan_documents', wait_until='domcontentloaded')
+        
+        # Проверяем, не произошел ли редирект на страницу входа (из-за отсутствия авторизации)
+        await self.page.wait_for_load_state('domcontentloaded', timeout=5000)
+        current_url = self.page.url
+        
+        if '/login' in current_url:
+            raise Exception(f'Произошел редирект на страницу входа. Возможно, пользователь не авторизован. Текущий URL: {current_url}')
+        
+        # Ждем загрузки страницы
+        await self.page.wait_for_load_state('networkidle', timeout=10000)
     
     async def wait_for_documents_loaded(self, timeout: int = 30000):
         """Ждет загрузки списка документов"""
@@ -22,7 +32,7 @@ class MayanDocumentsPage:
         try:
             # Может быть таблица, список или сообщение "Нет документов"
             await self.page.wait_for_selector(
-                'table, .document-item, .document-card, text="Нет документов", text="Документы не найдены"',
+                '.q-item__label, .document-item, .document-card, text="Нет документов", text="Документы не найдены"',
                 timeout=timeout,
                 state='visible'
             )
@@ -63,7 +73,7 @@ class MayanDocumentsPage:
         """Проверяет, виден ли список документов"""
         try:
             # Проверяем наличие элементов документов или сообщения об отсутствии
-            has_documents = await self.page.locator('table, .document-item, .document-card').count() > 0
+            has_documents = await self.page.locator('.q-item__label, .document-item, .document-card').count() > 0
             has_no_documents_message = await self.page.locator('text=/Нет документов|Документы не найдены/').count() > 0
             return has_documents or has_no_documents_message
         except:

@@ -64,3 +64,25 @@ def temp_dir(tmp_path: Path) -> Path:
     """Возвращает временную директорию для тестов"""
     return tmp_path
 
+
+def pytest_addoption(parser):
+    """Добавляет опции командной строки для pytest"""
+    parser.addoption(
+        '--TEST_APP_URL',
+        action='store',
+        default=None,
+        help='URL тестового приложения для E2E тестов'
+    )
+    parser.addoption(
+        '--TEST_USERNAME',
+        action='store',
+        default=None,
+        help='Имя пользователя для E2E тестов'
+    )
+    parser.addoption(
+        '--TEST_PASSWORD',
+        action='store',
+        default=None,
+        help='Пароль для E2E тестов'
+    )
+

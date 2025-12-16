@@ -50,6 +50,7 @@ markers = [
     "workflow: тесты полных workflows",
     "slow: медленные тесты",
     "real_server: требуют реального сервера",
+    "real_plugin: требуют установки CryptoPro плагина",
 ]
 addopts = [
     "-v",
