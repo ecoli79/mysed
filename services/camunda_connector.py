@@ -25,9 +25,9 @@ from models import (
     JSONStringField,
 )
 
-from app_logging.logger import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class CamundaClient:

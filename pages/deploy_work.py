@@ -2,15 +2,14 @@ from message import message
 from nicegui import ui
 from models import Task
 from services.camunda_connector import create_camunda_client
+from models import CamundaDeployment, CamundaProcessDefinition
 import theme
 import tempfile
 import os
 from nicegui import app, ui
 from datetime import datetime
-import requests
 from urllib.parse import urljoin
 import re
-import xml.etree.ElementTree as ET
 from app_logging.logger import get_logger
 
 logger = get_logger(__name__)
@@ -59,38 +58,37 @@ def process_templates_page():
             with ui.tab_panel(templates_tab):
                 create_templates_section()
 
-def test_camunda_connection():
+
+async def test_camunda_connection():
     """Тестирует подключение к Camunda"""
     try:
-        # Получаем клиент Camunda
-        camunda_client = create_camunda_client()
-        
-        # Простой запрос для проверки подключения
-        response = camunda_client._make_request('GET', 'version')
-        
-        if response.status_code == 200:
-            version_info = response.json()
-            ui.notify(f'Подключение успешно! Версия Camunda: {version_info.get("version", "неизвестна")}', type='success')
-        else:
-            ui.notify(f'Ошибка подключения: {response.status_code}', type='error')
+        camunda_client = await create_camunda_client()
+        async with camunda_client:
+            response = await camunda_client._make_request('GET', 'version')
+            
+            if response.status_code == 200:
+                version_info = response.json()
+                ui.notify(f'Подключение успешно! Версия Camunda: {version_info.get("version", "неизвестна")}', type='success')
+            else:
+                ui.notify(f'Ошибка подключения: {response.status_code}', type='error')
             
     except Exception as e:
         ui.notify(f'Ошибка подключения: {str(e)}', type='error')
-        logger.error(f"Ошибка при тестировании подключения к Camunda: {e}", exc_info=True)
+        logger.error(f'Ошибка при тестировании подключения к Camunda: {e}', exc_info=True)
 
-def update_connection_status():
+
+async def update_connection_status():
     """Обновляет статус подключения"""
-    # Эта функция может быть расширена для отображения детального статуса
-    test_camunda_connection()
+    await test_camunda_connection()
 
-def deploy_click(uploaded_file, deployment_name, enable_duplicate_filtering, deploy_changed_only, tenant_id, results_container):
+
+async def deploy_click(uploaded_file, deployment_name, enable_duplicate_filtering, deploy_changed_only, tenant_id, results_container):
     """Обработчик кнопки развертывания"""
-    # Проверяем, есть ли загруженный файл
     if not uploaded_file['file']:
         ui.notify('Выберите BPMN файл', type='error')
         return
     
-    deploy_process_from_upload(
+    await deploy_process_from_upload(
         deployment_name,
         enable_duplicate_filtering,
         deploy_changed_only,
@@ -99,13 +97,13 @@ def deploy_click(uploaded_file, deployment_name, enable_duplicate_filtering, dep
         uploaded_file
     )
 
+
 def create_deploy_section():
     """Создает секцию развертывания процессов"""
     ui.label('Развертывание BPMN процессов').classes('text-xl font-semibold mb-4')
     
     with ui.card().classes('p-6 w-full'):
         with ui.column().classes('w-full'):
-            # Поля для настройки развертывания
             deployment_name = ui.input(
                 'Имя развертывания',
                 placeholder='Введите имя развертывания'
@@ -121,8 +119,11 @@ def create_deploy_section():
             
             uploaded_file = {'file': None}
             
+            # Контейнер для результатов (создаем до upload_area)
+            results_container = ui.column().classes('w-full')
+            
             # Загрузка файла
-            upload_area = ui.upload(
+            ui.upload(
                 on_upload=lambda e: handle_bpmn_upload(
                     e,
                     deployment_name,
@@ -138,9 +139,6 @@ def create_deploy_section():
                 max_file_size=10 * 1024 * 1024
             ).props('accept=".bpmn,.xml"').classes('w-full mb-4')
             
-            # Контейнер для результатов
-            results_container = ui.column().classes('w-full')
-            
             # Кнопка развертывания
             ui.button(
                 'Развернуть процесс',
@@ -148,24 +146,20 @@ def create_deploy_section():
                 on_click=lambda: deploy_click(uploaded_file, deployment_name, enable_duplicate_filtering, deploy_changed_only, tenant_id, results_container)
             ).props('type=button').classes('w-full bg-green-500 text-white text-xs px-2 py-1 h-7')
 
+
 def handle_bpmn_upload(e, deployment_name, enable_duplicate_filtering, deploy_changed_only, tenant_id, results_container, uploaded_file):
     """Обрабатывает загрузку BPMN файла"""
     if not deployment_name.value:
         ui.notify('Введите имя развертывания', type='error')
         return
 
-    # Читаем содержимое СРАЗУ и сохраняем
     content = e.content.read()
     
-    # Проверяем и исправляем кодировку файла
     try:
-        # Пытаемся декодировать как UTF-8
         content_str = content.decode('utf-8')
-        # Перекодируем обратно в UTF-8 для обеспечения правильной кодировки
         content = content_str.encode('utf-8')
     except UnicodeDecodeError:
         try:
-            # Пытаемся декодировать как Windows-1251
             content_str = content.decode('windows-1251')
             content = content_str.encode('utf-8')
             ui.notify('Файл перекодирован из Windows-1251 в UTF-8', type='info')
@@ -173,12 +167,10 @@ def handle_bpmn_upload(e, deployment_name, enable_duplicate_filtering, deploy_ch
             ui.notify('Не удалось определить кодировку файла', type='error')
             return
     
-    # Проверяем, что это валидный BPMN файл
     if not is_valid_bpmn(content):
         ui.notify('Файл не является валидным BPMN файлом', type='error')
         return
     
-    # Сохраняем имя и байты
     uploaded_file['file'] = {
         'name': e.name,
         'content': content
@@ -189,12 +181,12 @@ def handle_bpmn_upload(e, deployment_name, enable_duplicate_filtering, deploy_ch
         ui.label(f'Файл {e.name} загружен успешно!').classes('text-green-600')
         ui.label(f'Размер: {len(content)} байт').classes('text-sm text-gray-600')
         
-        # Пытаемся извлечь название процесса
         process_name = extract_process_name(content)
         if process_name:
             ui.label(f'Название процесса: {process_name}').classes('text-sm text-blue-600')
 
-def is_valid_bpmn(content):
+
+def is_valid_bpmn(content: bytes) -> bool:
     """Проверяет, является ли содержимое валидным BPMN файлом"""
     try:
         content_str = content.decode('utf-8')
@@ -202,18 +194,18 @@ def is_valid_bpmn(content):
     except UnicodeDecodeError:
         return False
 
-def extract_process_name(content):
+
+def extract_process_name(content: bytes) -> str | None:
     """Извлекает название процесса из BPMN файла"""
     try:
         content_str = content.decode('utf-8')
-        # Простое извлечение названия процесса
-        import re
         match = re.search(r'<process[^>]*name="([^"]*)"', content_str)
         return match.group(1) if match else None
-    except:
+    except (UnicodeDecodeError, AttributeError):
         return None
 
-def deploy_process_from_upload(deployment_name, enable_duplicate_filtering, deploy_changed_only, tenant_id, results_container, uploaded_file):
+
+async def deploy_process_from_upload(deployment_name, enable_duplicate_filtering, deploy_changed_only, tenant_id, results_container, uploaded_file):
     """Развертывает процесс из загруженного файла"""
     if not deployment_name.value:
         ui.notify('Введите имя развертывания', type='error')
@@ -223,24 +215,22 @@ def deploy_process_from_upload(deployment_name, enable_duplicate_filtering, depl
         ui.notify('Нет загруженного файла', type='error')
         return
 
-    # Показываем прогресс
+    results_container.clear()
     with results_container:
         progress = ui.linear_progress().classes('w-full mb-2')
         progress.value = 0.1
 
-        tmp_file_path = None  # Инициализируем переменную
+        tmpFilePath = None
         try:
-            # Создаём временный файл
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.bpmn') as tmp_file:
-                tmp_file.write(uploaded_file['file']['content'])
-                tmp_file_path = tmp_file.name
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.bpmn') as tmpFile:
+                tmpFile.write(uploaded_file['file']['content'])
+                tmpFilePath = tmpFile.name
 
             progress.value = 0.3
             
-            # Развертываем с улучшенной обработкой ошибок
-            deployment = deploy_process_improved(
+            deployment = await deploy_process_improved(
                 deployment_name=deployment_name.value,
-                bpmn_file_path=tmp_file_path,
+                bpmn_file_path=tmpFilePath,
                 enable_duplicate_filtering=enable_duplicate_filtering.value,
                 deploy_changed_only=deploy_changed_only.value,
                 tenant_id=tenant_id.value if tenant_id.value else None
@@ -254,7 +244,6 @@ def deploy_process_from_upload(deployment_name, enable_duplicate_filtering, depl
                 ui.label(f'ID развертывания: {deployment.id}').classes('text-sm text-gray-600')
                 ui.label(f'Время развертывания: {deployment.deployment_time}').classes('text-sm text-gray-600')
                 
-                # Показываем информацию о процессах
                 if deployment.process_definitions:
                     ui.label('Развернутые процессы:').classes('text-sm font-medium mt-2')
                     for process in deployment.process_definitions:
@@ -263,148 +252,147 @@ def deploy_process_from_upload(deployment_name, enable_duplicate_filtering, depl
                 else:
                     ui.label('Процесс успешно развернут!').classes('text-sm text-blue-600 mt-2')
             else:
-                ui.label('❌ Ошибка развертывания').classes('text-red-600 font-semibold')
+                ui.label('Ошибка развертывания').classes('text-red-600 font-semibold')
                 
         except Exception as e:
-            ui.label(f'❌ Ошибка: {str(e)}').classes('text-red-600')
-            logger.error(f"Ошибка при развертывании процесса: {e}", exc_info=True)
+            ui.label(f'Ошибка: {str(e)}').classes('text-red-600')
+            logger.error(f'Ошибка при развертывании процесса: {e}', exc_info=True)
         finally:
-            # Удаляем временный файл
-            if tmp_file_path and os.path.exists(tmp_file_path):
+            if tmpFilePath:
                 try:
-                    os.unlink(tmp_file_path)
+                    os.unlink(tmpFilePath)
+                except FileNotFoundError:
+                    pass
                 except Exception as e:
-                    logger.error(f"Ошибка при удалении временного файла {tmp_file_path}: {e}")
+                    logger.error(f'Ошибка при удалении временного файла {tmpFilePath}: {e}')
 
-def deploy_process_improved(deployment_name, bpmn_file_path, enable_duplicate_filtering=False, deploy_changed_only=False, tenant_id=None):
+
+async def deploy_process_improved(
+    deployment_name: str,
+    bpmn_file_path: str,
+    enable_duplicate_filtering: bool = False,
+    deploy_changed_only: bool = False,
+    tenant_id: str | None = None
+) -> CamundaDeployment | None:
     """
     Улучшенная функция развертывания процесса с правильным форматом multipart/form-data
     """
     endpoint = 'deployment/create'
     
     try:
-        # Читаем файл полностью в память
         with open(bpmn_file_path, 'rb') as f:
-            file_content = f.read()
+            fileContent = f.read()
         
-        # Проверяем, что файл содержит валидный XML
         try:
-            content_str = file_content.decode('utf-8')
-            logger.info(f"Размер файла: {len(file_content)} байт")
-            logger.info(f"Первые 200 символов файла: {content_str[:200]}")
+            contentStr = fileContent.decode('utf-8')
+            logger.info(f'Размер файла: {len(fileContent)} байт')
+            logger.info(f'Первые 200 символов файла: {contentStr[:200]}')
             
-            # Убеждаемся, что это валидный BPMN
-            if not ('<definitions' in content_str and '<process' in content_str):
-                logger.error("Файл не содержит валидный BPMN процесс")
-                logger.error(f"Содержимое файла: {content_str[:500]}")
+            if not ('<definitions' in contentStr and '<process' in contentStr):
+                logger.error('Файл не содержит валидный BPMN процесс')
+                logger.error(f'Содержимое файла: {contentStr[:500]}')
                 return None
-            
-            # Радикальная очистка XML для Camunda 7.24
-            import re
-            import xml.etree.ElementTree as ET
-            
-            # Проверяем наличие DOCTYPE перед очисткой
-            doctype_found = re.search(r'<!DOCTYPE[^>]*>', content_str, re.IGNORECASE | re.DOTALL)
-            if doctype_found:
-                logger.warning(f"Найдена DOCTYPE декларация: {doctype_found.group()}")
+                        
+            doctypeFound = re.search(r'<!DOCTYPE[^>]*>', contentStr, re.IGNORECASE | re.DOTALL)
+            if doctypeFound:
+                logger.warning(f'Найдена DOCTYPE декларация: {doctypeFound.group()}')
             else:
-                logger.info("DOCTYPE декларация не найдена в файле")
+                logger.info('DOCTYPE декларация не найдена в файле')
             
-            # # Удаляем DOCTYPE если он есть
-            # content_str = re.sub(r'<!DOCTYPE[^>]*>', '', content_str, flags=re.IGNORECASE | re.DOTALL)
-            
-            # # Удаляем xsi:schemaLocation атрибут, который может вызывать проблемы
-            # content_str = re.sub(r'\s+xsi:schemaLocation="[^"]*"', '', content_str)
-            
-            # Перекодируем обратно в байты
-            file_content = content_str.encode('utf-8')
+            fileContent = contentStr.encode('utf-8')
             
         except UnicodeDecodeError as e:
-            logger.error(f"Ошибка декодирования файла: {e}")
+            logger.error(f'Ошибка декодирования файла: {e}')
             return None
         
         # Подготавливаем данные для multipart/form-data
-        files = {
-            'deployment-name': (None, deployment_name),
-            'enable-duplicate-filtering': (None, str(enable_duplicate_filtering).lower()),
-            'deploy-changed-only': (None, str(deploy_changed_only).lower()),
+        data = {
+            'deployment-name': deployment_name,
+            'enable-duplicate-filtering': str(enable_duplicate_filtering).lower(),
+            'deploy-changed-only': str(deploy_changed_only).lower(),
         }
         
         if tenant_id:
-            files['tenant-id'] = (None, tenant_id)
+            data['tenant-id'] = tenant_id
         
-        # Добавляем файл
-        files['file'] = (os.path.basename(bpmn_file_path), file_content, 'application/xml')
+        files = {
+            'data': (os.path.basename(bpmn_file_path), fileContent, 'application/xml')
+        }
         
-        # Выполняем запрос напрямую через session
-        camunda_client = create_camunda_client()
-        url = urljoin(camunda_client.engine_rest_url, endpoint.lstrip('/'))
-        
-        logger.info(f"Отправляем запрос на развертывание на URL: {url}")
-        logger.info(f"Параметры: deployment-name={deployment_name}, enable-duplicate-filtering={enable_duplicate_filtering}")
-        
-        response = camunda_client.session.post(url, files=files, verify=False)
-        
-        logger.info(f"Ответ сервера: {response.status_code}")
-        logger.info(f"Заголовки ответа: {dict(response.headers)}")
-        
-        if response.status_code == 200:
-            deployment_data = response.json()
-            logger.info(f"Данные развертывания: {deployment_data}")
+        camundaClient = await create_camunda_client()
+        async with camundaClient:
+            url = urljoin(camundaClient.engine_rest_url, endpoint.lstrip('/'))
             
-            # Создаем объект развертывания
-            from models import CamundaDeployment, CamundaProcessDefinition
+            logger.info(f'Отправляем запрос на развертывание на URL: {url}')
+            logger.info(f'Параметры: deployment-name={deployment_name}, enable-duplicate-filtering={enable_duplicate_filtering}')
             
-            # Извлекаем информацию о развернутых процессах
-            process_definitions = []
-            if 'deployedProcessDefinitions' in deployment_data and deployment_data['deployedProcessDefinitions']:
-                for process_data in deployment_data['deployedProcessDefinitions'].values():
-                    process_definitions.append(CamundaProcessDefinition(
-                        id=process_data['id'],
-                        key=process_data['key'],
-                        category=process_data.get('category'),
-                        description=process_data.get('description'),
-                        name=process_data['name'],
-                        version=process_data['version'],
-                        resource=process_data['resource'],
-                        deployment_id=process_data['deploymentId'],
-                        diagram=process_data.get('diagram'),
-                        suspended=process_data['suspended'],
-                        tenant_id=process_data.get('tenantId'),
-                        version_tag=process_data.get('versionTag'),
-                        history_time_to_live=process_data.get('historyTimeToLive'),
-                        startable_in_tasklist=process_data['startableInTasklist']
-                    ))
-            
-            deployment = CamundaDeployment(
-                id=deployment_data['id'],
-                name=deployment_data['name'],
-                deployment_time=deployment_data['deploymentTime'],
-                source=deployment_data.get('source'),
-                tenant_id=deployment_data.get('tenantId'),
-                process_definitions=process_definitions
+            response = await camundaClient.client.post(
+                url,
+                data=data,
+                files=files,
+                timeout=110.0
             )
             
-            return deployment
-        else:
-            logger.error(f"Ошибка развертывания: {response.status_code}")
-            logger.error(f"Ответ сервера: {response.text}")
-            return None
+            logger.info(f'Ответ сервера: {response.status_code}')
+            logger.info(f'Заголовки ответа: {dict(response.headers)}')
+            
+            if response.status_code == 200:
+                deploymentData = response.json()
+                logger.info(f'Данные развертывания: {deploymentData}')
+                
+                processDefinitions = []
+                if 'deployedProcessDefinitions' in deploymentData and deploymentData['deployedProcessDefinitions']:
+                    for processData in deploymentData['deployedProcessDefinitions'].values():
+                        processDefinitions.append(CamundaProcessDefinition(
+                            id=processData['id'],
+                            key=processData['key'],
+                            category=processData.get('category'),
+                            description=processData.get('description'),
+                            name=processData['name'],
+                            version=processData['version'],
+                            resource=processData['resource'],
+                            deployment_id=processData['deploymentId'],
+                            diagram=processData.get('diagram'),
+                            suspended=processData['suspended'],
+                            tenant_id=processData.get('tenantId'),
+                            version_tag=processData.get('versionTag'),
+                            history_time_to_live=processData.get('historyTimeToLive'),
+                            startable_in_tasklist=processData['startableInTasklist']
+                        ))
+                
+                deployment = CamundaDeployment(
+                    id=deploymentData['id'],
+                    name=deploymentData['name'],
+                    deployment_time=deploymentData['deploymentTime'],
+                    source=deploymentData.get('source'),
+                    tenant_id=deploymentData.get('tenantId'),
+                    process_definitions=processDefinitions
+                )
+                
+                return deployment
+            else:
+                logger.error(f'Ошибка развертывания: {response.status_code}')
+                logger.error(f'Ответ сервера: {response.text}')
+                return None
             
     except Exception as e:
-        logger.error(f"Ошибка при развертывании процесса: {e}", exc_info=True)
+        logger.error(f'Ошибка при развертывании процесса: {e}', exc_info=True)
         return None
 
-def load_process_definitions(processes_container):
+
+async def load_process_definitions(processes_container):
     """Загружает список определений процессов"""
     processes_container.clear()
     
     with processes_container:
-        ui.label('Загрузка процессов...').classes('text-gray-600')
+        loadingLabel = ui.label('Загрузка процессов...').classes('text-gray-600')
         
         try:
-            camunda_client = create_camunda_client()
-            processes = camunda_client.get_active_process_definitions()
+            camundaClient = await create_camunda_client()
+            async with camundaClient:
+                processes = await camundaClient.get_active_process_definitions()
+            
+            loadingLabel.delete()
             
             if not processes:
                 ui.label('Нет активных процессов').classes('text-gray-500')
@@ -430,8 +418,10 @@ def load_process_definitions(processes_container):
                                 ui.label(f'Арендатор: {process.tenant_id}').classes('text-xs text-gray-500')
                             
         except Exception as e:
+            loadingLabel.delete()
             ui.label(f'Ошибка загрузки: {str(e)}').classes('text-red-600')
-            logger.error(f"Ошибка при загрузке процессов: {e}", exc_info=True)
+            logger.error(f'Ошибка при загрузке процессов: {e}', exc_info=True)
+
 
 def create_manage_section():
     """Создает секцию управления процессами"""
@@ -441,26 +431,27 @@ def create_manage_section():
         with ui.column().classes('w-full'):
             ui.label('Список развернутых процессов').classes('text-sm font-medium mb-2')
             
+            # Контейнер для процессов
+            processesContainer = ui.column().classes('w-full')
+            
             # Кнопка обновления
             ui.button(
                 'Обновить список',
                 icon='refresh',
-                on_click=lambda: load_process_definitions(processes_container)
+                on_click=lambda: load_process_definitions(processesContainer)
             ).classes('mb-4 bg-blue-500 text-white text-xs px-2 py-1 h-7')
             
-            # Контейнер для процессов
-            processes_container = ui.column().classes('w-full')
-            
             # Загружаем процессы при открытии
-            load_process_definitions(processes_container)
+            ui.timer(0.1, lambda: load_process_definitions(processesContainer), once=True)
 
-def refresh_templates():
+
+async def refresh_templates():
     """Обновляет список шаблонов"""
     try:
-        camunda_client = create_camunda_client()
-        processes = camunda_client.get_active_process_definitions()
+        camundaClient = await create_camunda_client()
+        async with camundaClient:
+            await camundaClient.get_active_process_definitions()
         
-        # Список готовых шаблонов
         templates = [
             {
                 'name': 'Простой процесс одобрения',
@@ -502,17 +493,18 @@ def refresh_templates():
                         ui.button(
                             'Создать',
                             icon='add',
-                            on_click=lambda t=template: create_new_template(t["name"])
+                            on_click=lambda t=template: create_new_template(t['name'])
                         ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
     except Exception as e:
         ui.label(f'Ошибка загрузки шаблонов: {str(e)}').classes('text-red-600')
-        logger.error(f"Ошибка при загрузке шаблонов: {e}", exc_info=True)
+        logger.error(f'Ошибка при загрузке шаблонов: {e}', exc_info=True)
+
 
 def download_template(template):
     """Скачивает шаблон"""
     ui.notify(f'Скачивание шаблона: {template["name"]}', type='info')
-    # Здесь можно добавить логику скачивания файла
+
 
 def create_new_template(name):
     """Создает новый шаблон"""
@@ -521,7 +513,7 @@ def create_new_template(name):
         return
     
     ui.notify(f'Создание шаблона: {name}', type='info')
-    # Здесь можно добавить логику создания нового шаблона
+
 
 def create_templates_section():
     """Создает секцию шаблонов"""
@@ -531,12 +523,8 @@ def create_templates_section():
         with ui.column().classes('w-full'):
             ui.label('Доступные шаблоны процессов').classes('text-sm font-medium mb-2')
             
-            # Кнопка обновления списка
             ui.button(
                 'Обновить шаблоны',
                 icon='refresh',
                 on_click=refresh_templates
             ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
-        
-        
-       
