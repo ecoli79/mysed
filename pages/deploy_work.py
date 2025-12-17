@@ -447,58 +447,60 @@ def create_manage_section():
 
 async def refresh_templates():
     """Обновляет список шаблонов"""
-    try:
-        camundaClient = await create_camunda_client()
-        async with camundaClient:
-            await camundaClient.get_active_process_definitions()
+    ui.notify('Функция в разработке', type='info')
+
+    # try:
+    #     camundaClient = await create_camunda_client()
+    #     async with camundaClient:
+    #         await camundaClient.get_active_process_definitions()
         
-        templates = [
-            {
-                'name': 'Простой процесс одобрения',
-                'description': 'Базовый процесс с одной задачей на одобрение',
-                'file': 'simple_approval.bpmn',
-                'icon': 'check_circle'
-            },
-            {
-                'name': 'Процесс с несколькими участниками',
-                'description': 'Процесс с последовательными задачами для разных пользователей',
-                'file': 'multi_user_process.bpmn',
-                'icon': 'group'
-            },
-            {
-                'name': 'Процесс ознакомления с документом',
-                'description': 'Процесс для ознакомления нескольких пользователей с документом',
-                'file': 'document_review.bpmn',
-                'icon': 'description'
-            }
-        ]
+    #     templates = [
+    #         {
+    #             'name': 'Простой процесс одобрения',
+    #             'description': 'Базовый процесс с одной задачей на одобрение',
+    #             'file': 'simple_approval.bpmn',
+    #             'icon': 'check_circle'
+    #         },
+    #         {
+    #             'name': 'Процесс с несколькими участниками',
+    #             'description': 'Процесс с последовательными задачами для разных пользователей',
+    #             'file': 'multi_user_process.bpmn',
+    #             'icon': 'group'
+    #         },
+    #         {
+    #             'name': 'Процесс ознакомления с документом',
+    #             'description': 'Процесс для ознакомления нескольких пользователей с документом',
+    #             'file': 'document_review.bpmn',
+    #             'icon': 'description'
+    #         }
+    #     ]
         
-        ui.label(f'Доступно {len(templates)} шаблонов:').classes('text-lg font-semibold mb-4')
+    #     ui.label(f'Доступно {len(templates)} шаблонов:').classes('text-lg font-semibold mb-4')
         
-        for template in templates:
-            with ui.card().classes('mb-3 p-4 border-l-4 border-green-500'):
-                with ui.row().classes('items-start justify-between w-full'):
-                    with ui.column().classes('flex-1'):
-                        ui.label(f'{template["name"]}').classes('text-lg font-semibold')
-                        ui.label(f'{template["description"]}').classes('text-sm text-gray-600')
-                        ui.label(f'Файл: {template["file"]}').classes('text-sm text-gray-600')
+    #     for template in templates:
+    #         with ui.card().classes('mb-3 p-4 border-l-4 border-green-500'):
+    #             with ui.row().classes('items-start justify-between w-full'):
+    #                 with ui.column().classes('flex-1'):
+    #                     ui.label(f'{template["name"]}').classes('text-lg font-semibold')
+    #                     ui.label(f'{template["description"]}').classes('text-sm text-gray-600')
+    #                     ui.label(f'Файл: {template["file"]}').classes('text-sm text-gray-600')
                     
-                    with ui.column().classes('items-end gap-2'):
-                        ui.button(
-                            'Скачать',
-                            icon='download',
-                            on_click=lambda t=template: download_template(t)
-                        ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
+    #                 with ui.column().classes('items-end gap-2'):
+    #                     ui.button(
+    #                         'Скачать',
+    #                         icon='download',
+    #                         on_click=lambda t=template: download_template(t)
+    #                     ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
                         
-                        ui.button(
-                            'Создать',
-                            icon='add',
-                            on_click=lambda t=template: create_new_template(t['name'])
-                        ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
+    #                     ui.button(
+    #                         'Создать',
+    #                         icon='add',
+    #                         on_click=lambda t=template: create_new_template(t['name'])
+    #                     ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
         
-    except Exception as e:
-        ui.label(f'Ошибка загрузки шаблонов: {str(e)}').classes('text-red-600')
-        logger.error(f'Ошибка при загрузке шаблонов: {e}', exc_info=True)
+    # except Exception as e:
+    #     ui.label(f'Ошибка загрузки шаблонов: {str(e)}').classes('text-red-600')
+    #     logger.error(f'Ошибка при загрузке шаблонов: {e}', exc_info=True)
 
 
 def download_template(template):
