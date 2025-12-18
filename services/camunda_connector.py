@@ -2387,5 +2387,5 @@ async def create_camunda_client() -> CamundaClient:
         base_url=config.camunda_url,
         username=config.camunda_username,
         password=config.camunda_password,
-        verify_ssl=False
+        verify_ssl=config.camunda_verify_ssl
     )

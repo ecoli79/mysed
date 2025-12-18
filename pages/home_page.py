@@ -1,15 +1,13 @@
-from message import message
 from nicegui import ui
-from models import Task
 from datetime import datetime, timezone, timedelta
-from services.camunda_connector import CamundaClient
+from typing import Any, Union
+from services.camunda_connector import CamundaClient, create_camunda_client
 from auth.middleware import get_current_user
 from config.settings import config
-from utils import validate_username, format_due_date, create_task_detail_data
-import theme
+from utils import validate_username, create_task_detail_data
 import asyncio
-from components.gantt_chart import create_gantt_chart
-from models import GroupedHistoryTask, CamundaHistoryTask
+from components.gantt_chart import create_gantt_chart, parse_task_deadline
+from models import GroupedHistoryTask, CamundaTask, CamundaHistoryTask
 from utils.date_utils import format_date_russian
 from utils.aggrid_locale import AGGGRID_RUSSIAN_LOCALE, apply_aggrid_pagination_localization
 from app_logging.logger import get_logger
@@ -17,78 +15,93 @@ from app_logging.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+def _extract_camunda_variable(variables: dict, key: str) -> str | None:
+    """Извлекает значение переменной из формата Camunda API."""
+    value = variables.get(key)
+    if not value:
+        return None
+    if isinstance(value, dict) and 'value' in value:
+        result = value['value']
+    elif isinstance(value, str):
+        result = value
+    else:
+        result = str(value) if value else None
+    return result.strip() if result and isinstance(result, str) else result
+
+
+async def _get_task_process_variables(
+    camunda_client: CamundaClient,
+    task: Union[CamundaTask, CamundaHistoryTask, GroupedHistoryTask, Any],
+    show_finished: bool
+) -> dict[str, str | None]:
+    """Получает переменные процесса для задачи и возвращает извлечённые данные."""
+    result = {
+        'due_date': None,
+        'task_name': None,
+        'task_description': None,
+        'document_name': None,
+        'document_id': None,
+    }
+    
+    if not hasattr(task, 'process_instance_id') or not task.process_instance_id:
+        return result
+    
+    try:
+        var_names = ['dueDate', 'taskName', 'documentName', 'taskDescription', 'documentId', 'mayanDocumentId']
+        if show_finished:
+            process_variables = await camunda_client.get_history_process_instance_variables_by_name(
+                task.process_instance_id, var_names
+            )
+        else:
+            process_variables = await camunda_client.get_process_instance_variables_by_name(
+                task.process_instance_id, var_names
+            )
+        
+        result['due_date'] = _extract_camunda_variable(process_variables, 'dueDate')
+        result['task_name'] = (
+            _extract_camunda_variable(process_variables, 'taskName') or
+            _extract_camunda_variable(process_variables, 'documentName')
+        )
+        result['task_description'] = _extract_camunda_variable(process_variables, 'taskDescription')
+        result['document_name'] = _extract_camunda_variable(process_variables, 'documentName')
+        result['document_id'] = (
+            _extract_camunda_variable(process_variables, 'documentId') or
+            _extract_camunda_variable(process_variables, 'mayanDocumentId')
+        )
+    except Exception as e:
+        logger.warning(f'Не удалось получить переменные процесса {task.process_instance_id}: {e}')
+    
+    return result
+
+
 def content() -> None:
     """Главная страница с задачами пользователя"""
     # Добавляем CSS стили и вспомогательную функцию JavaScript
     ui.add_head_html('''
         <style>
-            .ag-cell.due-date-overdue {
+            .ag-cell.due-date-overdue, .due-date-overdue {
                 background-color: #ffebee !important;
                 color: #c62828 !important;
             }
-            .ag-cell.due-date-warning {
+            .ag-cell.due-date-warning, .due-date-warning {
                 background-color: #ff9800 !important;
                 color: #ffffff !important;
             }
-            .ag-cell.due-date-ok {
-                background-color: #e8f5e9 !important;
-                color: #2e7d32 !important;
-            }
-            /* Альтернативные селекторы на случай, если класс применяется к другому элементу */
-            .due-date-overdue {
-                background-color: #ffebee !important;
-                color: #c62828 !important;
-            }
-            .due-date-warning {
-                background-color: #ff9800 !important;
-                color: #ffffff !important;
-            }
-            .due-date-ok {
+            .ag-cell.due-date-ok, .due-date-ok {
                 background-color: #e8f5e9 !important;
                 color: #2e7d32 !important;
             }
         </style>
         <script>
-            window.getDueDateDiffDays = function(dueDateRaw) {
-                console.log('getDueDateDiffDays called with:', dueDateRaw);
-                if (!dueDateRaw) {
-                    console.log('dueDateRaw is null/undefined');
-                    return null;
+            // Функция для безопасного экранирования HTML (защита от XSS)
+            window.escapeHtml = function(str) {
+                if (str == null || str === undefined) {
+                    return '';
                 }
-                try {
-                    let deadline;
-                    if (typeof dueDateRaw === 'string') {
-                        if (dueDateRaw.includes('T')) {
-                            let dateStr = dueDateRaw.replace('Z', '+00:00');
-                            const offsetMatch = dateStr.match(/([+-])(\\d{2})(\\d{2})$/);
-                            if (offsetMatch) {
-                                dateStr = dateStr.replace(/([+-])(\\d{2})(\\d{2})$/, '$1$2:$3');
-                            }
-                            deadline = new Date(dateStr);
-                        } else {
-                            deadline = new Date(dueDateRaw);
-                        }
-                    } else if (typeof dueDateRaw === 'number') {
-                        deadline = new Date(dueDateRaw);
-                    } else {
-                        console.log('Invalid type:', typeof dueDateRaw);
-                        return null;
-                    }
-                    if (isNaN(deadline.getTime())) {
-                        console.log('Invalid date:', deadline);
-                        return null;
-                    }
-                    const now = new Date();
-                    now.setHours(0, 0, 0, 0);
-                    deadline.setHours(0, 0, 0, 0);
-                    const diffTime = deadline - now;
-                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                    console.log('Diff days:', diffDays);
-                    return diffDays;
-                } catch (e) {
-                    console.error('Error in getDueDateDiffDays:', e);
-                    return null;
-                }
+                const div = document.createElement('div');
+                div.textContent = String(str);
+                return div.innerHTML;
             };
         </script>
     ''')
@@ -120,8 +133,6 @@ async def create_tasks_page(login: str):
     
     # Переменные для хранения состояния
     current_login = login
-    tasks_grid = None
-    tasks_details_grid = None
     period_select = None  # Объявляем заранее
     
     async def refresh_tasks(show_finished: bool = False):
@@ -140,24 +151,11 @@ async def create_tasks_page(login: str):
             logger.info(f"Начинаем обновление задач для пользователя {current_login}, show_finished={show_finished}")
             
             # Создаем клиент Camunda с конфигурацией из настроек
-            if not config.camunda_url:
-                raise ValueError("Camunda URL не настроен. Установите переменную CAMUNDA_URL в файле .env")
-            if not config.camunda_username:
-                raise ValueError("Camunda пользователь не настроен. Установите переменную CAMUNDA_USERNAME в файле .env")
-            if not config.camunda_password:
-                raise ValueError("Camunda пароль не настроен. Установите переменную CAMUNDA_PASSWORD в файле .env")
-            
-            camunda_client = CamundaClient(
-                base_url=config.camunda_url,
-                username=config.camunda_username,
-                password=config.camunda_password,
-                verify_ssl=False  # Для разработки отключаем проверку SSL
-            )
+            camunda_client = await create_camunda_client()
             tasks = []
 
             # Показываем активные задачи по умолчанию, завершенные только если checkbox отмечен
-            active_only = not show_finished
-            logger.info(f"Получаем задачи для пользователя {current_login}: active_only={active_only}")
+            logger.info(f"Получаем задачи для пользователя {current_login}: active_only={not show_finished}")
             
             # Для завершенных задач добавляем ограничение по дате (последние 7 дней)
             finished_after = None
@@ -165,7 +163,7 @@ async def create_tasks_page(login: str):
             
             if show_finished:
                 # Используем выбранный период или 7 дней по умолчанию
-                days = period_select.value if period_select and period_select.value else 7
+                days = period_select.value if (period_select is not None and period_select.value is not None) else 7
                 # Вычисляем дату N дней назад
                 days_ago = datetime.now(timezone.utc) - timedelta(days=days)
                 # Форматируем в ISO формат для Camunda API
@@ -190,8 +188,9 @@ async def create_tasks_page(login: str):
                                     task_end_date = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
                                     if task_end_date >= finished_date:
                                         filtered_tasks.append(task)
-                                except:
+                                except (ValueError, TypeError) as e:
                                     # Если не удалось распарсить, включаем задачу
+                                    logger.debug(f'Не удалось распарсить дату завершения задачи {getattr(task, "id", "unknown")}: {e}')
                                     filtered_tasks.append(task)
                             else:
                                 # Если нет end_time, включаем задачу
@@ -210,113 +209,69 @@ async def create_tasks_page(login: str):
                 )
             logger.info(f'Получено {len(user_tasks)} задач от Camunda API')
             
+            # Оптимизация: загружаем переменные процесса параллельно для всех задач
+            logger.info(f'Загружаем переменные процесса для {len(user_tasks)} задач параллельно...')
+            process_vars_coroutines = [
+                _get_task_process_variables(camunda_client, task, show_finished)
+                for task in user_tasks
+            ]
+            process_vars_results = await asyncio.gather(*process_vars_coroutines, return_exceptions=True)
+            
+            # Создаем словарь кэша: task_id -> process_variables
+            process_vars_cache = {}
+            for task, result in zip(user_tasks, process_vars_results):
+                task_id = getattr(task, 'id', 'unknown')
+                if isinstance(result, Exception):
+                    logger.warning(f'Ошибка при загрузке переменных процесса для задачи {task_id}: {result}')
+                    process_vars_cache[task_id] = {
+                        'due_date': None,
+                        'task_name': None,
+                        'task_description': None,
+                        'document_name': None,
+                        'document_id': None,
+                    }
+                else:
+                    process_vars_cache[task_id] = result
+            
+            logger.info(f'Переменные процесса загружены для {len(process_vars_cache)} задач')
+            
             for task in user_tasks:
                 # Логируем каждую задачу для отладки
                 task_id = getattr(task, 'id', 'unknown')
                 task_name = getattr(task, 'name', 'unknown')
-                logger.debug(f"Обрабатываем задачу: {task_id} - {task_name}")
-                
-                # Проверяем тип задачи для правильной обработки
-                
+                logger.debug(f'Обрабатываем задачу: {task_id} - {task_name}')
                 
                 # Форматируем дату окончания
                 due_date = getattr(task, 'due', '')
-                
-                # Сохраняем исходную дату ДО любых изменений
                 due_date_raw = due_date if due_date else None
                 
-                # Получаем название, описание и dueDate из переменных процесса (как в диаграмме Ганта)
+                # Получаем название, описание и dueDate из переменных процесса
                 task_description = getattr(task, 'description', '')
-                document_id = None  # Инициализируем до блока try
+                document_id = None
+                document_name = None
                 
-                if hasattr(task, 'process_instance_id') and task.process_instance_id:
-                    try:
-                        # Для завершенных задач используем исторические переменные
-                        if show_finished:
-                            process_variables = await camunda_client.get_history_process_instance_variables_by_name(
-                                task.process_instance_id,
-                                ['dueDate', 'taskName', 'documentName', 'taskDescription', 'documentId', 'mayanDocumentId']
-                            )
-                        else:
-                            process_variables = await camunda_client.get_process_instance_variables_by_name(
-                                task.process_instance_id,
-                                ['dueDate', 'taskName', 'documentName', 'taskDescription', 'documentId', 'mayanDocumentId']
-                            )
-                        
-                        # Получаем dueDate из переменных процесса, если его нет в задаче
-                        if not due_date:
-                            due_date_from_vars = process_variables.get('dueDate')
-                            if due_date_from_vars:
-                                if isinstance(due_date_from_vars, dict) and 'value' in due_date_from_vars:
-                                    due_date = due_date_from_vars['value']
-                                    due_date_raw = due_date_from_vars['value']  # Сохраняем исходное значение
-                                elif isinstance(due_date_from_vars, str):
-                                    due_date = due_date_from_vars
-                                    due_date_raw = due_date_from_vars  # Сохраняем исходное значение
-                                else:
-                                    due_date = str(due_date_from_vars) if due_date_from_vars else ''
-                                    due_date_raw = str(due_date_from_vars) if due_date_from_vars else None
-                        
-                        # Получаем название из переменных процесса (приоритет: taskName, documentName)
-                        task_name_from_vars = (
-                            process_variables.get('taskName') or 
-                            process_variables.get('documentName') or 
-                            None
-                        )
-                        # Обрабатываем формат переменных Camunda
-                        if task_name_from_vars:
-                            if isinstance(task_name_from_vars, dict) and 'value' in task_name_from_vars:
-                                task_name_from_vars = task_name_from_vars['value']
-                            elif not isinstance(task_name_from_vars, str):
-                                task_name_from_vars = str(task_name_from_vars) if task_name_from_vars else None
-                            
-                            # Используем название из переменных процесса, если оно есть
-                            if task_name_from_vars and task_name_from_vars.strip():
-                                task_name = task_name_from_vars.strip()
-                        # Если название задачи стандартное, но не нашли в переменных, оставляем исходное
-                        elif not task_name or task_name in ['Подписать документ', 'Ознакомиться с документом']:
-                            # Оставляем исходное название, если не нашли в переменных
-                            pass
-                        
-                        # Получаем описание из переменных процесса (taskDescription)
-                        task_description_from_vars = process_variables.get('taskDescription')
-                        if task_description_from_vars:
-                            # Обрабатываем формат переменных Camunda
-                            if isinstance(task_description_from_vars, dict) and 'value' in task_description_from_vars:
-                                task_description_from_vars = task_description_from_vars['value']
-                            elif not isinstance(task_description_from_vars, str):
-                                task_description_from_vars = str(task_description_from_vars) if task_description_from_vars else None
-                            
-                            # Используем описание из переменных процесса, если оно есть
-                            if task_description_from_vars and task_description_from_vars.strip():
-                                task_description = task_description_from_vars.strip()
-                        
-                        # Получаем documentName для отображения
-                        document_name = None
-                        document_name_raw = process_variables.get('documentName')
-                        if document_name_raw:
-                            # Обрабатываем формат переменных Camunda
-                            if isinstance(document_name_raw, dict) and 'value' in document_name_raw:
-                                document_name = str(document_name_raw['value']).strip() if document_name_raw['value'] else None
-                            elif isinstance(document_name_raw, str):
-                                document_name = document_name_raw.strip() if document_name_raw else None
-                            else:
-                                document_name = str(document_name_raw).strip() if document_name_raw else None
-                        
-                        # Получаем documentId из переменных процесса
-                        document_id_raw = process_variables.get('documentId') or process_variables.get('mayanDocumentId')
-                        if document_id_raw:
-                            # Обрабатываем формат переменных Camunda
-                            if isinstance(document_id_raw, dict) and 'value' in document_id_raw:
-                                document_id = str(document_id_raw['value']).strip() if document_id_raw['value'] else None
-                            elif isinstance(document_id_raw, str):
-                                document_id = document_id_raw.strip() if document_id_raw else None
-                            else:
-                                document_id = str(document_id_raw).strip() if document_id_raw else None
-                    except Exception as e:
-                        logger.warning(f"Не удалось получить переменные процесса {task.process_instance_id}: {e}")
-                        document_id = None  # Убеждаемся, что document_id установлен даже при ошибке
-                        document_name = None
+                # Получаем переменные процесса из кэша
+                proc_vars = process_vars_cache.get(task_id, {
+                    'due_date': None,
+                    'task_name': None,
+                    'task_description': None,
+                    'document_name': None,
+                    'document_id': None,
+                })
+                
+                # Применяем значения из переменных процесса
+                if not due_date and proc_vars['due_date']:
+                    due_date = proc_vars['due_date']
+                    due_date_raw = proc_vars['due_date']
+                
+                if proc_vars['task_name']:
+                    task_name = proc_vars['task_name']
+                
+                if proc_vars['task_description']:
+                    task_description = proc_vars['task_description']
+                
+                document_name = proc_vars['document_name']
+                document_id = proc_vars['document_id']
 
                 # Форматируем дату для отображения (due_date_raw уже сохранен выше)
                 if due_date:
@@ -340,7 +295,8 @@ async def create_tasks_page(login: str):
                         # Проверяем, не отформатирована ли уже дата
                         if 'T' in str(start_time) or len(str(start_time)) > 20:
                             start_time = format_date_russian(start_time)
-                    except:
+                    except (ValueError, TypeError, OSError):
+                        # Если не удалось отформатировать, оставляем исходное значение
                         pass
                 
                 if end_time:
@@ -348,7 +304,8 @@ async def create_tasks_page(login: str):
                         # Проверяем, не отформатирована ли уже дата
                         if 'T' in str(end_time) or len(str(end_time)) > 20:
                             end_time = format_date_russian(end_time)
-                    except:
+                    except (ValueError, TypeError, OSError):
+                        # Если не удалось отформатировать, оставляем исходное значение
                         pass
                 
                 # Получаем длительность
@@ -401,7 +358,6 @@ async def create_tasks_page(login: str):
                 # Вычисляем разницу в днях для использования в cellClassRules
                 if due_date_raw:
                     try:
-                        from components.gantt_chart import parse_task_deadline
                         deadline = parse_task_deadline(due_date_raw)
                         if deadline:
                             now = datetime.now()
@@ -422,74 +378,37 @@ async def create_tasks_page(login: str):
 
             logger.info(f"Обработано {len(tasks)} задач для отображения")
             
-            # ДОБАВИТЬ: Обновляем диаграмму Ганта для активных задач
+            # Обновляем диаграмму Ганта для активных задач (используем кэш переменных процесса)
             if not show_finished and user_tasks and gantt_container:
                 gantt_container.clear()
                 tasks_for_gantt = []
                 
-                # Получаем dueDate, название и описание из переменных процесса для задач
                 for task in user_tasks:
+                    task_id = getattr(task, 'id', 'unknown')
                     due_date = getattr(task, 'due', None)
-                    task_name = getattr(task, 'name', '')  # Название задачи по умолчанию
-                    task_description = ''  # Описание задачи
+                    task_name = getattr(task, 'name', '')
+                    task_description = ''
                     
-                    # Получаем данные из переменных процесса для единообразия
-                    if hasattr(task, 'process_instance_id') and task.process_instance_id:
-                        try:
-                            # Получаем dueDate, название и описание из переменных процесса
-                            process_variables = await camunda_client.get_process_instance_variables_by_name(
-                                task.process_instance_id,
-                                ['dueDate', 'taskName', 'documentName', 'taskDescription']
-                            )
-                            
-                            # Получаем dueDate
-                            if not due_date:
-                                due_date_raw = process_variables.get('dueDate')
-                                if due_date_raw:
-                                    if isinstance(due_date_raw, dict) and 'value' in due_date_raw:
-                                        due_date = due_date_raw['value']
-                                    elif isinstance(due_date_raw, str):
-                                        due_date = due_date_raw
-                                    else:
-                                        due_date = str(due_date_raw) if due_date_raw else None
-                            
-                            # Получаем название из переменных процесса (приоритет: taskName, documentName)
-                            task_name_from_vars = (
-                                process_variables.get('taskName') or 
-                                process_variables.get('documentName') or 
-                                None
-                            )
-                            # Обрабатываем формат переменных Camunda
-                            if task_name_from_vars:
-                                if isinstance(task_name_from_vars, dict) and 'value' in task_name_from_vars:
-                                    task_name_from_vars = task_name_from_vars['value']
-                                elif not isinstance(task_name_from_vars, str):
-                                    task_name_from_vars = str(task_name_from_vars) if task_name_from_vars else None
-                                
-                                # Используем название из переменных процесса, если оно есть
-                                if task_name_from_vars and task_name_from_vars.strip():
-                                    task_name = task_name_from_vars.strip()
-                            
-                            # Получаем описание из переменных процесса (taskDescription)
-                            task_description_from_vars = process_variables.get('taskDescription')
-                            if task_description_from_vars:
-                                # Обрабатываем формат переменных Camunda
-                                if isinstance(task_description_from_vars, dict) and 'value' in task_description_from_vars:
-                                    task_description_from_vars = task_description_from_vars['value']
-                                elif not isinstance(task_description_from_vars, str):
-                                    task_description_from_vars = str(task_description_from_vars) if task_description_from_vars else None
-                                
-                                # Используем описание из переменных процесса, если оно есть
-                                if task_description_from_vars and task_description_from_vars.strip():
-                                    task_description = task_description_from_vars.strip()
-                                    
-                        except Exception as e:
-                            logger.warning(f"Не удалось получить переменные процесса {task.process_instance_id}: {e}")
+                    # Используем кэш переменных процесса вместо повторных запросов
+                    proc_vars = process_vars_cache.get(task_id, {
+                        'due_date': None,
+                        'task_name': None,
+                        'task_description': None,
+                        'document_name': None,
+                        'document_id': None,
+                    })
+                    
+                    if not due_date and proc_vars['due_date']:
+                        due_date = proc_vars['due_date']
+                    if proc_vars['task_name']:
+                        task_name = proc_vars['task_name']
+                    if proc_vars['task_description']:
+                        task_description = proc_vars['task_description']
                     
                     if due_date:
                         tasks_for_gantt.append({
-                            'name': task_name,  # Используем название из переменных процесса
-                            'description': task_description,  # Добавляем описание из переменных процесса
+                            'name': task_name,
+                            'description': task_description,
                             'due': due_date,
                             'id': getattr(task, 'id', ''),
                             'process_instance_id': getattr(task, 'process_instance_id', '')
@@ -497,13 +416,13 @@ async def create_tasks_page(login: str):
                 
                 with gantt_container:
                     create_gantt_chart(
-                        tasks_for_gantt if tasks_for_gantt else [],
+                        tasks_for_gantt,
                         title='Активные задачи со сроками',
                         name_field='name',
                         due_field='due',
                         id_field='id',
                         process_instance_id_field='process_instance_id',
-                        description_field='description'  # Добавляем поле описания
+                        description_field='description'
                     )
             
             # Обновляем данные в таблице
@@ -549,16 +468,7 @@ async def create_tasks_page(login: str):
                 detail_data = create_task_detail_data(row_data)
                 
                 # Показываем детальную информацию
-                if tasks_details_grid and detail_data:
-                    tasks_details_grid.options['rowData'] = detail_data
-                    tasks_details_grid.update()
-                    tasks_details_grid.visible = True
-                    
-                    # Обновляем кнопку переключения
-                    # if 'tasks_details_toggle' in locals():
-                    #     tasks_details_toggle.text = 'Скрыть'
-                    #     tasks_details_toggle.icon = 'expand_less'
-                    
+                if detail_data:
                     ui.notify(f'Показано {len(detail_data)} полей задачи', type='positive')
                 else:
                     ui.notify('Нет данных для отображения', type='warning')
@@ -575,8 +485,8 @@ async def create_tasks_page(login: str):
         with ui.row().classes('w-full items-center justify-between mb-1'):
             tasks_count_label = ui.label('Загружаем задачи...').classes('text-sm mb-1')
 
-        # ДОБАВИТЬ: Раскрываемый блок для диаграммы Ганта (только для активных задач)
-        with ui.expansion('Графика', icon='timeline', value=False).classes('w-full mb-4') as gantt_expansion:
+        # Раскрываемый блок для диаграммы Ганта (только для активных задач)
+        with ui.expansion('Графика', icon='timeline', value=False).classes('w-full mb-4'):
             gantt_container = ui.column().classes('w-full')
             gantt_container.set_visibility(False)  # Скрываем по умолчанию
 
@@ -641,7 +551,6 @@ async def create_tasks_page(login: str):
                     }
                 },
                 {'headerName': 'Завершение', 'field': 'end_time', 'sortable': True, 'filter': True},
-                # {'headerName': 'Длительность', 'field': 'duration_formatted', 'sortable': True, 'filter': True},
                 {'headerName': 'Статус', 'field': 'delete_reason', 'sortable': True, 'filter': True},
                 {
                     'headerName': 'Документ',
@@ -664,8 +573,12 @@ async def create_tasks_page(login: str):
                                 displayName = displayName.substring(0, 50) + '...';
                             }
                             
-                            // Возвращаем название документа как ссылку
-                            return '<span style="color: #1976d2; cursor: pointer; text-decoration: underline;" title="' + String(docName) + '">' + displayName + '</span>';
+                            // Используем глобальную функцию escapeHtml для защиты от XSS
+                            const escapedDocName = window.escapeHtml(docName);
+                            const escapedDisplayName = window.escapeHtml(displayName);
+                            
+                            // Возвращаем название документа как ссылку с экранированным HTML
+                            return '<span style="color: #1976d2; cursor: pointer; text-decoration: underline;" title="' + escapedDocName + '">' + escapedDisplayName + '</span>';
                         }
                     ''',
                     'width': 250

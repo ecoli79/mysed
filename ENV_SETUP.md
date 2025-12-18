@@ -22,6 +22,7 @@ ENVIRONMENT=development
 CAMUNDA_URL=https://172.19.228.72:8443
 CAMUNDA_USERNAME=dvimpolitov
 CAMUNDA_PASSWORD=your_camunda_password_here
+CAMUNDA_VERIFY_SSL=false  # Проверка SSL сертификатов (true для production, false для разработки с self-signed сертификатами)
 
 # Настройки LDAP
 LDAP_SERVER=172.19.228.72

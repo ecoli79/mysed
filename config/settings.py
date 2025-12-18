@@ -124,6 +124,7 @@ class AppConfig(BaseSettings):
     camunda_url: str = Field(default="https://localhost:8080", env="CAMUNDA_URL")
     camunda_username: str = Field(default="", env="CAMUNDA_USERNAME")
     camunda_password: str = Field(default="", env="CAMUNDA_PASSWORD")
+    camunda_verify_ssl: bool = Field(default=False, env="CAMUNDA_VERIFY_SSL")
     
     # Настройки LDAP
     ldap_server: str = Field(default="", env="LDAP_SERVER")
