@@ -32,51 +32,15 @@ import pytz
 from components.document_viewer import show_document_viewer
 from components.gantt_chart import create_gantt_chart, parse_task_deadline
 import urllib.parse
-import asyncio
-from components.gantt_chart import parse_task_deadline
 from models import CamundaTask
+from pages.task_completion_state import get_state
 
 
 logger = get_logger(__name__)
 
-# Глобальные переменные для управления состоянием
-_tasks_container: Optional[ui.column] = None
-_completed_tasks_container: Optional[ui.column] = None
-_completed_tasks_header_container: Optional[ui.row] = None  # Добавляем контейнер для заголовка
-_details_container: Optional[ui.column] = None
-#_task_details_sidebar: Optional[ui.column] = None
-#_task_details_column: Optional[ui.column] = None  # Добавляем переменную для контейнера деталей
-_uploaded_files_container: Optional[ui.column] = None
-_uploaded_files: List[Dict[str, Any]] = []
-_tabs: Optional[ui.tabs] = None  # Добавляем ссылку на табы
-_task_details_tab: Optional[ui.tab] = None  # Добавляем ссылку на вкладку деталей
-_active_tasks_tab: Optional[ui.tab] = None  # Добавляем ссылку на вкладку активных задач
-_tasks_header_container: Optional[ui.column] = None  # Добавляем переменную для заголовка с количеством задач
-_certificate_select_global = None
-_selected_certificate = None
-_certificates_cache = []
-_document_for_signing = None
-_signature_result_handler = None
-
-# Добавляем глобальную переменную для хранения pending task_id
-_pending_task_id = None
-# Добавляем глобальную переменную для хранения ID выбранной задачи
-_selected_task_id: Optional[str] = None
-
-_task_cards = {}
-
-# Добавляем глобальную переменную для режима показа всех сертификатов
-_show_all_certificates = False
-
-_completed_tasks_container: Optional[ui.column] = None
-_completed_tasks_header_container: Optional[ui.row] = None
-_all_completed_tasks: List[Union[GroupedHistoryTask, CamundaHistoryTask]] = []  # Все загруженные задачи
-_current_page: int = 1  # Текущая страница
-_page_size: int = 10  # Размер страницы
-_pagination_container: Optional[ui.row] = None  # Контейнер для элементов пагинации
-_sort_type: str = 'start_time_desc'  # Тип сортировки по умолчанию
-_active_tasks_sort_type: str = 'start_time_desc'  # Тип сортировки для активных задач
-_active_tasks_list: List[CamundaTask] = []  # Список активных задач для сортировки
+# Получаем экземпляр состояния страницы
+# Все глобальные переменные теперь инкапсулированы в state
+state = get_state()
 
 
 async def get_mayan_client() -> MayanClient:
@@ -138,14 +102,13 @@ def content() -> None:
             
             if task_id:
                 logger.info(f"Получен task_id из query параметров: {task_id}")
-                # Сохраняем task_id в глобальную переменную для использования после инициализации
-                global _pending_task_id
-                _pending_task_id = task_id
+                # Сохраняем task_id в состояние для использования после инициализации
+                state.pending_task_id = task_id
                 # Используем таймер с небольшой задержкой, чтобы дождаться инициализации всех компонентов
-                ui.timer(0.5, lambda: open_task_by_id(_pending_task_id), once=True)
+                ui.timer(0.5, lambda: open_task_by_id(state.pending_task_id), once=True)
         except Exception as e:
             logger.warning(f"Не удалось получить query параметры: {e}")
-            _pending_task_id = None
+            state.pending_task_id = None
         
         # Создаем табы
         with ui.tabs().classes('w-full') as tabs:
@@ -167,18 +130,15 @@ def content() -> None:
                 create_task_details_section()
         
         # Сохраняем ссылку на табы для использования в других функциях
-        global _tabs, _task_details_tab, _active_tasks_tab
-        _tabs = tabs
-        _task_details_tab = task_details_tab
-        _active_tasks_tab = active_tasks_tab
+        state.tabs = tabs
+        state.task_details_tab = task_details_tab
+        state.active_tasks_tab = active_tasks_tab
     except Exception as e:
         logger.error(f"Ошибка при загрузке страницы: {e}")
         ui.notify(f'Ошибка при загрузке страницы: {str(e)}', type='error')
 
 async def open_task_by_id(task_id: str):
     """Открывает задачу по ID на вкладке активных задач"""
-    global _tabs, _active_tasks_tab, _tasks_container, _tasks_header_container
-    
     if not task_id:
         logger.warning("open_task_by_id вызван без task_id")
         return
@@ -186,49 +146,45 @@ async def open_task_by_id(task_id: str):
     logger.info(f"Открываем задачу по ID: {task_id}")
     
     # Ждем инициализации компонентов
-    if _tasks_container is None:
-        logger.warning("_tasks_container еще не инициализирован, повторная попытка через 0.3 сек")
+    if state.tasks_container is None:
+        logger.warning("tasks_container еще не инициализирован, повторная попытка через 0.3 сек")
         ui.timer(0.3, lambda: open_task_by_id(task_id), once=True)
         return
     
     # Переключаемся на вкладку активных задач
-    if _tabs and _active_tasks_tab:
-        _tabs.value = _active_tasks_tab
+    if state.tabs and state.active_tasks_tab:
+        state.tabs.value = state.active_tasks_tab
         logger.info("Переключились на вкладку активных задач")
     
     # Загружаем активные задачи и находим нужную
-    await load_active_tasks(_tasks_header_container, target_task_id=task_id)
+    await load_active_tasks(state.tasks_header_container, target_task_id=task_id)
 
 def create_active_tasks_section():
     """Создает секцию с активными задачами"""
-    global _tasks_container, _tasks_header_container
-        
     # Создаем контейнер для задач
     with ui.card().classes('p-6 w-full'):
         # Контейнер для заголовка с количеством задач и кнопкой обновления в одной строке
-        _tasks_header_container = ui.row().classes('w-full items-center gap-4 mb-4')
+        state.tasks_header_container = ui.row().classes('w-full items-center gap-4 mb-4')
         
         # Контейнер для задач
-        _tasks_container = ui.column().classes('w-full')
+        state.tasks_container = ui.column().classes('w-full')
         
         # Загружаем задачи при открытии страницы
         async def init_tasks():
-            await load_active_tasks(_tasks_header_container)
+            await load_active_tasks(state.tasks_header_container)
         
         ui.timer(0.1, lambda: init_tasks(), once=True)
 
 async def apply_active_tasks_sorting(sortType: str):
     """Применяет сортировку к активным задачам"""
-    global _active_tasks_list, _active_tasks_sort_type, _tasks_container, _task_cards
+    state.active_tasks_sort_type = sortType
     
-    _active_tasks_sort_type = sortType
-    
-    if not _active_tasks_list:
+    if not state.active_tasks_list:
         return
     
     # Обогащаем задачи deadline из переменных процесса перед сортировкой
     camunda_client = await create_camunda_client()
-    for task in _active_tasks_list:
+    for task in state.active_tasks_list:
         # Если у задачи нет due, пытаемся получить из переменных процесса
         if not getattr(task, 'due', None):
             try:
@@ -246,20 +202,21 @@ async def apply_active_tasks_sorting(sortType: str):
                 logger.warning(f"Не удалось получить deadline из переменных процесса для задачи {task.id}: {e}")
     
     # Сортируем задачи
-    sorted_tasks = sorted(_active_tasks_list, key=lambda task: get_active_task_sort_key(task, sortType))
+    sorted_tasks = sorted(state.active_tasks_list, key=lambda task: get_active_task_sort_key(task, sortType))
     
-    _active_tasks_list = sorted_tasks
+    state.active_tasks_list = sorted_tasks
     
     # Пересоздаем карточки задач в отсортированном порядке
-    _tasks_container.clear()
-    _task_cards.clear()
+    if state.tasks_container:
+        state.tasks_container.clear()
+    state.task_cards.clear()
     
     # Добавляем диаграмму Ганта перед карточками задач в сворачиваемом блоке
     # Фильтруем задачи, у которых есть дедлайн
     tasks_with_due = [task for task in sorted_tasks if hasattr(task, 'due') and task.due]
-    if tasks_with_due:
-        # Важно: оборачиваем в контекст _tasks_container, чтобы диаграмма добавлялась в правильный контейнер
-        with _tasks_container:
+    if tasks_with_due and state.tasks_container:
+        # Важно: оборачиваем в контекст tasks_container, чтобы диаграмма добавлялась в правильный контейнер
+        with state.tasks_container:
             # Создаем сворачиваемый блок для диаграммы Ганта (свернут по умолчанию)
             with ui.expansion('Диаграмма Ганта', icon='timeline', value=False).classes('w-full mb-4'):
                 create_gantt_chart(
@@ -315,14 +272,12 @@ def get_active_task_sort_key(task: CamundaTask, sortType: str) -> tuple:
 
 async def load_active_tasks(header_container=None, target_task_id: Optional[str] = None):
     """Загружает и отображает активные задачи пользователя"""
-    global _tasks_container, _task_cards, _active_tasks_list, _active_tasks_sort_type
-    
-    if _tasks_container is None:
+    if state.tasks_container is None:
         return
     
     # Очищаем контейнеры и словарь карточек
-    _tasks_container.clear()
-    _task_cards.clear()
+    state.tasks_container.clear()
+    state.task_cards.clear()
     if header_container:
         header_container.clear()
     
@@ -353,7 +308,7 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
         )
         
         # Сохраняем задачи для сортировки
-        _active_tasks_list = tasks if tasks else []
+        state.active_tasks_list = tasks if tasks else []
         
         # Добавляем кнопку обновления и заголовок с количеством задач в одну строку
         if header_container:
@@ -361,7 +316,7 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
                 ui.button(
                     'Обновить задачи',
                     icon='refresh',
-                    on_click=lambda: load_active_tasks(_tasks_header_container)
+                    on_click=lambda: load_active_tasks(state.tasks_header_container)
                 ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                 
                 # Добавляем select для сортировки
@@ -375,27 +330,27 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
                         'due_desc': 'По сроку исполнения (поздние сначала)',
                         'due_asc': 'По сроку исполнения (ранние сначала)'
                     },
-                    value=_active_tasks_sort_type,
+                    value=state.active_tasks_sort_type,
                     label='Сортировка',
                     on_change=handle_sort_change
                 ).classes('w-64').props('dense')
                 
-                ui.label(f'Найдено {len(_active_tasks_list)} активных задач:').classes('text-lg font-semibold')
+                ui.label(f'Найдено {len(state.active_tasks_list)} активных задач:').classes('text-lg font-semibold')
         
         # Нормализуем target_task_id для сравнения (приводим к строке)
         target_task_id_str = str(target_task_id).strip() if target_task_id else None
         logger.info(f"Ищем задачу с ID: {target_task_id_str}")
         
         # Применяем сортировку после загрузки - это создаст диаграмму Ганта и карточки задач
-        if _active_tasks_list:
-            await apply_active_tasks_sorting(_active_tasks_sort_type)
+        if state.active_tasks_list:
+            await apply_active_tasks_sorting(state.active_tasks_sort_type)
             
             # Переменная для хранения найденной задачи
             found_task = None
             
             # Ищем задачу для открытия
             if target_task_id_str:
-                for task in _active_tasks_list:
+                for task in state.active_tasks_list:
                     # Приводим все ID к строкам для надежного сравнения
                     task_id_str = str(getattr(task, 'id', '')).strip()
                     process_id_str = str(getattr(task, 'process_instance_id', '')).strip()
@@ -474,7 +429,7 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
                     ui.button(
                         'Обновить задачи',
                         icon='refresh',
-                        on_click=lambda: load_active_tasks(_tasks_header_container)
+                        on_click=lambda: load_active_tasks(state.tasks_header_container)
                     ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                     
                     # Добавляем select для сортировки даже когда нет задач
@@ -488,7 +443,7 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
                             'due_desc': 'По сроку исполнения (поздние сначала)',
                             'due_asc': 'По сроку исполнения (ранние сначала)'
                         },
-                        value=_active_tasks_sort_type,
+                        value=state.active_tasks_sort_type,
                         label='Сортировка',
                         on_change=handle_sort_change_empty
                     ).classes('w-64').props('dense')
@@ -555,7 +510,7 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
                 ui.button(
                     'Обновить задачи',
                     icon='refresh',
-                    on_click=lambda: load_active_tasks(_tasks_header_container)
+                    on_click=lambda: load_active_tasks(state.tasks_header_container)
                 ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                 
                 # Добавляем select для сортировки даже при ошибке
@@ -569,7 +524,7 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
                         'due_desc': 'По сроку исполнения (поздние сначала)',
                         'due_asc': 'По сроку исполнения (ранние сначала)'
                     },
-                    value=_active_tasks_sort_type,
+                    value=state.active_tasks_sort_type,
                     label='Сортировка',
                     on_change=handle_sort_change_error
                 ).classes('w-64').props('dense')
@@ -578,17 +533,15 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
 
 async def create_task_card_with_progress(task):
     """Создает карточку задачи с информацией о прогрессе"""
-    global _tasks_container, _selected_task_id, _task_cards
-    
-    if _tasks_container is None:
+    if state.tasks_container is None:
         return
     
     # Определяем, является ли эта задача выбранной
     task_id_str = str(getattr(task, 'id', ''))
     process_id_str = str(getattr(task, 'process_instance_id', ''))
-    is_selected = _selected_task_id and (
-        task_id_str == _selected_task_id or 
-        process_id_str == _selected_task_id
+    is_selected = state.selected_task_id and (
+        task_id_str == state.selected_task_id or 
+        process_id_str == state.selected_task_id
     )
     
     # Получаем наименование задачи из переменных процесса
@@ -650,7 +603,7 @@ async def create_task_card_with_progress(task):
         border_style = 'border border-gray-200'
         shadow_class = ''
         
-    with _tasks_container:
+    with state.tasks_container:
         # Создаем карточку с условными стилями и data-атрибутами
         card = ui.card().classes(f'p-4 mb-4 w-full max-w-full {border_class} {bg_class} {border_style} {shadow_class}')
         # Добавляем data-атрибуты для поиска через JavaScript
@@ -747,19 +700,17 @@ async def create_task_card_with_progress(task):
         
         # Сохраняем ссылку на карточку, индикатор и контейнеры
         # Контейнер формы завершения будет создан динамически при нажатии на кнопку
-        _task_cards[task_id_str] = {
+        state.set_task_card_info(task_id_str, process_id_str, {
             'card': card,
             'indicator': indicator_row,
             'task_id': task_id_str,
             'process_id': process_id_str,
             'details_container': details_container
-        }
+        })
 
 def create_task_card(task):
     """Создает карточку задачи"""
-    global _tasks_container, _task_cards
-    
-    if _tasks_container is None:
+    if state.tasks_container is None:
         return
     
     task_id_str = str(getattr(task, 'id', ''))
@@ -782,7 +733,7 @@ def create_task_card(task):
         except Exception as e:
             logger.warning(f"Не удалось обработать дату дедлайна для задачи {task.id}: {e}")
         
-    with _tasks_container:
+    with state.tasks_container:
         card = ui.card().classes('mb-3 p-4 border-l-4 border-blue-500')
         
         with card:
@@ -840,23 +791,21 @@ def create_task_card(task):
         
         # Сохраняем ссылку на карточку
         # Контейнер формы завершения будет создан динамически при нажатии на кнопку
-        _task_cards[task_id_str] = {
+        state.set_task_card_info(task_id_str, process_id_str, {
             'card': card,
             'task_id': task_id_str,
             'process_id': process_id_str
-        }
+        })
 
 def create_completed_tasks_section():
     """Создает секцию с завершенными задачами"""
-    global _completed_tasks_container, _completed_tasks_header_container, _pagination_container
-    
     # ui.label('Завершенные задачи').classes('text-xl font-semibold mb-4')
     
     with ui.card().classes('p-6 w-full'):
         # Контейнер для кнопки обновления и заголовка в одной строке
-        _completed_tasks_header_container = ui.row().classes('w-full items-center gap-4 mb-4')
+        state.completed_tasks_header_container = ui.row().classes('w-full items-center gap-4 mb-4')
         
-        with _completed_tasks_header_container:
+        with state.completed_tasks_header_container:
             ui.button(
                 'Обновить задачи',
                 icon='refresh',
@@ -871,34 +820,32 @@ def create_completed_tasks_section():
                     'due_desc': 'По deadline (поздние сначала)',
                     'due_asc': 'По deadline (ранние сначала)'
                 },
-                value=_sort_type,
+                value=state.sort_type,
                 label='Сортировка',
                 on_change=lambda e: apply_sorting(e.value)
             ).classes('w-64').props('dense')
         
         # Контейнер для задач
-        _completed_tasks_container = ui.column().classes('w-full')
+        state.completed_tasks_container = ui.column().classes('w-full')
         
         # Контейнер для пагинации
-        _pagination_container = ui.row().classes('w-full items-center justify-between mt-4')
+        state.pagination_container = ui.row().classes('w-full items-center justify-between mt-4')
         
         # Загружаем задачи при открытии страницы
         load_completed_tasks()
 
 def apply_sorting(sortType: str):
     """Применяет сортировку к задачам"""
-    global _all_completed_tasks, _sort_type, _current_page
+    state.sort_type = sortType
     
-    _sort_type = sortType
-    
-    if not _all_completed_tasks:
+    if not state.all_completed_tasks:
         return
     
     # Сортируем задачи
-    sorted_tasks = sorted(_all_completed_tasks, key=lambda task: get_sort_key(task, sortType))
+    sorted_tasks = sorted(state.all_completed_tasks, key=lambda task: get_sort_key(task, sortType))
     
-    _all_completed_tasks = sorted_tasks
-    _current_page = 1  # Сбрасываем на первую страницу после сортировки
+    state.all_completed_tasks = sorted_tasks
+    state.current_page = 1  # Сбрасываем на первую страницу после сортировки
     
     # Обновляем отображение
     display_current_page()
@@ -944,17 +891,15 @@ def get_sort_key(task: Union[GroupedHistoryTask, CamundaHistoryTask], sortType: 
 
 async def load_completed_tasks():
     """Загружает завершенные задачи"""
-    global _completed_tasks_container, _completed_tasks_header_container, _all_completed_tasks, _current_page, _pagination_container, _sort_type
-    
-    if _completed_tasks_container is None:
+    if state.completed_tasks_container is None:
         return
     
-    _completed_tasks_container.clear()
+    state.completed_tasks_container.clear()
     
     # Обновляем заголовок с количеством задач
-    if _completed_tasks_header_container:
-        _completed_tasks_header_container.clear()
-        with _completed_tasks_header_container:
+    if state.completed_tasks_header_container:
+        state.completed_tasks_header_container.clear()
+        with state.completed_tasks_header_container:
             ui.button(
                 'Обновить задачи',
                 icon='refresh',
@@ -969,18 +914,18 @@ async def load_completed_tasks():
                     'due_desc': 'По deadline (поздние сначала)',
                     'due_asc': 'По deadline (ранние сначала)'
                 },
-                value=_sort_type,
+                value=state.sort_type,
                 label='Сортировка',
                 on_change=lambda e: apply_sorting(e.value)
             ).classes('w-64').props('dense')
     
-    with _completed_tasks_container:
+    with state.completed_tasks_container:
         try:
             # Получаем текущего авторизованного пользователя
             user = get_current_user()
             if not user:
-                if _completed_tasks_header_container:
-                    with _completed_tasks_header_container:
+                if state.completed_tasks_header_container:
+                    with state.completed_tasks_header_container:
                         ui.label('Ошибка: пользователь не авторизован').classes('text-red-600')
                 ui.label('Ошибка: пользователь не авторизован').classes('text-red-600')
                 return
@@ -988,8 +933,8 @@ async def load_completed_tasks():
             # Валидация логина на безопасность
             if not validate_username(user.username):
                 logger.error(f"Небезопасный логин пользователя: {user.username}")
-                if _completed_tasks_header_container:
-                    with _completed_tasks_header_container:
+                if state.completed_tasks_header_container:
+                    with state.completed_tasks_header_container:
                         ui.label('Ошибка: некорректный логин пользователя').classes('text-red-600')
                 ui.label('Ошибка: некорректный логин пользователя').classes('text-red-600')
                 return
@@ -1003,19 +948,19 @@ async def load_completed_tasks():
             tasks = await camunda_client.get_completed_tasks_grouped(assignee=assignee)
             
             # Сохраняем все задачи
-            _all_completed_tasks = tasks if tasks else []
-            _current_page = 1  # Сбрасываем на первую страницу при новой загрузке
+            state.all_completed_tasks = tasks if tasks else []
+            state.current_page = 1  # Сбрасываем на первую страницу при новой загрузке
             
-            logger.info(f"Получено {len(_all_completed_tasks)} задач (сгруппированных)")
+            logger.info(f"Получено {len(state.all_completed_tasks)} задач (сгруппированных)")
             
             # Применяем сортировку после загрузки
-            if _all_completed_tasks:
-                apply_sorting(_sort_type)
+            if state.all_completed_tasks:
+                apply_sorting(state.sort_type)
             
             # Обновляем заголовок с количеством задач
-            if _completed_tasks_header_container:
-                _completed_tasks_header_container.clear()
-                with _completed_tasks_header_container:
+            if state.completed_tasks_header_container:
+                state.completed_tasks_header_container.clear()
+                with state.completed_tasks_header_container:
                     ui.button(
                         'Обновить задачи',
                         icon='refresh',
@@ -1030,13 +975,13 @@ async def load_completed_tasks():
                             'due_desc': 'По deadline (поздние сначала)',
                             'due_asc': 'По deadline (ранние сначала)'
                         },
-                        value=_sort_type,
+                        value=state.sort_type,
                         label='Сортировка',
                         on_change=lambda e: apply_sorting(e.value)
                     ).classes('w-64').props('dense')
                     
-                    if _all_completed_tasks:
-                        ui.label(f'Найдено {len(_all_completed_tasks)} завершенных задач:').classes('text-lg font-semibold')
+                    if state.all_completed_tasks:
+                        ui.label(f'Найдено {len(state.all_completed_tasks)} завершенных задач:').classes('text-lg font-semibold')
                     else:
                         ui.label('Нет завершенных задач').classes('text-lg font-semibold text-gray-500')
             
@@ -1045,9 +990,9 @@ async def load_completed_tasks():
                 
         except Exception as e:
             logger.error(f"Ошибка при загрузке завершенных задач: {e}", exc_info=True)
-            if _completed_tasks_header_container:
-                _completed_tasks_header_container.clear()
-                with _completed_tasks_header_container:
+            if state.completed_tasks_header_container:
+                state.completed_tasks_header_container.clear()
+                with state.completed_tasks_header_container:
                     ui.button(
                         'Обновить задачи',
                         icon='refresh',
@@ -1062,7 +1007,7 @@ async def load_completed_tasks():
                             'due_desc': 'По deadline (поздние сначала)',
                             'due_asc': 'По deadline (ранние сначала)'
                         },
-                        value=_sort_type,
+                        value=state.sort_type,
                         label='Сортировка',
                         on_change=lambda e: apply_sorting(e.value)
                     ).classes('w-64').props('dense')
@@ -1072,41 +1017,39 @@ async def load_completed_tasks():
 
 def display_current_page():
     """Отображает задачи текущей страницы"""
-    global _completed_tasks_container, _all_completed_tasks, _current_page, _page_size, _pagination_container
-    
-    if _completed_tasks_container is None:
+    if state.completed_tasks_container is None:
         return
     
     # Очищаем контейнер задач
-    _completed_tasks_container.clear()
+    state.completed_tasks_container.clear()
     
-    if not _all_completed_tasks:
-        with _completed_tasks_container:
+    if not state.all_completed_tasks:
+        with state.completed_tasks_container:
             ui.label('Нет завершенных задач').classes('text-gray-500')
         # Очищаем пагинацию
-        if _pagination_container:
-            _pagination_container.clear()
+        if state.pagination_container:
+            state.pagination_container.clear()
         return
     
     # Вычисляем индексы для текущей страницы
-    total_tasks = len(_all_completed_tasks)
-    total_pages = (total_tasks + _page_size - 1) // _page_size  # Округление вверх
+    total_tasks = len(state.all_completed_tasks)
+    total_pages = (total_tasks + state.page_size - 1) // state.page_size  # Округление вверх
     
     # Проверяем, что текущая страница не выходит за границы
-    if _current_page > total_pages:
-        _current_page = total_pages if total_pages > 0 else 1
-    if _current_page < 1:
-        _current_page = 1
+    if state.current_page > total_pages:
+        state.current_page = total_pages if total_pages > 0 else 1
+    if state.current_page < 1:
+        state.current_page = 1
     
     # Вычисляем индексы для среза
-    start_idx = (_current_page - 1) * _page_size
-    end_idx = min(start_idx + _page_size, total_tasks)
+    start_idx = (state.current_page - 1) * state.page_size
+    end_idx = min(start_idx + state.page_size, total_tasks)
     
     # Получаем задачи для текущей страницы
-    page_tasks = _all_completed_tasks[start_idx:end_idx]
+    page_tasks = state.all_completed_tasks[start_idx:end_idx]
     
     # Отображаем задачи
-    with _completed_tasks_container:
+    with state.completed_tasks_container:
         for task in page_tasks:
             # Проверяем тип задачи
             if isinstance(task, GroupedHistoryTask):
@@ -1117,11 +1060,11 @@ def display_current_page():
                 create_completed_task_card(task)
     
     # Обновляем элементы пагинации
-    if _pagination_container:
-        _pagination_container.clear()
-        with _pagination_container:
+    if state.pagination_container:
+        state.pagination_container.clear()
+        with state.pagination_container:
             # Информация о текущей странице
-            ui.label(f'Страница {_current_page} из {total_pages} (всего задач: {total_tasks})').classes('text-sm text-gray-600')
+            ui.label(f'Страница {state.current_page} из {total_pages} (всего задач: {total_tasks})').classes('text-sm text-gray-600')
             
             # Кнопки навигации
             with ui.row().classes('items-center gap-2'):
@@ -1130,19 +1073,19 @@ def display_current_page():
                     'Первая',
                     icon='first_page',
                     on_click=lambda: go_to_page(1)
-                ).classes('text-xs px-2 py-1').props('flat').set_enabled(_current_page > 1)
+                ).classes('text-xs px-2 py-1').props('flat').set_enabled(state.current_page > 1)
                 
                 # Кнопка "Предыдущая"
                 ui.button(
                     'Предыдущая',
                     icon='chevron_left',
-                    on_click=lambda: go_to_page(_current_page - 1)
-                ).classes('text-xs px-2 py-1').props('flat').set_enabled(_current_page > 1)
+                    on_click=lambda: go_to_page(state.current_page - 1)
+                ).classes('text-xs px-2 py-1').props('flat').set_enabled(state.current_page > 1)
                 
                 # Выбор размера страницы
                 ui.select(
                     [5, 10, 20, 50, 100],
-                    value=_page_size,
+                    value=state.page_size,
                     on_change=lambda e: change_page_size(e.value),
                     label='Задач на странице'
                 ).classes('text-xs').style('min-width: 150px')
@@ -1151,48 +1094,42 @@ def display_current_page():
                 ui.button(
                     'Следующая',
                     icon='chevron_right',
-                    on_click=lambda: go_to_page(_current_page + 1)
-                ).classes('text-xs px-2 py-1').props('flat').set_enabled(_current_page < total_pages)
+                    on_click=lambda: go_to_page(state.current_page + 1)
+                ).classes('text-xs px-2 py-1').props('flat').set_enabled(state.current_page < total_pages)
                 
                 # Кнопка "Последняя"
                 ui.button(
                     'Последняя',
                     icon='last_page',
                     on_click=lambda: go_to_page(total_pages)
-                ).classes('text-xs px-2 py-1').props('flat').set_enabled(_current_page < total_pages)
+                ).classes('text-xs px-2 py-1').props('flat').set_enabled(state.current_page < total_pages)
 
 def go_to_page(page: int):
     """Переходит на указанную страницу"""
-    global _current_page
-    
-    total_tasks = len(_all_completed_tasks)
-    total_pages = (total_tasks + _page_size - 1) // _page_size
+    total_tasks = len(state.all_completed_tasks)
+    total_pages = (total_tasks + state.page_size - 1) // state.page_size
     
     if 1 <= page <= total_pages:
-        _current_page = page
+        state.current_page = page
         display_current_page()
 
 def change_page_size(new_size: int):
     """Изменяет размер страницы"""
-    global _page_size, _current_page
-    
-    _page_size = new_size
+    state.page_size = new_size
     # Пересчитываем текущую страницу, чтобы не выйти за границы
-    total_tasks = len(_all_completed_tasks)
-    total_pages = (total_tasks + _page_size - 1) // _page_size
-    if _current_page > total_pages:
-        _current_page = total_pages if total_pages > 0 else 1
+    total_tasks = len(state.all_completed_tasks)
+    total_pages = (total_tasks + state.page_size - 1) // state.page_size
+    if state.current_page > total_pages:
+        state.current_page = total_pages if total_pages > 0 else 1
     
     display_current_page()
 
 async def create_grouped_completed_task_card(task):
     """Создает карточку для группированной завершенной задачи"""
-    global _completed_tasks_container
-    
-    if _completed_tasks_container is None:
+    if state.completed_tasks_container is None:
         return
         
-    with _completed_tasks_container:
+    with state.completed_tasks_container:
         with ui.card().classes('mb-3 p-4 border-l-4 border-green-500'):
             with ui.row().classes('items-start justify-between w-full'):
                 with ui.column().classes('flex-1'):
@@ -1246,20 +1183,18 @@ async def create_grouped_completed_task_card(task):
 
 async def show_grouped_task_details_in_tab(task):
     """Показывает детали группированной завершенной задачи"""
-    global _details_container, _tabs, _task_details_tab
-    
-    if _details_container is None:
+    if state.details_container is None:
         ui.notify('Ошибка: контейнер деталей не инициализирован', type='error')
         return
     
     # Переключаемся на вкладку "Детали задачи"
-    if _tabs is not None and _task_details_tab is not None:
-        _tabs.value = _task_details_tab
+    if state.tabs is not None and state.task_details_tab is not None:
+        state.tabs.value = state.task_details_tab
     
     # Очищаем контейнер деталей
-    _details_container.clear()
+    state.details_container.clear()
     
-    with _details_container:
+    with state.details_container:
         # Основная информация о задаче
         with ui.card().classes('p-4 bg-green-50 mb-4'):
             ui.label('Информация о завершенной задаче').classes('text-lg font-semibold mb-3')
@@ -1359,12 +1294,10 @@ async def show_grouped_task_details_in_tab(task):
 
 def create_completed_task_card(task):
     """Создает карточку завершенной задачи"""
-    global _completed_tasks_container
-    
-    if _completed_tasks_container is None:
+    if state.completed_tasks_container is None:
         return
         
-    with _completed_tasks_container:
+    with state.completed_tasks_container:
         with ui.card().classes('mb-3 p-4 border-l-4 border-green-500'):
             with ui.row().classes('items-start justify-between w-full'):
                 with ui.column().classes('flex-1'):
@@ -1399,20 +1332,18 @@ def create_completed_task_card(task):
 
 async def show_completed_task_details_in_tab(task):
     """Показывает детали завершенной задачи на вкладке 'Детали задачи'"""
-    global _details_container, _tabs, _task_details_tab
-    
-    if _details_container is None:
+    if state.details_container is None:
         ui.notify('Ошибка: контейнер деталей не инициализирован', type='error')
         return
     
     # Переключаемся на вкладку "Детали задачи"
-    if _tabs is not None and _task_details_tab is not None:
-        _tabs.value = _task_details_tab
+    if state.tabs is not None and state.task_details_tab is not None:
+        state.tabs.value = state.task_details_tab
     
     # Очищаем контейнер деталей
-    _details_container.clear()
+    state.details_container.clear()
     
-    with _details_container:
+    with state.details_container:
         ui.label('Загрузка деталей завершенной задачи...').classes('text-gray-600')
         
         try:
@@ -1687,8 +1618,6 @@ def show_completed_task_results(task):
 
 def create_task_details_section():
     """Создает секцию с деталями задачи"""
-    global _details_container
-    
     ui.label('Детали задачи').classes('text-xl font-semibold mb-4')
     
     with ui.card().classes('p-6 w-full'):
@@ -1705,14 +1634,12 @@ def create_task_details_section():
         ).classes('bg-blue-500 text-white mb-4 text-xs px-2 py-1 h-7')
         
         # Контейнер для деталей задачи
-        _details_container = ui.column().classes('w-full')
+        state.details_container = ui.column().classes('w-full')
 
 async def load_task_details(task_id: str):
     """Загружает детали задачи"""
-    global _details_container
-    
-    if _details_container is None:
-        logger.warning("_details_container не инициализирован")
+    if state.details_container is None:
+        logger.warning("details_container не инициализирован")
         return
         
     if not task_id:
@@ -1730,13 +1657,11 @@ async def complete_task(task):
 
 def complete_regular_task(task):
     """Завершает задачу - форма открывается прямо в карточке задачи"""
-    global _task_cards, _uploaded_files, _uploaded_files_container
-    
     # Находим карточку задачи
     task_id_str = str(getattr(task, 'id', ''))
     process_id_str = str(getattr(task, 'process_instance_id', ''))
     
-    task_card_info = _task_cards.get(task_id_str) or _task_cards.get(process_id_str)
+    task_card_info = state.get_task_card_info(task_id_str, process_id_str)
     
     if not task_card_info:
         ui.notify('Ошибка: карточка задачи не найдена', type='error')
@@ -1760,7 +1685,7 @@ def complete_regular_task(task):
     task_card_info['completion_form_container'] = completion_form
     
     # Очищаем список загруженных файлов
-    _uploaded_files = []
+    state.reset_uploaded_files()
     
     # Создаем форму завершения внутри контейнера
     with completion_form:
@@ -1800,7 +1725,7 @@ def complete_regular_task(task):
             ).classes('w-full mb-4')
             
             # Список загруженных файлов
-            _uploaded_files_container = ui.column().classes('w-full mb-4')
+            state.uploaded_files_container = ui.column().classes('w-full mb-4')
             
             # Кнопки действий
             with ui.row().classes('w-full justify-end gap-2'):
@@ -1818,17 +1743,14 @@ def complete_regular_task(task):
 async def complete_signing_task(task):
     """Завершает задачу подписания документа - форма открывается прямо в карточке задачи"""
     
-    # Объявляем global в начале функции
-    global _show_all_certificates, _document_for_signing, _task_cards
-    
     # Сбрасываем глобальную переменную при открытии формы
-    _show_all_certificates = False  # Всегда начинаем с фильтрованного режима
+    state.show_all_certificates = False  # Всегда начинаем с фильтрованного режима
     
     # Находим карточку задачи
     task_id_str = str(getattr(task, 'id', ''))
     process_id_str = str(getattr(task, 'process_instance_id', ''))
     
-    task_card_info = _task_cards.get(task_id_str) or _task_cards.get(process_id_str)
+    task_card_info = state.get_task_card_info(task_id_str, process_id_str)
     
     if not task_card_info:
         ui.notify('Ошибка: карточка задачи не найдена', type='error')
@@ -1853,9 +1775,7 @@ async def complete_signing_task(task):
         task_card_info['completion_form_container'] = completion_form
     
     # Сбрасываем глобальные переменные для новой задачи
-    global _certificates_cache, _selected_certificate
-    _certificates_cache = []
-    _selected_certificate = None
+    state.reset_signing_state()
     
     # Создаем форму завершения внутри контейнера
     with completion_form:
@@ -2013,8 +1933,7 @@ async def complete_signing_task(task):
                                 on_click=download_doc
                             ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
                         
-                        global _document_for_signing
-                        _document_for_signing = {
+                        state.document_for_signing = {
                             'content': document_content,
                             'base64': document_base64,
                             'name': document_name,
@@ -2072,11 +1991,8 @@ async def complete_signing_task(task):
                 # НЕ скрываем контейнер - показываем сразу, но select будет пустым до загрузки
                 # certificates_container.set_visibility(False)  # УБИРАЕМ ЭТУ СТРОКУ
                 
-                # Сохраняем ссылки на контейнеры в глобальной переменной
-                global _task_certificates_containers
-                if '_task_certificates_containers' not in globals():
-                    _task_certificates_containers = {}
-                _task_certificates_containers[task_id_str] = {
+                # Сохраняем ссылки на контейнеры в состоянии
+                state.task_certificates_containers[task_id_str] = {
                     'certificates_container': certificates_container,
                     'crypto_status_container': crypto_status_container,
                     'cert_select_id': f'cert-select-{task_id_str}'
@@ -2084,13 +2000,12 @@ async def complete_signing_task(task):
                 
                 def on_show_all_changed(e):
                     """Обработчик изменения переключателя"""
-                    global _show_all_certificates
                     if hasattr(e, 'value'):
-                        _show_all_certificates = e.value
+                        state.show_all_certificates = e.value
                     elif isinstance(e, bool):
-                        _show_all_certificates = e
+                        state.show_all_certificates = e
                     else:
-                        _show_all_certificates = show_all_checkbox.value
+                        state.show_all_certificates = show_all_checkbox.value
                     
                     # Перезагружаем сертификаты (без select)
                     check_crypto_pro_availability_and_load(
@@ -2102,7 +2017,7 @@ async def complete_signing_task(task):
                 
                 show_all_checkbox = ui.checkbox(
                     'Показать все сертификаты',
-                    value=_show_all_certificates,
+                    value=state.show_all_certificates,
                     on_change=on_show_all_changed
                 ).classes('mb-1')
                 
@@ -2209,12 +2124,11 @@ def sign_document(certificate_value, data_to_sign, signing_fields_container, cer
     """Подписывает документ выбранным сертификатом"""
     try:
         # Получаем выбранный сертификат из глобальной переменной
-        global _selected_certificate
-        if not _selected_certificate:
+        if not state.selected_certificate:
             ui.notify('Сертификат не выбран', type='error')
             return
         
-        selected_cert = _selected_certificate['certificate']
+        selected_cert = state.selected_certificate['certificate']
         if not selected_cert:
             ui.notify('Информация о сертификате недоступна', type='error')
             return
@@ -2268,12 +2182,10 @@ async def complete_signing_task_with_result(task, document_id, document_name, co
 def check_crypto_pro_availability_and_load(status_container, certificates_container, certificate_select, task_id=None):
     """Проверяет доступность КриптоПро и загружает сертификаты"""
     try:
-        global _show_all_certificates, _task_certificates_containers
-        
         # Получаем cert_select_id из сохраненных контейнеров
         cert_select_id = f'cert-select-{task_id}' if task_id else 'cert-select-default'
-        if task_id and '_task_certificates_containers' in globals():
-            containers = _task_certificates_containers.get(task_id, {})
+        if task_id:
+            containers = state.task_certificates_containers.get(task_id, {})
             cert_select_id = containers.get('cert_select_id', cert_select_id)
         
         # Показываем статус проверки
@@ -2305,7 +2217,7 @@ def check_crypto_pro_availability_and_load(status_container, certificates_contai
                                 window.nicegui_handle_event('certificates_loaded', {{
                                     certificates: certificates,
                                     count: certificates.length,
-                                    show_all: {str(_show_all_certificates).lower()},
+                                    show_all: {str(state.show_all_certificates).lower()},
                                     task_id: '{task_id}',
                                     cert_select_id: '{cert_select_id}'
                                 }});
@@ -2337,11 +2249,9 @@ def check_crypto_pro_availability_and_load(status_container, certificates_contai
 def load_certificates(certificate_select, status_container: ui.html):
     """Загружает список доступных сертификатов"""
     try:
-        global _show_all_certificates
-        
         ui.run_javascript(f'''
             console.log('=== Автоматическая загрузка сертификатов ===');
-            console.log('show_all: {str(_show_all_certificates).lower()}');
+            console.log('show_all: {str(state.show_all_certificates).lower()}');
             
             // Принудительно устанавливаем pluginAvailable = true
             if (window.cryptoProIntegration) {{
@@ -2419,7 +2329,7 @@ def load_certificates(certificate_select, status_container: ui.html):
                         window.nicegui_handle_event('certificates_loaded', {{
                             certificates: certList,
                             count: certList.length,
-                            show_all: {str(_show_all_certificates).lower()}
+                            show_all: {str(state.show_all_certificates).lower()}
                         }});
                         
                         return certList;
@@ -2478,11 +2388,10 @@ def show_certificate_info(certificate_index: str, info_container: ui.html):
     """Показывает информацию о выбранном сертификате"""
     try:
         # Получаем информацию о сертификате из глобального кэша
-        global _certificates_cache
-        if _certificates_cache and certificate_index.isdigit():
+        if state.certificates_cache and certificate_index.isdigit():
             index = int(certificate_index)
-            if 0 <= index < len(_certificates_cache):
-                cert = _certificates_cache[index]
+            if 0 <= index < len(state.certificates_cache):
+                cert = state.certificates_cache[index]
                 
                 # Форматируем информацию о сертификате
                 info_html = f"""
@@ -2551,13 +2460,12 @@ def sign_document_with_certificate(task, certificate_info_display, result_contai
         ui.notify(f'Подписание с сертификатом: {certificate_data.get("subject", "Неизвестно")}', type='info')
         
         # Получаем реальное содержимое документа для подписи
-        global _document_for_signing
-        if not _document_for_signing:
+        if not state.document_for_signing:
             ui.notify('Документ не загружен для подписи!', type='error')
             return
         
         # Используем Base64 содержимое документа
-        document_base64 = _document_for_signing.get('base64', '')
+        document_base64 = state.document_for_signing.get('base64', '')
         if not document_base64:
             ui.notify('Содержимое документа не найдено!', type='error')
             return
@@ -2792,8 +2700,6 @@ def check_certificates_container():
 
 def handle_signature_result():
     """Обрабатывает результат подписания от JavaScript"""
-    global _signature_result
-    
     try:
         # Получаем результат подписания из API роутера
         signature_result = api_router.get_signature_result()
@@ -2922,13 +2828,12 @@ def verify_signature(signature_base64, signature_info):
 def save_signature_to_file(signature_base64, task_name):
     """Сохраняет PDF с профессиональной встроенной электронной подписью"""
     try:       
-        # Получаем исходный документ из глобальной переменной
-        global _document_for_signing
-        if not _document_for_signing:
+        # Получаем исходный документ из состояния
+        if not state.document_for_signing:
             ui.notify('Исходный документ не найден', type='error')
             return
         
-        original_document_base64 = _document_for_signing.get('base64', '')
+        original_document_base64 = state.document_for_signing.get('base64', '')
         if not original_document_base64:
             ui.notify('Содержимое исходного документа не найдено', type='error')
             return
@@ -3240,29 +3145,24 @@ def refresh_tasks():
 
 def get_selected_certificate():
     """Возвращает выбранный сертификат"""
-    global _selected_certificate
-    return _selected_certificate
+    return state.selected_certificate
 
 def set_selected_certificate(certificate_data):
     """Устанавливает выбранный сертификат"""
-    global _selected_certificate
-    _selected_certificate = certificate_data
+    state.selected_certificate = certificate_data
 
 def set_signature_result_handler(handler):
     """Устанавливает обработчик результата подписания"""
-    global _signature_result_handler
-    _signature_result_handler = handler
+    state.signature_result_handler = handler
 
 def check_signature_result():
     """Проверяет наличие результата подписания и обрабатывает его"""
-    global _signature_result_handler
-    
     try:
         signature_result = api_router.get_signature_result()
         
-        if signature_result and _signature_result_handler:
+        if signature_result and state.signature_result_handler:
             logger.info("Обрабатываем результат подписания")
-            _signature_result_handler(signature_result)
+            state.signature_result_handler(signature_result)
             api_router.clear_signature_result()
             
     except Exception as e:
@@ -3458,7 +3358,7 @@ async def submit_signing_task_completion(task, signed, signature_data, certifica
             if completion_form:
                 completion_form.set_visibility(False)
             # Обновляем список задач
-            await load_active_tasks(_tasks_header_container)
+            await load_active_tasks(state.tasks_header_container)
         else:
             ui.notify('Ошибка при подписании документа', type='error')
             
@@ -3468,9 +3368,7 @@ async def submit_signing_task_completion(task, signed, signature_data, certifica
 
 def handle_file_upload(e):
     """Обрабатывает загрузку файлов"""
-    global _uploaded_files_container, _uploaded_files
-    
-    if _uploaded_files_container is None:
+    if state.uploaded_files_container is None:
         return
         
     # Исправляем доступ к файлам
@@ -3489,17 +3387,15 @@ def handle_file_upload(e):
             'size': len(getattr(file, 'content', b'')),
             'description': f'Файл результата для задачи'
         }
-        _uploaded_files.append(file_info)
+        state.uploaded_files.append(file_info)
         
-        with _uploaded_files_container:
+        with state.uploaded_files_container:
             with ui.card().classes('p-2 mb-2 bg-green-50'):
                 ui.label(f'{file_info["filename"]} ({file_info["mimetype"]})').classes('text-sm')
                 ui.label(f'Размер: {file_info["size"]} байт').classes('text-xs text-gray-600')
 
 async def submit_task_completion(task, status, comment, completion_form):
     """Отправляет завершение обычной задачи"""
-    global _uploaded_files, _task_cards
-    
     try:
         # Подготавливаем переменные для процесса
         variables = {
@@ -3510,10 +3406,10 @@ async def submit_task_completion(task, status, comment, completion_form):
         
         # Загружаем файлы в Mayan EDMS, если они есть
         result_files = []
-        if _uploaded_files:
+        if state.uploaded_files:
             try:
                 mayan_client = await get_mayan_client()
-                for file_info in _uploaded_files:
+                for file_info in state.uploaded_files:
                     mayan_result = mayan_client.upload_document_result(
                         task_id=task.id,
                         process_instance_id=task.process_instance_id,
@@ -3552,7 +3448,7 @@ async def submit_task_completion(task, status, comment, completion_form):
             if completion_form:
                 completion_form.set_visibility(False)
             # Обновляем список задач
-            await load_active_tasks(_tasks_header_container)
+            await load_active_tasks(state.tasks_header_container)
         else:
             ui.notify('Ошибка при завершении задачи', type='error')
             
@@ -3562,18 +3458,16 @@ async def submit_task_completion(task, status, comment, completion_form):
 
 async def show_task_details(task):
     """Показывает детали задачи внутри карточки задачи"""
-    global _task_cards, _selected_task_id
-    
     # Обновляем выбранную задачу
     task_id_str = str(getattr(task, 'id', ''))
     process_id_str = str(getattr(task, 'process_instance_id', ''))
     
     # Сохраняем ID выбранной задачи (приоритет task_id, если есть, иначе process_instance_id)
-    old_selected_id = _selected_task_id
-    _selected_task_id = task_id_str if task_id_str else process_id_str
+    old_selected_id = state.selected_task_id
+    state.selected_task_id = task_id_str if task_id_str else process_id_str
     
     # Находим карточку задачи
-    task_card_info = _task_cards.get(task_id_str) or _task_cards.get(process_id_str)
+    task_card_info = state.get_task_card_info(task_id_str, process_id_str)
     
     if not task_card_info or 'details_container' not in task_card_info:
         ui.notify('Ошибка: карточка задачи не найдена', type='error')
@@ -3582,8 +3476,8 @@ async def show_task_details(task):
     details_container = task_card_info['details_container']
     
     # Обновляем стили карточек без перезагрузки списка
-    if old_selected_id != _selected_task_id:
-        logger.info(f"Обновляем выделение: старая задача={old_selected_id}, новая задача={_selected_task_id}")
+    if old_selected_id != state.selected_task_id:
+        logger.info(f"Обновляем выделение: старая задача={old_selected_id}, новая задача={state.selected_task_id}")
         
         # Обновляем стили через JavaScript
         update_script = f"""
@@ -3600,8 +3494,8 @@ async def show_task_details(task):
         }}
         
         // Добавляем выделение новой карточке
-        if ('{_selected_task_id}') {{
-            const newCards = document.querySelectorAll('[data-task-id="{_selected_task_id}"], [data-process-id="{_selected_task_id}"]');
+        if ('{state.selected_task_id}') {{
+            const newCards = document.querySelectorAll('[data-task-id="{state.selected_task_id}"], [data-process-id="{state.selected_task_id}"]');
             newCards.forEach(card => {{
                 card.classList.remove('border-l-4', 'border-blue-500', 'border', 'border-gray-200');
                 card.classList.add('border-l-4', 'border-blue-600', 'border-2', 'border-blue-600', 'shadow-lg', 'bg-blue-50');
@@ -3820,10 +3714,8 @@ def hide_task_details():
 
 def hide_task_details_in_card(task_id_str: str, process_id_str: str):
     """Скрывает детали задачи внутри карточки"""
-    global _task_cards
-    
     # Находим карточку задачи
-    task_card_info = _task_cards.get(task_id_str) or _task_cards.get(process_id_str)
+    task_card_info = state.get_task_card_info(task_id_str, process_id_str)
     
     if task_card_info and 'details_container' in task_card_info:
         details_container = task_card_info['details_container']
