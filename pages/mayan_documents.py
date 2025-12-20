@@ -109,19 +109,9 @@ def get_state() -> MayanDocumentsState:
     """Получает глобальный экземпляр состояния"""
     return _state
 
-# Глобальные переменные для обратной совместимости (используют _state)
-# Примечание: для присваивания используйте _state.attribute = value
-_recent_documents_container = None  # Используется через _state.recent_documents_container
-_search_results_container = None  # Используется через _state.search_results_container
-_upload_form_container = None  # Используется через _state.upload_form_container
-_favorites_container = None  # Используется через _state.favorites_container
-_mayan_client = None  # Используется через _state.mayan_client
-_mayan_client_cache = None  # Используется через _state.mayan_client_cache
-_token_checked = False  # Используется через _state.token_checked
-_connection_status = False  # Используется через _state.connection_status
-_auth_error = None  # Используется через _state.auth_error
+# Глобальная переменная для обратной совместимости с theme.py
+# Используется в theme.py для сброса при logout
 _current_user = None  # Используется через _state.current_user
-_token_check_lock = _state.token_check_lock  # Блокировка создается при инициализации
 
 # Исключения
 class UploadError(Exception):

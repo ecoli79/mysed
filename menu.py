@@ -12,7 +12,7 @@ def menu(user: UserSession) -> None:
     is_admin = 'admins' in user_groups_normalized
     
     # Отладочный вывод (можно убрать после проверки)
-    logger.debug(f'Пользователь {user.username}: группы = {user.groups}, is_admin = {is_admin}')
+   # logger.debug(f'Пользователь {user.username}: группы = {user.groups}, is_admin = {is_admin}')
     
     # Структура: (текст, url, is_submenu, admin_only)
     links: List[Tuple[str, str, bool, bool]] = [
@@ -24,7 +24,7 @@ def menu(user: UserSession) -> None:
         ('Поиск документов', '/mayan_documents_search', True, False),  # True = подраздел
         ('Загрузка документов', '/mayan_documents_upload', True, False), 
         ('Запущенные мной процессы', '/my_processes', False, False),
-        ('Подписание документов', '/document_signing', False, False),
+       #('Подписание документов', '/document_signing', False, False),
         ('Управление шаблонами процессов', '/process_templates', False, True),  # Только для админов
     ]
     with ui.column().classes('gap-1'):
