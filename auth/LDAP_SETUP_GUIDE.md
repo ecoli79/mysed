@@ -85,21 +85,22 @@ ldapsearch -x -D "cn=admin,dc=permgp7,dc=ru" -W -b "dc=permgp7,dc=ru" -s sub "(o
 ### Python API
 
 ```python
-from ldap_users import (
-    get_departments,
-    get_users_by_department,
-    get_users_by_group,
-    get_department_heads
-)
+from auth.ldap_auth import LDAPAuthenticator
 
-# Получить все департаменты
-departments = get_departments()
+# Инициализация LDAP клиента
+ldap_auth = LDAPAuthenticator()
 
-# Получить пользователей отдела кадров
-hr_users = get_users_by_department('HR')
+# Получить всех пользователей
+users = await ldap_auth.get_users()
 
-# Получить всех начальников отделов
-heads = get_department_heads()
+# Получить все группы
+groups = ldap_auth.get_groups()
+
+# Фильтрация пользователей
+filtered_users = await ldap_auth.users_filter(users, query='поисковый запрос')
+
+# Получить пользователей из LDAP, сгруппированных по группам
+users_by_group = await ldap_auth.load_ldap_users_by_group()
 
 # Получить пользователей из группы
 managers = get_users_by_group('Managers', 'Roles')

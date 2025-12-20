@@ -1,10 +1,9 @@
-from turtle import position
 from ldap3 import Server, Connection, SUBTREE, ALL
-from models import UserSession, AuthResponse, LDAPUser
+from models import UserSession, AuthResponse, LDAPUser, User
 from config.settings import config
 from datetime import datetime
 import secrets
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from app_logging.logger import get_logger
 
 
@@ -336,3 +335,153 @@ class LDAPAuthenticator:
         except Exception as e:
             logger.error(f"Ошибка широкого поиска пользователя {username}: {e}")
             return None
+    
+    async def get_users(self) -> List[User]:
+        """Получает всех пользователей из LDAP и возвращает список объектов User"""
+        users = []
+        try:
+            conn = Connection(self.server, user=self.admin_dn, password=self.admin_password, auto_bind=True)
+            search_filter = '(uid=*)'
+            conn.search(
+                self.base_dn,
+                search_filter,
+                search_scope=SUBTREE,
+                attributes=['uid', 'givenName', 'sn', 'mail']
+            )
+            
+            for entry in conn.entries:
+                try:
+                    user = User(
+                        login=entry.uid.value,
+                        first_name=entry.givenName.value if hasattr(entry, 'givenName') and entry.givenName.value else '',
+                        last_name=entry.sn.value if hasattr(entry, 'sn') and entry.sn.value else '',
+                        email=entry.mail.value if hasattr(entry, 'mail') and entry.mail.value else None
+                    )
+                    users.append(user)
+                except Exception as e:
+                    logger.warning(f"Ошибка при обработке пользователя из LDAP {entry}: {e}")
+            
+            conn.unbind()
+            return users
+            
+        except Exception as e:
+            logger.error(f"Ошибка подключения к LDAP серверу при получении пользователей: {e}")
+            return users
+    
+    def get_groups(self) -> List[Dict[str, Any]]:
+        """Получает все группы posixGroup из LDAP"""
+        search_filter = '(objectClass=posixGroup)'
+        attrs = ['cn', 'memberUid', 'description']
+        groups = []
+        
+        try:
+            conn = Connection(self.server, user=self.admin_dn, password=self.admin_password, auto_bind=True)
+            conn.search(
+                search_base=self.base_dn,
+                search_filter=search_filter,
+                search_scope=SUBTREE,
+                attributes=attrs
+            )
+            
+            for entry in conn.entries:
+                try:
+                    group = {
+                        'cn': entry.cn.value if hasattr(entry, 'cn') and entry.cn.value else '',
+                        'memberUid': entry.memberUid.values if hasattr(entry, 'memberUid') else [],
+                        'description': entry.description.value if hasattr(entry, 'description') and entry.description.value else ''
+                    }
+                    groups.append(group)
+                except Exception as e:
+                    logger.warning(f"Ошибка при обработке группы из LDAP {entry}: {e}")
+            
+            conn.unbind()
+            return groups
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении групп из LDAP: {e}")
+            return groups
+    
+    async def browse_ldap(self) -> None:
+        """Рекурсивно обходит LDAP-дерево и выводит структуру"""
+        search_filter = '(objectClass=*)'
+        attrs = ['objectClass', 'cn', 'ou', 'uid', 'mail', 'sn', 'givenName']
+        try:
+            conn = Connection(self.server, user=self.admin_dn, password=self.admin_password, auto_bind=True)
+            conn.search(
+                self.base_dn,
+                search_filter,
+                search_scope=SUBTREE,
+                attributes=attrs
+            )
+            
+            logger.info(f"\n🔍 Найдено записей в '{self.base_dn}': {len(conn.entries)}\n")
+            logger.info(f"\n🌳 Структура начиная с: {self.base_dn}")
+            logger.info("─" * 60)
+            
+            for entry in conn.entries:
+                logger.info(f"📍 DN: {entry.entry_dn}")
+                
+                # Перебираем только те атрибуты, которые есть у записи
+                for attr_name in attrs:
+                    if attr_name in entry:
+                        values = entry[attr_name].values
+                        logger.info(f"   {attr_name}: {values}")
+                
+                logger.info("   " + "─" * 40)
+            
+            conn.unbind()
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обходе LDAP: {e}")
+    
+    async def users_filter(self, users: List[Any], query: str = '') -> List[Dict[str, Any]]:
+        """Фильтрует список пользователей по запросу"""
+        query = query.lower().strip()
+        
+        def user_to_dict(u):
+            if isinstance(u, dict):
+                return u
+            if hasattr(u, 'model_dump'):
+                return u.model_dump()
+            if hasattr(u, '__dict__'):
+                return u.__dict__
+            return u
+        
+        if query == '':
+            return [user_to_dict(u) for u in users]
+        
+        filtered = []
+        for u in users:
+            user_dict = user_to_dict(u)
+            if any(query in str(val).lower() for val in user_dict.values() if val is not None):
+                filtered.append(user_dict)
+        
+        return filtered
+    
+    async def load_ldap_users_by_group(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Загружает пользователей из LDAP, сгруппированных по группам"""
+        try:
+            users = await self.get_users()
+            # Создаём словарь: группа → список пользователей
+            groups_dict = {}
+            
+            for user in users:
+                user_data = user.model_dump() if hasattr(user, 'model_dump') else user.__dict__
+                user_groups = user_data.get('groups', []) or []
+                
+                # Если у пользователя нет групп — отнесём в "No Group"
+                if not user_groups:
+                    user_groups = ['No Group']
+                
+                for group in user_groups:
+                    if group not in groups_dict:
+                        groups_dict[group] = []
+                    groups_dict[group].append(user_data)
+            
+            # Сортируем группы по имени
+            sorted_groups = dict(sorted(groups_dict.items()))
+            return sorted_groups
+            
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке пользователей из LDAP по группам: {e}")
+            return {}

@@ -1,6 +1,5 @@
 import asyncio
 import api_router
-import function_example
 from pages import home_page, deploy_work, task_completion_page, document_review_page, login_page, my_processes_page, mayan_documents, document_signing_page, task_assignment_page
 from auth.middleware import require_auth, get_current_user
 import theme
@@ -187,7 +186,7 @@ def test_page():
         ui.button('Вернуться на главную', on_click=lambda: ui.navigate.to('/'))
 
 # Example 2: use a function to move the whole page creation into a separate file
-#function_example.create()
+# (see function_example.py for reference - currently not used)
 
 # Example 3: use a class to move the whole page creation into a separate file
 from pages.task_assignment_page import TaskAssignmentPage

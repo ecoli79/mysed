@@ -1,7 +1,7 @@
 import theme
 from message import message
 from nicegui import ui, events
-from ldap_users import get_users, get_groups, users_filter
+from auth.ldap_auth import LDAPAuthenticator
 from services.camunda_connector import CamundaClient
 from auth.middleware import get_current_user
 from services.document_access_manager import document_access_manager
@@ -77,7 +77,16 @@ class TaskAssignmentPage:
                 selected_users = []
                 # Список для хранения выбранных ролей (при выборе пользователей по роли)
                 selected_roles_from_selection = []
-                all_users = await get_users()
+                
+                # Инициализация LDAP клиента
+                ldap_authenticator = None
+                try:
+                    ldap_authenticator = LDAPAuthenticator()
+                except Exception as e:
+                    logger.error(f"Ошибка при инициализации LDAP клиента: {e}")
+                    ui.notify('Ошибка: не удалось подключиться к LDAP серверу', type='error')
+                
+                all_users = await ldap_authenticator.get_users() if ldap_authenticator else []
                 
                 # Инициализация Camunda клиента с использованием конфигурации
                 camunda_client = None
@@ -553,7 +562,10 @@ class TaskAssignmentPage:
 
                 async def filter_users(query: str, users: list, grid_component, count_label=user_count_label):
                     if query:
-                        filtered_users = await users_filter(users, query)
+                        if not ldap_authenticator:
+                            ui.notify('LDAP клиент не инициализирован', type='error')
+                            return
+                        filtered_users = await ldap_authenticator.users_filter(users, query)
                         # users_filter уже возвращает словари, добавляем роли
                         users_data = []
                         for user_dict in filtered_users:

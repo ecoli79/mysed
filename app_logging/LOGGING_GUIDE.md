@@ -260,13 +260,14 @@ class CamundaClient:
 ### В LDAP модуле
 
 ```python
-# ldap_users.py
-from logging.logger import get_logger
+# auth/ldap_auth.py
+from app_logging.logger import get_logger
 
-logger = get_logger(__name__, extra_fields={'component': 'ldap_service'})
+logger = get_logger(__name__)
 
-async def get_users():
-    logger.info("Получение списка пользователей из LDAP")
+class LDAPAuthenticator:
+    async def get_users(self):
+        logger.info("Получение списка пользователей из LDAP")
     try:
         # ваша логика
         users = await _fetch_users_from_ldap()
