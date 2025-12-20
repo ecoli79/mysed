@@ -202,11 +202,12 @@ _rate_limit_lock = asyncio.Lock()
 
 def create_page_timer(delay: float, callback, once: bool = True):
     """
-    Создает таймер на уровне страницы с отслеживанием и проверкой подключения клиента.
+    Создает таймер на уровне страницы с отслеживанием.
+    Поддерживает как синхронные, так и асинхронные callback'и.
     
     Args:
         delay: Задержка в секундах
-        callback: Функция обратного вызова
+        callback: Функция обратного вызова (может быть async или возвращать корутину)
         once: Если True, таймер выполнится один раз
     
     Returns:
@@ -215,34 +216,21 @@ def create_page_timer(delay: float, callback, once: bool = True):
     state = get_state()
     
     def safe_callback():
-        """Безопасный callback с проверкой подключения клиента"""
+        """Безопасный callback с обработкой ошибок и поддержкой async функций"""
         try:
-            # Проверяем, подключен ли клиент
-            # Используем более надежную проверку через ui.context
-            try:
-                # Пытаемся получить контекст клиента
-                client_context = ui.context.client
-                if client_context is None:
-                    # Клиент отключен
-                    return
-                
-                # Дополнительная проверка: пытаемся получить ID клиента
-                # Если клиент отключен, это вызовет исключение
-                try:
-                    _ = client_context.id
-                except (AttributeError, RuntimeError, TypeError):
-                    # Клиент отключен или недоступен
-                    return
-                
-                # Клиент подключен, выполняем callback
-                callback()
-            except (AttributeError, RuntimeError, TypeError):
-                # Контекст клиента недоступен или клиент отключен
-                return
+            # Вызываем callback и проверяем результат
+            result = callback()
+            
+            # Если результат - корутина (async функция или lambda, возвращающая корутину), создаем задачу
+            if asyncio.iscoroutine(result):
+                asyncio.create_task(result)
+            # Если callback сам является async функцией (но не был вызван), создаем задачу
+            elif asyncio.iscoroutinefunction(callback):
+                asyncio.create_task(callback())
         except Exception as e:
-            # Логируем только на уровне debug, чтобы не засорять логи
-            # Ошибки отключения клиента - это нормальная ситуация
-            logger.debug(f'Таймер пропущен из-за ошибки: {e}')
+            # Логируем ошибки выполнения callback, но не блокируем выполнение
+            # Это может быть нормально, если клиент отключился во время выполнения
+            logger.debug(f'Ошибка при выполнении callback таймера: {e}')
     
     timer = ui.timer(delay, safe_callback, once=once)
     state.page_timers.append(timer)
@@ -1773,6 +1761,12 @@ def content() -> None:
     """Основная страница работы с документами Mayan EDMS - кабинеты с документами"""
     state = get_state()
     
+    # Сохраняем пользователя в состоянии для использования в асинхронных функциях
+    # Это важно, так как таймеры могут выполняться без UI контекста
+    current_user = get_current_user()
+    if current_user:
+        state.current_user = current_user
+    
     # Очищаем старые таймеры при открытии страницы
     state.cleanup_timers()
     
@@ -2126,6 +2120,11 @@ async def load_documents_by_cabinets():
 def search_content() -> None:
     """Страница поиска документов"""
     state = get_state()
+    
+    # Сохраняем пользователя в состоянии для использования в асинхронных функциях
+    current_user = get_current_user()
+    if current_user:
+        state.current_user = current_user
     
     logger.info("Открыта страница поиска документов")
     
@@ -2571,6 +2570,11 @@ async def load_favorite_documents():
 def favorites_content() -> None:
     """Страница избранных документов"""
     state = get_state()
+    
+    # Сохраняем пользователя в состоянии для использования в асинхронных функциях
+    current_user = get_current_user()
+    if current_user:
+        state.current_user = current_user
     
     # Очищаем старые таймеры при открытии страницы
     state.cleanup_timers()
