@@ -2,7 +2,7 @@
 # Скрипт для настройки автоматической синхронизации пользователей
 
 # Путь к проекту
-PROJECT_PATH="/home/medic/djangoproject/nicegui_example"
+PROJECT_PATH="/home/medic/djangoproject/mysed"
 
 # Путь к скрипту синхронизации
 SYNC_SCRIPT="$PROJECT_PATH/user_sync.py"
