@@ -18,7 +18,7 @@ ldap.set_option(ldap.OPT_REFERRALS, 0)
 AUTH_LDAP_ALWAYS_UPDATE_USER = True
 
 LDAP_USER_AUTO_CREATION = "False"
-LDAP_URL = "ldap://172.19.228.72:389/"
+LDAP_URL = "ldap://openldap:389/"
 LDAP_BASE_DN = "dc=permgp7,dc=ru"
 LDAP_ADDITIONAL_USER_DN = "dc=people"
 LDAP_ADMIN_DN = "cn=admin,dc=permgp7,dc=ru"

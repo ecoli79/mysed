@@ -198,4 +198,13 @@ task_assignment = TaskAssignmentPage()
 # Подключаем API роутер для обработки событий КриптоПро
 app.include_router(api_router.router)
 
-ui.run(title=config.app_name)
+# Настройка хоста и порта для работы в Docker
+host = os.getenv('HOST', '0.0.0.0')
+port = int(os.getenv('PORT', os.getenv('APP_PORT', '8080')))
+
+ui.run(
+    title=config.app_name,
+    host=host,
+    port=port,
+    show=False  # Не открывать браузер автоматически в Docker
+)

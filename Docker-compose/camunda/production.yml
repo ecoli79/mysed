@@ -46,7 +46,7 @@ camunda.bpm:
 # Uncomment this section to enable LDAP support for Camunda Run
     ldap:
       enabled: true
-      server-url: ldap://172.19.228.72:389/
+      server-url: ldap://openldap:389/
      # administrator-group-name: camunda-admin
       accept-untrusted-certificates: true
       manager-dn: cn=admin,dc=permgp7,dc=ru

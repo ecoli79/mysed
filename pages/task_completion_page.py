@@ -218,10 +218,10 @@ async def apply_active_tasks_sorting(sortType: str):
         # Важно: оборачиваем в контекст tasks_container, чтобы диаграмма добавлялась в правильный контейнер
         with state.tasks_container:
             # Создаем сворачиваемый блок для диаграммы Ганта (свернут по умолчанию)
-            with ui.expansion('Диаграмма Ганта', icon='timeline', value=False).classes('w-full mb-4'):
+            with ui.expansion('Графика', icon='timeline', value=False).classes('w-full mb-4'):
                 create_gantt_chart(
                     tasks_with_due, 
-                    title='Диаграмма Ганта активных задач',
+                    title='',
                     name_field='name',
                     due_field='due',
                     id_field='id',
@@ -423,31 +423,9 @@ async def load_active_tasks(header_container=None, target_task_id: Optional[str]
                         logger.error(f"Ошибка при загрузке задачи {target_task_id_str} напрямую: {e}", exc_info=True)
                         ui.notify(f'Ошибка при загрузке задачи: {str(e)}', type='error')
         else:
-            # Показываем сообщение об отсутствии задач
-            if header_container:
-                with header_container:
-                    ui.button(
-                        'Обновить задачи',
-                        icon='refresh',
-                        on_click=lambda: load_active_tasks(state.tasks_header_container)
-                    ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
-                    
-                    # Добавляем select для сортировки даже когда нет задач
-                    async def handle_sort_change_empty(e):
-                        await apply_active_tasks_sorting(e.value)
-                    
-                    ui.select(
-                        options={
-                            'start_time_desc': 'По дате создания (новые сначала)',
-                            'start_time_asc': 'По дате создания (старые сначала)',
-                            'due_desc': 'По сроку исполнения (поздние сначала)',
-                            'due_asc': 'По сроку исполнения (ранние сначала)'
-                        },
-                        value=state.active_tasks_sort_type,
-                        label='Сортировка',
-                        on_change=handle_sort_change_empty
-                    ).classes('w-64').props('dense')
-                    
+            # Показываем сообщение об отсутствии задач в контейнере задач
+            if state.tasks_container:
+                with state.tasks_container:
                     ui.label('Нет активных задач').classes('text-gray-500')
             
             # Если есть target_task_id, но нет задач в списке, пробуем загрузить напрямую

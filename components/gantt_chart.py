@@ -177,7 +177,8 @@ def create_gantt_chart(
     
     # Создаем диаграмму
     with ui.card().classes('p-4 mb-4 w-full max-w-full').style('width: 100%; max-width: 100%;'):
-        ui.label(title).classes('text-xl font-bold mb-2')
+        if title:
+            ui.label(title).classes('text-xl font-bold mb-2')
         
         # Контейнер для задач - простая структура как в примере
         # Используем items-stretch вместо items-center, чтобы строки занимали всю ширину

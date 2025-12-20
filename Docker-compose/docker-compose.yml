@@ -77,6 +77,12 @@ services:
     networks:
       - services_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ldapwhoami -x -H ldap://localhost:389 -D cn=admin,dc=permgp7,dc=ru -w Gkb6CodCod || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
 
   # ==================== phpLDAPadmin ====================
   phpldapadmin:
@@ -111,6 +117,12 @@ services:
     networks:
       - services_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
 
   # ==================== Redis (для Mayan) ====================
   redis:
@@ -138,6 +150,12 @@ services:
     networks:
       - services_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${MAYAN_REDIS_PASSWORD:-mayanredispassword} ping | grep PONG || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   # ==================== Elasticsearch (для Mayan, опционально) ====================
   elasticsearch:
@@ -189,9 +207,11 @@ services:
       postgresql:
         condition: service_healthy
       rabbitmq:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+      openldap:
+        condition: service_healthy
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -219,7 +239,80 @@ services:
     depends_on:
       postgresql:
         condition: service_healthy
+      openldap:
+        condition: service_healthy
     restart: unless-stopped
+
+  # ==================== Основное приложение (NiceGUI) ====================
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: nicegui-app
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      - ../logs:/app/logs
+      - ../static:/app/static
+    environment:
+      # Настройки приложения
+      - APP_NAME=${APP_NAME:-NiceGUI Example}
+      - DEBUG=${DEBUG:-false}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - PORT=${APP_PORT:-8080}
+      - HOST=0.0.0.0
+      
+      # Настройки Camunda (используем имя сервиса из docker-compose)
+      - CAMUNDA_URL=${CAMUNDA_URL:-https://camunda:8443}
+      - CAMUNDA_USERNAME=${CAMUNDA_USERNAME:-}
+      - CAMUNDA_PASSWORD=${CAMUNDA_PASSWORD:-}
+      - CAMUNDA_VERIFY_SSL=${CAMUNDA_VERIFY_SSL:-false}
+      
+      # Настройки LDAP (используем имя сервиса из docker-compose)
+      - LDAP_SERVER=${LDAP_SERVER:-openldap}
+      - LDAP_USER=${LDAP_USER:-cn=admin,dc=permgp7,dc=ru}
+      - LDAP_PASSWORD=${LDAP_PASSWORD:-Gkb6CodCod}
+      
+      # Настройки Mayan (используем имя сервиса из docker-compose)
+      - MAYAN_URL=${MAYAN_URL:-http://mayan-app:8000}
+      - MAYAN_USERNAME=${MAYAN_USERNAME:-admin}
+      - MAYAN_PASSWORD=${MAYAN_PASSWORD:-}
+      - MAYAN_API_TOKEN=${MAYAN_API_TOKEN:-}
+      - MAYAN_INCOMING_DOCUMENT_TYPE=${MAYAN_INCOMING_DOCUMENT_TYPE:-Входящие}
+      - MAYAN_INCOMING_CABINET=${MAYAN_INCOMING_CABINET:-Входящие письма}
+      
+      # Настройки почтового сервера
+      - EMAIL_SERVER=${EMAIL_SERVER:-}
+      - EMAIL_PORT=${EMAIL_PORT:-993}
+      - EMAIL_USERNAME=${EMAIL_USERNAME:-}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD:-}
+      - EMAIL_USE_SSL=${EMAIL_USE_SSL:-true}
+      - EMAIL_PROTOCOL=${EMAIL_PROTOCOL:-imap}
+      - EMAIL_ALLOWED_SENDERS=${EMAIL_ALLOWED_SENDERS:-}
+      - EMAIL_CHECK_INTERVAL=${EMAIL_CHECK_INTERVAL:-300}
+      
+      # Настройки логирования
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_DIR=/app/logs
+      - LOG_FILE=app.log
+    networks:
+      - services_network
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      openldap:
+        condition: service_healthy
+      mayan-app:
+        condition: service_started
+      camunda:
+        condition: service_started
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+        mode: "non-blocking"
 
 networks:
   services_network:
