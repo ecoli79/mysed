@@ -2,7 +2,7 @@ import asyncio
 import api_router
 from pages import home_page, deploy_work, task_completion_page, document_review_page, login_page, my_processes_page, mayan_documents, document_signing_page, task_assignment_page
 from auth.middleware import require_auth, get_current_user
-import theme
+from components import theme
 import os
 
 from nicegui import app, ui

@@ -1,9 +1,9 @@
-from message import message
+from components.message import message
 from nicegui import ui
 from models import Task
 from services.camunda_connector import create_camunda_client
 from models import CamundaDeployment, CamundaProcessDefinition
-import theme
+from components import theme
 import tempfile
 import os
 from nicegui import app, ui

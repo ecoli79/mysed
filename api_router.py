@@ -1,6 +1,6 @@
-import theme
+from components import theme
 from datetime import datetime
-from message import message
+from components.message import message
 from nicegui import ui
 from fastapi import APIRouter, Request
 import json

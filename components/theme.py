@@ -105,9 +105,10 @@ def frame(navigation_title: str):
         ui.label(navigation_title).classes('text-white')
         ui.space()
         if user:
-            from theme import create_user_info as _create_user_info
+            from components.theme import create_user_info as _create_user_info
             _create_user_info()
 
     # Контент
     with ui.column().classes('w-full items-center p-4'):
         yield
+

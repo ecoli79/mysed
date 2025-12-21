@@ -1,5 +1,5 @@
-import theme
-from message import message
+from components import theme
+from components.message import message
 from nicegui import ui, events
 from auth.ldap_auth import LDAPAuthenticator
 from services.camunda_connector import CamundaClient
