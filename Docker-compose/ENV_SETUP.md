@@ -19,18 +19,18 @@ DEBUG=false
 ENVIRONMENT=development
 
 # Настройки Camunda
-CAMUNDA_URL=https://172.19.228.72:8443
-CAMUNDA_USERNAME=dvimpolitov
-CAMUNDA_PASSWORD=your_camunda_password_here
+CAMUNDA_URL=https://camunda_url:8443
+CAMUNDA_USERNAME=your_camunda_login
+CAMUNDA_PASSWORD=your_camunda_password
 CAMUNDA_VERIFY_SSL=false  # Проверка SSL сертификатов (true для production, false для разработки с self-signed сертификатами)
 
 # Настройки LDAP
-LDAP_SERVER=172.19.228.72
-LDAP_USER=cn=admin,dc=permgp7,dc=ru
+LDAP_SERVER=ldap_url
+LDAP_USER=cn=your_ldap_admin_login_here
 LDAP_PASSWORD=your_ldap_password_here
 
 # Настройки Mayan
-MAYAN_URL=http://172.19.228.72:8000
+MAYAN_URL=http://mayan_url:8000
 MAYAN_USERNAME=admin
 MAYAN_PASSWORD=your_mayan_password_here
 MAYAN_API_TOKEN=your_mayan_api_token_here

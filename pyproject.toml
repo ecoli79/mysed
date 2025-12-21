@@ -51,6 +51,7 @@ markers = [
     "slow: медленные тесты",
     "real_server: требуют реального сервера",
     "real_plugin: требуют установки CryptoPro плагина",
+    "timeout: маркер для pytest-timeout",
 ]
 addopts = [
     "-v",

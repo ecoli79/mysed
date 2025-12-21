@@ -145,9 +145,9 @@ DB_USER=postgres
 DB_PASSWORD=your_password
 
 # Настройки Camunda
-CAMUNDA_URL=https://172.19.228.72:8443
-CAMUNDA_USERNAME=dvimpolitov
-CAMUNDA_PASSWORD=gkb6codcod
+CAMUNDA_URL=https://camunda_url:8443
+CAMUNDA_USERNAME=camunda_login
+CAMUNDA_PASSWORD=camunda_password
 
 # Настройки LDAP
 LDAP_SERVER=your_ldap_server

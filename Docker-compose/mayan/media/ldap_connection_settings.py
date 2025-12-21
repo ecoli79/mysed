@@ -3,6 +3,7 @@ from __future__ import absolute_import
 
 from mayan.settings.production import *
 import ldap
+import os
 from django_auth_ldap.config import LDAPSearch, GroupOfNamesType, LDAPSearchUnion, NestedActiveDirectoryGroupType, PosixGroupType
 
 #from .base import *
@@ -17,12 +18,22 @@ ldap.set_option(ldap.OPT_REFERRALS, 0)
 # This is the default, but I like to be explicit.
 AUTH_LDAP_ALWAYS_UPDATE_USER = True
 
-LDAP_USER_AUTO_CREATION = "False"
-LDAP_URL = "ldap://openldap:389/"
-LDAP_BASE_DN = "dc=permgp7,dc=ru"
-LDAP_ADDITIONAL_USER_DN = "dc=people"
-LDAP_ADMIN_DN = "cn=admin,dc=permgp7,dc=ru"
-LDAP_PASSWORD = "Gkb6CodCod"
+
+# Получаем LDAP учетные данные из переменных окружения
+# Переменные должны быть установлены в docker-compose.yml
+LDAP_USER_AUTO_CREATION = os.environ.get('LDAP_USER_AUTO_CREATION')
+LDAP_URL = os.environ.get('LDAP_USER_AUTO_CREATION')
+LDAP_BASE_DN = os.environ.get('LDAP_BASE_DN')
+LDAP_ADDITIONAL_USER_DN = os.environ.get('LDAP_ADDITIONAL_USER_DN')
+LDAP_ADMIN_DN = os.environ.get('LDAP_USER')
+LDAP_PASSWORD = os.environ.get('LDAP_PASSWORD')
+
+# Проверяем, что пароль установлен
+if not LDAP_PASSWORD:
+    raise ValueError(
+        'LDAP_PASSWORD не установлен. '
+        'Установите переменную окружения LDAP_PASSWORD в docker-compose.yml'
+    )
 
 AUTH_LDAP_SERVER_URI = LDAP_URL
 AUTH_LDAP_BIND_DN = LDAP_ADMIN_DN
@@ -30,7 +41,7 @@ AUTH_LDAP_BIND_PASSWORD = LDAP_PASSWORD
 
 
 AUTH_LDAP_USER_SEARCH = LDAPSearch(
-    "dc=permgp7,dc=ru",
+    LDAP_BASE_DN,
     ldap.SCOPE_SUBTREE,
     "(uid=%(user)s)"
 )
@@ -42,7 +53,7 @@ AUTH_LDAP_USER_ATTR_MAP = {
 
 
 AUTH_LDAP_GROUP_SEARCH = LDAPSearch(
-    'dc=permgp7,dc=ru',
+    LDAP_BASE_DN,
     ldap.SCOPE_SUBTREE,
     '(objectClass=posixGroup)'
 )
@@ -50,8 +61,6 @@ AUTH_LDAP_GROUP_SEARCH = LDAPSearch(
 AUTH_LDAP_GROUP_TYPE = PosixGroupType()
 
 AUTH_LDAP_USER_FLAGS_BY_GROUP = {
-   # 'is_active': 'cn=users,ou=groups,dc=permgp7,dc=ru',
-   # 'is_staff': 'cn=users,dc=permgp7,dc=ru',
     'is_superuser': 'cn=admins,dc=permgp7,dc=ru',
 }
 

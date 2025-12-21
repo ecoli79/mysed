@@ -3,9 +3,9 @@ services:
     image: osixia/openldap:latest
     container_name: openldap
     environment:
-      - LDAP_ORGANISATION=gp7
-      - LDAP_DOMAIN=permgp7.ru
-      - LDAP_ADMIN_PASSWORD=Gkb6CodCod
+      - LDAP_ORGANISATION=${LDAP_ORGANISATION}
+      - LDAP_DOMAIN${LDAP_DOMAIN}
+      - LDAP_ADMIN_PASSWORD=${LDAP_ADMIN_PASSWORD}
     ports:
       - "389:389"
       - "636:636"

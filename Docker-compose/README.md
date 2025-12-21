@@ -29,8 +29,11 @@ DEBUG=false
 ENVIRONMENT=production
 
 # PostgreSQL
-POSTGRES_PASSWORD=Gkb6CodCod
+POSTGRES_PASSWORD=yourpsqlpass
 POSTGRES_PORT=5432
+# Пароли для пользователей баз данных (используются в скрипте инициализации)
+MAYAN_DATABASE_PASSWORD=yourmayandbpass
+CAMUNDA_DATABASE_PASSWORD=yourcamundapass
 
 # RabbitMQ
 MAYAN_RABBITMQ_USER=mayan
@@ -53,10 +56,19 @@ MAYAN_API_TOKEN=your_mayan_api_token
 CAMUNDA_USERNAME=your_camunda_username
 CAMUNDA_PASSWORD=your_camunda_password
 CAMUNDA_VERIFY_SSL=false
+# Пароли для базы данных Camunda (используются в production.yml)
+CAMUNDA_DATABASE_USER=camunda
+CAMUNDA_DATABASE_PASSWORD=yourcamundapass
+# SSL настройки для Camunda (опционально)
+CAMUNDA_SSL_KEYSTORE_PASSWORD=camunda
+CAMUNDA_SSL_KEY_PASSWORD=camunda
+# LDAP настройки для Camunda (опционально, если отличается от основных LDAP настроек)
+CAMUNDA_LDAP_SERVER_URL=ldap://openldap:389/
 
 # LDAP
-LDAP_USER=cn=admin,dc=permgp7,dc=ru
-LDAP_PASSWORD=Gkb6CodCod
+LDAP_USER=cn=yourldaplogin
+LDAP_PASSWORD=yourldappass
+LDAP_BASE_DN=dc=permgp7,dc=ru
 
 # Elasticsearch (опционально)
 MAYAN_ELASTICSEARCH_PASSWORD=mayanespassword
@@ -110,12 +122,12 @@ docker compose ps
 
 ### MinIO/S3 хранилище
 
-Mayan EDMS настроен на использование внешнего MinIO/S3 хранилища по адресу `172.19.228.50:9000`.
+Mayan EDMS настроен на использование внешнего MinIO/S3 хранилища по адресу `url_minio:9000`.
 
 **Важно:** Убедитесь, что:
 1. MinIO сервер доступен по указанному адресу
 2. Создан bucket с именем `mayan`
-3. Учетные данные доступа корректны (admin/gkb6codcod)
+3. Учетные данные доступа корректны (login/password)
 
 Если нужно использовать локальный MinIO, добавьте сервис в `docker-compose.yml`:
 
@@ -125,8 +137,8 @@ minio:
   container_name: minio
   command: server /data --console-address ":9001"
   environment:
-    MINIO_ROOT_USER: admin
-    MINIO_ROOT_PASSWORD: gkb6codcod
+    MINIO_ROOT_USER: minio_login
+    MINIO_ROOT_PASSWORD: minio_password
   ports:
     - "9000:9000"
     - "9001:9001"

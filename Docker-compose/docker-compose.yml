@@ -7,8 +7,11 @@ services:
     container_name: postgresql
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Gkb6CodCod}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: postgres
+      # Переменные для скрипта инициализации баз данных
+      MAYAN_DATABASE_PASSWORD: ${MAYAN_DATABASE_PASSWORD}
+      CAMUNDA_DATABASE_PASSWORD: ${CAMUNDA_DATABASE_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
@@ -46,7 +49,7 @@ services:
       PGHOST: postgresql
       PGPORT: 5432
       PGUSER: postgres
-      PGPASSWORD: ${POSTGRES_PASSWORD:-Gkb6CodCod}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - ./backups/postgresql:/backups
       - ./scripts/backup-script.sh:/backup-script.sh
@@ -64,9 +67,9 @@ services:
     image: osixia/openldap:latest
     container_name: openldap
     environment:
-      - LDAP_ORGANISATION=gp7
-      - LDAP_DOMAIN=permgp7.ru
-      - LDAP_ADMIN_PASSWORD=Gkb6CodCod
+      - LDAP_ORGANISATION=${LDAP_ORGANISATION}
+      - LDAP_DOMAIN=${LDAP_DOMAIN}
+      - LDAP_ADMIN_PASSWORD=${LDAP_ADMIN_PASSWORD}
     ports:
       - "389:389"
       - "636:636"
@@ -78,7 +81,7 @@ services:
       - services_network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "ldapwhoami -x -H ldap://localhost:389 -D cn=admin,dc=permgp7,dc=ru -w Gkb6CodCod || exit 1"]
+      test: ["CMD-SHELL", "ldapwhoami -x -H ${LDAP_URL} -D ${LDAP_USER} -w ${LDAP_PASSWORD} || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -141,7 +144,7 @@ services:
       - --maxmemory-policy
       - "allkeys-lru"
       - --requirepass
-      - "${MAYAN_REDIS_PASSWORD:-mayanredispassword}"
+      - "${MAYAN_REDIS_PASSWORD}"
     ports:
       - "6379:6379"
     volumes:
@@ -151,7 +154,7 @@ services:
       - services_network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${MAYAN_REDIS_PASSWORD:-mayanredispassword} ping | grep PONG || exit 1"]
+      test: ["CMD-SHELL", "redis-cli -a ${MAYAN_REDIS_PASSWORD} ping | grep PONG || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -167,7 +170,7 @@ services:
       - http.max_content_length=400mb
       - xpack.security.enabled=true
       - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-      - ELASTIC_PASSWORD=${MAYAN_ELASTICSEARCH_PASSWORD:-mayanespassword}
+      - ELASTIC_PASSWORD=${MAYAN_ELASTICSEARCH_PASSWORD}
     ulimits:
       memlock:
         soft: -1
@@ -187,13 +190,20 @@ services:
     container_name: mayan-app
     environment:
       MAYAN_CELERY_BROKER_URL: amqp://${MAYAN_RABBITMQ_USER:-mayan}:${MAYAN_RABBITMQ_PASSWORD:-mayanrabbitpass}@rabbitmq:5672/${MAYAN_RABBITMQ_VHOST:-mayan}
-      MAYAN_CELERY_RESULT_BACKEND: redis://:${MAYAN_REDIS_PASSWORD:-mayanredispassword}@redis:6379/1
-      MAYAN_DATABASES: "{'default':{'ENGINE':'django.db.backends.postgresql','NAME':'mayan','PASSWORD':'${MAYAN_DATABASE_PASSWORD:-mayandbpass}','USER':'${MAYAN_DATABASE_USER:-mayan}','HOST':'postgresql','PORT':5432,'CONN_MAX_AGE':0}}"
+      MAYAN_CELERY_RESULT_BACKEND: redis://:${MAYAN_REDIS_PASSWORD}@redis:6379/1
+      MAYAN_DATABASES: "{'default':{'ENGINE':'django.db.backends.postgresql','NAME':'mayan','PASSWORD':'${MAYAN_DATABASE_PASSWORD}','USER':'${MAYAN_DATABASE_USER}','HOST':'postgresql','PORT':5432,'CONN_MAX_AGE':0}}"
       MAYAN_LOCK_MANAGER_BACKEND: mayan.apps.lock_manager.backends.redis_lock.RedisLock
-      MAYAN_LOCK_MANAGER_BACKEND_ARGUMENTS: "{'redis_url':'redis://:${MAYAN_REDIS_PASSWORD:-mayanredispassword}@redis:6379/2'}"
+      MAYAN_LOCK_MANAGER_BACKEND_ARGUMENTS: "{'redis_url':'redis://:${MAYAN_REDIS_PASSWORD}@redis:6379/2'}"
       MAYAN_SETTINGS_MODULE: user_settings.ldap_connection_settings
+      LDAP_USER_AUTO_CREATION: ${LDAP_USER_AUTO_CREATION}
+      LDAP_URL: ${LDAP_URL}
+      LDAP_BASE_DN: ${LDAP_BASE_DN}
+      LDAP_ADDITIONAL_USER_DN: ${LDAP_ADDITIONAL_USER_DN}
+      LDAP_ADMIN_DN: ${LDAP_USER}
+      LDAP_USER: ${LDAP_USER}
+      LDAP_PASSWORD: ${LDAP_PASSWORD}
       MAYAN_DOCUMENTS_FILE_STORAGE_BACKEND: "storages.backends.s3boto3.S3Boto3Storage"
-      MAYAN_DOCUMENTS_FILE_STORAGE_BACKEND_ARGUMENTS: '{"bucket_name": "mayan", "endpoint_url": "http://172.19.228.50:9000", "access_key": "admin", "secret_key": "gkb6codcod", "region_name": "us-east-1", "use_ssl": false, "default_acl": "private"}'
+      MAYAN_DOCUMENTS_FILE_STORAGE_BACKEND_ARGUMENTS: ${MAYAN_DOCUMENTS_FILE_STORAGE_BACKEND_ARGUMENTS}
     ports:
       - "${MAYAN_FRONTEND_HTTP_PORT:-80}:8000"
     volumes:
@@ -234,6 +244,15 @@ services:
       - ./backups/camunda:/backups
     environment:
       - CAMUNDA_BPM_RUN_CONFIGURATION=production
+      # Переменные окружения для Spring Boot (используются в production.yml)
+      - LDAP_USER: ${LDAP_USER}
+      - LDAP_PASSWORD: ${LDAP_PASSWORD}
+      - LDAP_BASE_DN: ${LDAP_BASE_DN}
+      - CAMUNDA_DATABASE_USER: ${CAMUNDA_DATABASE_USER}
+      - CAMUNDA_DATABASE_PASSWORD: ${CAMUNDA_DATABASE_PASSWORD}
+      - CAMUNDA_SSL_KEYSTORE_PASSWORD: ${CAMUNDA_SSL_KEYSTORE_PASSWORD}
+      - CAMUNDA_SSL_KEY_PASSWORD: ${CAMUNDA_SSL_KEY_PASSWORD}
+      - CAMUNDA_LDAP_SERVER_URL: ${CAMUNDA_LDAP_SERVER_URL}
     networks:
       - services_network
     depends_on:
@@ -264,14 +283,14 @@ services:
       
       # Настройки Camunda (используем имя сервиса из docker-compose)
       - CAMUNDA_URL=${CAMUNDA_URL:-https://camunda:8443}
-      - CAMUNDA_USERNAME=${CAMUNDA_USERNAME:-}
-      - CAMUNDA_PASSWORD=${CAMUNDA_PASSWORD:-}
+      - CAMUNDA_USERNAME=${CAMUNDA_USERNAME}
+      - CAMUNDA_PASSWORD=${CAMUNDA_PASSWORD}
       - CAMUNDA_VERIFY_SSL=${CAMUNDA_VERIFY_SSL:-false}
       
       # Настройки LDAP (используем имя сервиса из docker-compose)
-      - LDAP_SERVER=${LDAP_SERVER:-openldap}
-      - LDAP_USER=${LDAP_USER:-cn=admin,dc=permgp7,dc=ru}
-      - LDAP_PASSWORD=${LDAP_PASSWORD:-Gkb6CodCod}
+      - LDAP_SERVER=${LDAP_SERVER}
+      - LDAP_USER=${LDAP_USER}
+      - LDAP_PASSWORD=${LDAP_PASSWORD}
       
       # Настройки Mayan (используем имя сервиса из docker-compose)
       - MAYAN_URL=${MAYAN_URL:-http://mayan-app:8000}

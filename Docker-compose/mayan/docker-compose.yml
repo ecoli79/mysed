@@ -4,12 +4,12 @@ x-mayan-container:
   environment:
     MAYAN_CELERY_BROKER_URL: amqp://${MAYAN_RABBITMQ_USER:-mayan}:${MAYAN_RABBITMQ_PASSWORD:-mayanrabbitpass}@${MAYAN_DOCKER_RABBITMQ_HOSTNAME:-rabbitmq}:${MAYAN_DOCKER_RABBITMQ_PORT:-5672}/${MAYAN_RABBITMQ_VHOST:-mayan}
     MAYAN_CELERY_RESULT_BACKEND: redis://:${MAYAN_REDIS_PASSWORD:-mayanredispassword}@${MAYAN_DOCKER_REDIS_HOSTNAME:-redis}:${MAYAN_DOCKER_REDIS_PORT:-6379}/${MAYAN_REDIS_RESULT_DATABASE:-1}
-    MAYAN_DATABASES: "{'default':{'ENGINE':'django.db.backends.postgresql','NAME':'${MAYAN_DATABASE_NAME:-mayan}','PASSWORD':'${MAYAN_DATABASE_PASSWORD:-mayandbpass}','USER':'${MAYAN_DATABASE_USER:-mayan}','HOST':'${MAYAN_DATABASE_HOST:-postgresql}','PORT':${MAYAN_DATABASE_PORT:-},'CONN_MAX_AGE':${MAYAN_DATABASE_CONN_MAX_AGE:-0},${MAYAN_DATABASE_EXTRA_OPTIONS:-}}}"
+    MAYAN_DATABASES: "{'default':{'ENGINE':'django.db.backends.postgresql','NAME':'${MAYAN_DATABASE_NAME:-mayan}','PASSWORD':'${MAYAN_DATABASE_PASSWORD}','USER':'${MAYAN_DATABASE_USER}','HOST':'${MAYAN_DATABASE_HOST}','PORT':${MAYAN_DATABASE_PORT},'CONN_MAX_AGE':${MAYAN_DATABASE_CONN_MAX_AGE},${MAYAN_DATABASE_EXTRA_OPTIONS}}}"
     MAYAN_LOCK_MANAGER_BACKEND: mayan.apps.lock_manager.backends.redis_lock.RedisLock
     MAYAN_LOCK_MANAGER_BACKEND_ARGUMENTS: "{'redis_url':'redis://:${MAYAN_REDIS_PASSWORD:-mayanredispassword}@${MAYAN_DOCKER_REDIS_HOSTNAME:-redis}:${MAYAN_DOCKER_REDIS_PORT:-6379}/${MAYAN_REDIS_LOCK_MANAGER_DATABASE:-2}'}"
     MAYAN_SETTINGS_MODULE: user_settings.ldap_connection_settings
     MAYAN_DOCUMENTS_FILE_STORAGE_BACKEND: "storages.backends.s3boto3.S3Boto3Storage"
-    MAYAN_DOCUMENTS_FILE_STORAGE_BACKEND_ARGUMENTS: '{"bucket_name": "mayan", "endpoint_url": "http://172.19.228.50:9000", "access_key": "admin", "secret_key": "gkb6codcod", "region_name": "us-east-1", "use_ssl": false, "default_acl": "private"}'
+    MAYAN_DOCUMENTS_FILE_STORAGE_BACKEND_ARGUMENTS: ${MAYAN_DOCUMENTS_FILE_STORAGE_BACKEND_ARGUMENTS}
   #image: ${MAYAN_DOCKER_IMAGE_NAME:-mayanedms/mayanedms}:${MAYAN_DOCKER_IMAGE_TAG:-s4.9}
   image: mayanedms/mayanedms:latest
   logging:

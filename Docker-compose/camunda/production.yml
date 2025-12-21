@@ -46,12 +46,12 @@ camunda.bpm:
 # Uncomment this section to enable LDAP support for Camunda Run
     ldap:
       enabled: true
-      server-url: ldap://openldap:389/
+      server-url: ${CAMUNDA_LDAP_SERVER_URL:-ldap://openldap:389/}
      # administrator-group-name: camunda-admin
       accept-untrusted-certificates: true
-      manager-dn: cn=admin,dc=permgp7,dc=ru
-      manager-password: Gkb6CodCod
-      base-dn: dc=permgp7,dc=ru
+      manager-dn: ${LDAP_USER}
+      manager-password: ${LDAP_PASSWORD}
+      base-dn: ${LDAP_BASE_DN:-dc=permgp7,dc=ru}
       user-search-base: ''
       user-search-filter: (objectclass=person)
       user-id-attribute: uid
@@ -73,17 +73,17 @@ camunda.bpm:
 # Uncomment this section to grant administrator authorizations to an existing LDAP user or group
     admin-auth:
       enabled: true
-      administrator-group-name: admins
+      administrator-group-name: ${ADMINISTRATORS_GROUP_IN_LDAP}
 
 server:
 # https://docs.camunda.org/manual/latest/user-guide/camunda-bpm-run/#https
 # do not use the provided certificate in production
   ssl:
     key-store: classpath:keystore.p12
-    key-store-password: camunda
+    key-store-password: ${CAMUNDA_SSL_KEYSTORE_PASSWORD}
     key-store-type: pkcs12
     key-alias: camunda
-    key-password: camunda
+    key-password: ${CAMUNDA_SSL_KEY_PASSWORD}
   port: 8443
 
 # https://docs.camunda.org/manual/latest/user-guide/security/#http-header-security-in-webapps
@@ -111,8 +111,8 @@ spring.datasource:
 #  password: sa
    url: jdbc:postgresql://postgresql:5432/camunda
    driver-class-name: org.postgresql.Driver
-   username: camunda
-   password: Gkb6CodCod
+   username: ${CAMUNDA_DATABASE_USER}
+   password: ${CAMUNDA_DATABASE_PASSWORD}
 # By default, Spring Boot serves static content from any directories called /static or /public or /resources or
 # /META-INF/resources in the classpath. To prevent users from accidentally sharing files, this is disabled here by setting static locations to NULL.
 # https://docs.spring.io/spring-boot/docs/current/reference/htmlsingle/#boot-features-spring-mvc-static-content

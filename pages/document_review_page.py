@@ -97,8 +97,15 @@ def load_review_tasks():
         ui.label('Загрузка задач...').classes('text-gray-600')
         
         try:
+            # Получаем текущего авторизованного пользователя
+            from auth.middleware import get_current_user
+            current_user = get_current_user()
+            if not current_user:
+                ui.label('Ошибка: пользователь не авторизован').classes('text-red-600')
+                return
+            
             # Получаем задачи для процесса ознакомления с документами
-            username = 'dvimpolitov'  # Это должно быть динамически
+            username = current_user.username
             camunda_client = get_camunda_client()
             tasks = camunda_client.get_user_tasks_by_process_key(
                 username=username,

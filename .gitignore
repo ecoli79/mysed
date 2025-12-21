@@ -11,3 +11,8 @@ wheels/
 .env
 *.log
 *.db
+
+# Logs and state files
+logs/*.log
+logs/*.json
+logs/*.db

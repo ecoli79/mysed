@@ -165,8 +165,8 @@ print(f"Удалено членств: {len(results['removed_memberships'])}")
 ```python
 # Mayan EDMS настройки
 mayan_url = "https://mayan.example.com"
-mayan_username = "admin"
-mayan_password = "password"
+mayan_username = "mayan_login"
+mayan_password = "mayan_password"
 mayan_api_token = "your_api_token"
 ```
 
