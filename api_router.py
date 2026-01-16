@@ -682,4 +682,63 @@ def clear_signature_result():
     global _signature_result
     _signature_result = None
 
+@api_router.post("/change-password")
+async def change_password(request: Request):
+    """API endpoint для смены пароля пользователя"""
+    try:
+        data = await request.json()
+        current_password = data.get('current_password', '')
+        new_password = data.get('new_password', '')
+        confirm_password = data.get('confirm_password', '')
+        
+        # Получаем текущего пользователя
+        user = get_user_from_request(request)
+        if not user:
+            return {
+                "success": False,
+                "message": "Пользователь не авторизован"
+            }
+        
+        # Валидация
+        if not current_password or not new_password or not confirm_password:
+            return {
+                "success": False,
+                "message": "Все поля обязательны для заполнения"
+            }
+        
+        if new_password != confirm_password:
+            return {
+                "success": False,
+                "message": "Новый пароль и подтверждение не совпадают"
+            }
+        
+        if len(new_password) < 8:
+            return {
+                "success": False,
+                "message": "Пароль должен содержать минимум 8 символов"
+            }
+        
+        if current_password == new_password:
+            return {
+                "success": False,
+                "message": "Новый пароль должен отличаться от текущего"
+            }
+        
+        # Изменяем пароль через LDAP
+        authenticator = LDAPAuthenticator()
+        result = await authenticator.change_password(
+            username=user.username,
+            current_password=current_password,
+            new_password=new_password
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Ошибка при смене пароля: {e}", exc_info=True)
+        return {
+            "success": False,
+            "message": f"Ошибка при смене пароля: {str(e)}"
+        }
+
 router = api_router

@@ -32,7 +32,11 @@ def create_user_info():
     user = get_current_user()
     if user:
         with ui.row().classes('items-center gap-4'):
-            ui.label(f'{user.first_name} {user.last_name}').classes('text-white')
+            with ui.column().classes('items-end gap-1'):
+                ui.label(f'{user.first_name} {user.last_name}').classes('text-white')
+                with ui.row().classes('items-center gap-1'):
+                    ui.icon('settings', size='xs').classes('text-white')
+                    ui.link('Профиль', '/profile').classes('text-white text-xs no-underline hover:underline')
             ui.button('Выйти', on_click=logout).classes('text-white')
 
 @contextmanager

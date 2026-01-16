@@ -137,6 +137,7 @@ class MockLDAPAuthenticator:
                 first_name=user_data['first_name'],
                 last_name=user_data['last_name'],
                 email=user_data.get('email'),
+                description=user_data.get('description'),
                 groups=user_data.get('groups', []),
                 login_time=datetime.now().isoformat(),
                 last_activity=datetime.now().isoformat(),

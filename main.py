@@ -1,6 +1,6 @@
 import asyncio
 import api_router
-from pages import home_page, deploy_work, task_completion_page, document_review_page, login_page, my_processes_page, mayan_documents, document_signing_page, task_assignment_page
+from pages import home_page, deploy_work, task_completion_page, document_review_page, login_page, my_processes_page, mayan_documents, document_signing_page, task_assignment_page, user_profile
 from auth.middleware import require_auth, get_current_user
 from components import theme
 import os
@@ -162,6 +162,19 @@ def document_signing_page_handler() -> None:
     })
     with theme.frame('Подписание документов'):
         document_signing_page.content()
+
+# Страница профиля пользователя
+@ui.page('/profile')
+@require_auth
+def user_profile_page_handler() -> None:
+    user = get_current_user()
+    logger.info('Открыли страницу профиля пользователя', extra={
+        'component': 'user_profile',
+        'version': '1.0.0',
+        'user': user.username
+    })
+    with theme.frame('Профиль пользователя'):
+        user_profile.content()
         
 # Тестовая страница (тоже с авторизацией)
 @ui.page('/d')

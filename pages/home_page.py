@@ -150,7 +150,7 @@ async def create_tasks_page(login: str):
         try:
             logger.info(f"Начинаем обновление задач для пользователя {current_login}, show_finished={show_finished}")
             
-            # Создаем клиент Camunda с конфигурацией из настроек
+            # Создаем клиент Camunda (автоматически использует учетные данные пользователя, если доступны)
             camunda_client = await create_camunda_client()
             tasks = []
 

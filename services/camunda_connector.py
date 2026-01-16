@@ -2364,9 +2364,14 @@ class CamundaClient:
             return None
 
 
-async def create_camunda_client() -> CamundaClient:
+async def create_camunda_client(username: str = None, password: str = None, use_user_credentials: bool = True) -> CamundaClient:
     """
-    Создает клиент Camunda с настройками из конфигурации
+    Создает клиент Camunda с настройками из конфигурации или с учетными данными пользователя
+    
+    Args:
+        username: Имя пользователя для аутентификации (если не указано, используется системное)
+        password: Пароль для аутентификации (если не указано, используется системный)
+        use_user_credentials: Если True, пытается использовать учетные данные текущего пользователя из сессии
     
     Returns:
         Настроенный экземпляр CamundaClient
@@ -2378,6 +2383,33 @@ async def create_camunda_client() -> CamundaClient:
     
     if not config.camunda_url:
         raise ValueError("Camunda URL не настроен. Установите переменную CAMUNDA_URL в файле .env")
+    
+    # Если указаны учетные данные пользователя, используем их
+    if username and password:
+        return CamundaClient(
+            base_url=config.camunda_url,
+            username=username,
+            password=password,
+            verify_ssl=config.camunda_verify_ssl
+        )
+    
+    # Если нужно использовать учетные данные пользователя из сессии
+    if use_user_credentials:
+        try:
+            from auth.middleware import get_current_user
+            user = get_current_user()
+            if user and hasattr(user, 'camunda_password') and user.camunda_password:
+                return CamundaClient(
+                    base_url=config.camunda_url,
+                    username=user.username,
+                    password=user.camunda_password,
+                    verify_ssl=config.camunda_verify_ssl
+                )
+        except Exception as e:
+            # Если не удалось получить пользователя, используем системные учетные данные
+            pass
+    
+    # Иначе используем системные учетные данные
     if not config.camunda_username:
         raise ValueError("Camunda пользователь не настроен. Установите переменную CAMUNDA_USERNAME в файле .env")
     if not config.camunda_password:

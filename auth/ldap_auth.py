@@ -1,4 +1,4 @@
-from ldap3 import Server, Connection, SUBTREE, ALL
+from ldap3 import Server, Connection, SUBTREE, ALL, MODIFY_REPLACE
 from models import UserSession, AuthResponse, LDAPUser, User
 from config.settings import config
 from datetime import datetime
@@ -38,7 +38,7 @@ class LDAPAuthenticator:
                 self.base_dn, 
                 search_filter, 
                 SUBTREE,
-                attributes=['uid', 'cn', 'givenName', 'sn', 'mail', 'memberOf', 'userPassword']
+                attributes=['uid', 'cn', 'givenName', 'sn', 'mail', 'description', 'memberOf', 'userPassword']
             )
             
             if not conn.entries:
@@ -102,17 +102,20 @@ class LDAPAuthenticator:
                 user_conn.unbind()
                 
                 # Создаем сессию пользователя
+                description = user_entry.description.value if hasattr(user_entry, 'description') and user_entry.description.value else None
                 user_session = UserSession(
                     user_id=user_entry.uid.value,
                     username=user_entry.uid.value,
                     first_name=user_entry.givenName.value,
                     last_name=user_entry.sn.value,
                     email=user_entry.mail.value if hasattr(user_entry, 'mail') else None,
+                    description=description,
                     groups=groups,
                     login_time=datetime.now().isoformat(),
                     last_activity=datetime.now().isoformat(),
                     is_active=True,
-                    mayan_api_token=None  # Будет установлен ниже
+                    mayan_api_token=None,  # Будет установлен ниже
+                    camunda_password=password  # Временное хранение пароля для Camunda (только в памяти)
                 )
 
                 # Создаем API токен для пользователя в Mayan EDMS
@@ -485,3 +488,79 @@ class LDAPAuthenticator:
         except Exception as e:
             logger.error(f"Ошибка при загрузке пользователей из LDAP по группам: {e}")
             return {}
+    
+    async def change_password(self, username: str, current_password: str, new_password: str) -> Dict[str, Any]:
+        """
+        Изменяет пароль пользователя в LDAP
+        
+        Args:
+            username: Логин пользователя
+            current_password: Текущий пароль
+            new_password: Новый пароль
+            
+        Returns:
+            Словарь с результатом операции: {'success': bool, 'message': str}
+        """
+        try:
+            # Сначала проверяем текущий пароль, подключаясь от имени пользователя
+            conn = Connection(self.server, user=self.admin_dn, password=self.admin_password, auto_bind=True)
+            
+            # Ищем пользователя
+            # DN не является атрибутом, его можно получить из entry.entry_dn
+            search_filter = f'(uid={username})'
+            conn.search(
+                self.base_dn,
+                search_filter,
+                SUBTREE,
+                attributes=['uid']  # Минимальный набор атрибутов для поиска
+            )
+            
+            if not conn.entries:
+                return {
+                    'success': False,
+                    'message': 'Пользователь не найден'
+                }
+            
+            user_dn = str(conn.entries[0].entry_dn)
+            conn.unbind()
+            
+            # Проверяем текущий пароль, подключаясь от имени пользователя
+            try:
+                user_conn = Connection(self.server, user=user_dn, password=current_password, auto_bind=True)
+                user_conn.unbind()
+            except Exception as e:
+                logger.warning(f"Неверный текущий пароль для пользователя {username}: {e}")
+                return {
+                    'success': False,
+                    'message': 'Неверный текущий пароль'
+                }
+            
+            # Подключаемся от имени администратора для изменения пароля
+            admin_conn = Connection(self.server, user=self.admin_dn, password=self.admin_password, auto_bind=True)
+            
+            # Изменяем пароль
+            # В OpenLDAP пароль должен быть захеширован, но ldap3 делает это автоматически
+            admin_conn.modify(user_dn, {'userPassword': [(MODIFY_REPLACE, [new_password])]})
+            
+            if admin_conn.result['result'] == 0:
+                admin_conn.unbind()
+                logger.info(f"Пароль успешно изменен для пользователя {username}")
+                return {
+                    'success': True,
+                    'message': 'Пароль успешно изменен'
+                }
+            else:
+                error_message = admin_conn.result.get('description', 'Неизвестная ошибка')
+                admin_conn.unbind()
+                logger.error(f"Ошибка изменения пароля для пользователя {username}: {error_message}")
+                return {
+                    'success': False,
+                    'message': f'Ошибка изменения пароля: {error_message}'
+                }
+                
+        except Exception as e:
+            logger.error(f"Ошибка при изменении пароля для пользователя {username}: {e}", exc_info=True)
+            return {
+                'success': False,
+                'message': f'Ошибка при изменении пароля: {str(e)}'
+            }

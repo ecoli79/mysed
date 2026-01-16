@@ -449,11 +449,13 @@ class UserSession(DateTimeFormattedModel):
     first_name: str
     last_name: str
     email: Optional[str] = None
+    description: Optional[str] = None  # Должность из LDAP
     groups: List[str] = []
     login_time: str  # Будет автоматически форматироваться
     last_activity: str  # Будет автоматически форматироваться
     is_active: bool = True
     mayan_api_token: Optional[str] = None # API токен для Mayan EDMS
+    camunda_password: Optional[str] = None  # Временное хранение пароля для Camunda (только в памяти)
 
 class AuthResponse(pydantic.BaseModel):
     """Модель ответа аутентификации"""
