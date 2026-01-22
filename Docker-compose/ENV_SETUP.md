@@ -1,10 +1,10 @@
 # Настройка переменных окружения
 
-Для работы приложения необходимо создать файл `.env` в корневой директории проекта со следующими переменными:
+Для работы приложения необходимо создать файл `.env` в директории `Docker-compose` со следующими переменными:
 
 ## Создание файла .env
 
-Создайте файл `.env` в корневой директории проекта:
+Создайте файл `.env` в директории `Docker-compose`:
 
 ```bash
 touch .env
@@ -25,9 +25,10 @@ CAMUNDA_PASSWORD=your_camunda_password
 CAMUNDA_VERIFY_SSL=false  # Проверка SSL сертификатов (true для production, false для разработки с self-signed сертификатами)
 
 # Настройки LDAP
-LDAP_SERVER=ldap_url
+LDAP_SERVER=openldap
 LDAP_USER=cn=your_ldap_admin_login_here
 LDAP_PASSWORD=your_ldap_password_here
+LDAP_BASE_DN=dc=permgp7,dc=ru
 
 # Настройки Mayan
 MAYAN_URL=http://mayan_url:8000
@@ -41,7 +42,9 @@ MAYAN_API_TOKEN=your_mayan_api_token_here
 1. **Замените пароли** на реальные значения
 2. **Не коммитьте** файл `.env` в git - он уже добавлен в `.gitignore`
 3. **Скопируйте** этот файл как `.env` и заполните реальными значениями
-4. **Убедитесь**, что файл `.env` находится в корневой директории проекта
+4. **Убедитесь**, что файл `.env` находится в директории `Docker-compose`
+5. **LDAP_SERVER** должен указывать на контейнер openldap: `ldap://openldap:389` (для Docker Compose) или внешний адрес LDAP сервера
+6. **LDAP_BASE_DN** должен соответствовать вашему LDAP домену, например: `dc=permgp7,dc=ru`
 
 ## Проверка настроек
 

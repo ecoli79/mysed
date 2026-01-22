@@ -20,7 +20,7 @@ class LDAPAuthenticator:
             raise ValueError("LDAP пароль не настроен. Установите переменную LDAP_PASSWORD в файле .env")
         
         self.ldap_server = config.ldap_server
-        self.base_dn = 'dc=permgp7,dc=ru'
+        self.base_dn = config.ldap_base_dn
         self.admin_dn = config.ldap_user
         self.admin_password = config.ldap_password
         

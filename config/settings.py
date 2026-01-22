@@ -130,6 +130,7 @@ class AppConfig(BaseSettings):
     ldap_server: str = Field(default="", env="LDAP_SERVER")
     ldap_user: str = Field(default="", env="LDAP_USER")
     ldap_password: str = Field(default="", env="LDAP_PASSWORD")
+    ldap_base_dn: str = Field(default="", env="LDAP_BASE_DN")
     
     # Настройки Mayan
     mayan_url: str = Field(default="http://localhost:8000", env="MAYAN_URL")

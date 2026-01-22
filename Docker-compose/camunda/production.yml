@@ -89,7 +89,7 @@ server:
 # https://docs.camunda.org/manual/latest/user-guide/security/#http-header-security-in-webapps
 # https://docs.camunda.org/manual/latest/webapps/shared-options/header-security/
   servlet.session.cookie:
-    secure: true
+    secure: false
     http-only: true
 
 # https://docs.camunda.org/manual/latest/user-guide/camunda-bpm-run/#logging
