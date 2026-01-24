@@ -13,7 +13,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.units import cm
 import io
-from PyPDF2 import PdfReader, PdfWriter
+from pypdf import PdfReader, PdfWriter
 from reportlab.lib.colors import HexColor  # ИСПРАВЛЕНИЕ: Убираем неработающий импорт colors
 import reportlab.lib.colors as colors  # ИСПРАВЛЕНИЕ: Импортируем colors как модуль
 from reportlab.lib.utils import ImageReader

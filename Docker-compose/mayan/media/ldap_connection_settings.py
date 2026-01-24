@@ -61,7 +61,7 @@ AUTH_LDAP_GROUP_SEARCH = LDAPSearch(
 AUTH_LDAP_GROUP_TYPE = PosixGroupType()
 
 AUTH_LDAP_USER_FLAGS_BY_GROUP = {
-    'is_superuser': 'cn=admins,dc=permgp7,dc=ru',
+    'is_superuser': LDAP_ADMIN_DN,
 }
 
 # Создавать группы в Django, если их нет

@@ -15,7 +15,7 @@ import api_router
 from ldap3 import Server, Connection, SUBTREE, ALL
 from utils.date_utils import format_date_russian
 import base64
-from PyPDF2 import PdfReader, PdfWriter
+from pypdf import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfbase import pdfmetrics

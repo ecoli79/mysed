@@ -5,6 +5,9 @@ from auth.token_storage import token_storage, set_last_token
 from models import LoginRequest
 import asyncio
 from auth.middleware import get_current_user
+from app_logging.logger import get_logger
+
+logger = get_logger(__name__)
 
 def create_login_page():
     """Создает страницу входа в систему"""
@@ -68,6 +71,22 @@ def create_login_page():
 def create_logout_button():
     """Создает кнопку выхода"""
     def logout():
+        # Получаем текущего пользователя перед выходом для очистки кеша
+        try:
+            from pages.mayan_documents import clear_metadata_cache, get_state
+            from auth.middleware import get_current_user
+            
+            current_user = get_current_user()
+            if current_user:
+                # Очищаем кеш метаданных для текущего пользователя
+                clear_metadata_cache(current_user.username)
+            
+            # Также очищаем состояние страницы документов
+            state = get_state()
+            state.reset_all()
+        except Exception as e:
+            logger.debug(f'Ошибка при очистке кеша при выходе: {e}')
+        
         # Удаляем токен из хранилища
         client_id = ui.context.client.id
         token_storage.remove_token(client_id)

@@ -98,6 +98,14 @@ class MayanDocumentsState:
         self.reset_cache()
         self.connection_status = False
         self.auth_error = None
+        
+        # Очищаем кеш метаданных для текущего пользователя при сбросе состояния
+        if self.current_user:
+            try:
+                clear_metadata_cache(self.current_user.username)
+            except Exception as e:
+                logger.debug(f'Ошибка при очистке кеша метаданных: {e}')
+        
         self.current_user = None
 
 # Глобальный экземпляр состояния
@@ -287,17 +295,84 @@ _metadata_cache: Dict[str, tuple[Any, datetime]] = {}
 _metadata_cache_lock = asyncio.Lock()
 _metadata_cache_ttl = timedelta(minutes=5)  # TTL для кэша метаданных
 
-async def get_cached_document_types(client: MayanClient) -> List[Dict[str, Any]]:
+def _get_user_cache_key(base_key: str, user_identifier: str) -> str:
+    """
+    Создает ключ кеша с учетом пользователя
+    
+    Args:
+        base_key: Базовый ключ (например, 'cabinets', 'document_types')
+        user_identifier: Идентификатор пользователя (username или токен)
+    
+    Returns:
+        Ключ кеша с учетом пользователя
+    """
+    return f'{base_key}:user:{user_identifier}'
+
+def clear_metadata_cache(user_identifier: Optional[str] = None):
+    """
+    Очищает кеш метаданных
+    
+    Args:
+        user_identifier: Если указан, очищает только кеш для этого пользователя.
+                        Если None, очищает весь кеш.
+    """
+    async def _clear():
+        async with _metadata_cache_lock:
+            if user_identifier:
+                # Очищаем только кеш для конкретного пользователя
+                keys_to_remove = [
+                    key for key in _metadata_cache.keys()
+                    if key.endswith(f':user:{user_identifier}')
+                ]
+                for key in keys_to_remove:
+                    del _metadata_cache[key]
+                logger.debug(f'Очищен кеш метаданных для пользователя: {user_identifier}')
+            else:
+                # Очищаем весь кеш
+                _metadata_cache.clear()
+                logger.debug('Очищен весь кеш метаданных')
+    
+    # Выполняем очистку синхронно, если возможно, или асинхронно
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(_clear())
+        else:
+            loop.run_until_complete(_clear())
+    except RuntimeError:
+        # Если нет event loop, создаем новый
+        asyncio.run(_clear())
+
+async def get_cached_document_types(client: MayanClient, user_identifier: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Получает типы документов с кэшированием
     
     Args:
         client: Клиент Mayan EDMS
+        user_identifier: Идентификатор пользователя для кеша (username или токен)
     
     Returns:
         Список типов документов
     """
-    cache_key = 'document_types'
+    # Если user_identifier не передан, пытаемся получить из клиента или текущего пользователя
+    if not user_identifier:
+        try:
+            state = get_state()
+            current_user = state.current_user if state.current_user else get_current_user()
+            if current_user:
+                user_identifier = current_user.username
+            elif hasattr(client, 'api_token') and client.api_token:
+                # Используем токен как идентификатор, если username недоступен
+                user_identifier = client.api_token[:16]  # Первые 16 символов токена
+        except Exception:
+            pass
+    
+    if not user_identifier:
+        # Если не удалось получить идентификатор, не кешируем
+        logger.warning('Не удалось получить идентификатор пользователя для кеша, загружаем без кеширования')
+        return await client.get_document_types()
+    
+    cache_key = _get_user_cache_key('document_types', user_identifier)
     now = datetime.now()
     
     async with _metadata_cache_lock:
@@ -314,17 +389,36 @@ async def get_cached_document_types(client: MayanClient) -> List[Dict[str, Any]]
         _metadata_cache[cache_key] = (data, now)
         return data
 
-async def get_cached_cabinets(client: MayanClient) -> List[Dict[str, Any]]:
+async def get_cached_cabinets(client: MayanClient, user_identifier: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Получает кабинеты с кэшированием
     
     Args:
         client: Клиент Mayan EDMS
+        user_identifier: Идентификатор пользователя для кеша (username или токен)
     
     Returns:
         Список кабинетов
     """
-    cache_key = 'cabinets'
+    # Если user_identifier не передан, пытаемся получить из клиента или текущего пользователя
+    if not user_identifier:
+        try:
+            state = get_state()
+            current_user = state.current_user if state.current_user else get_current_user()
+            if current_user:
+                user_identifier = current_user.username
+            elif hasattr(client, 'api_token') and client.api_token:
+                # Используем токен как идентификатор, если username недоступен
+                user_identifier = client.api_token[:16]  # Первые 16 символов токена
+        except Exception:
+            pass
+    
+    if not user_identifier:
+        # Если не удалось получить идентификатор, не кешируем
+        logger.warning('Не удалось получить идентификатор пользователя для кеша, загружаем без кеширования')
+        return await client.get_cabinets()
+    
+    cache_key = _get_user_cache_key('cabinets', user_identifier)
     now = datetime.now()
     
     async with _metadata_cache_lock:
@@ -341,17 +435,36 @@ async def get_cached_cabinets(client: MayanClient) -> List[Dict[str, Any]]:
         _metadata_cache[cache_key] = (data, now)
         return data
 
-async def get_cached_tags(client: MayanClient) -> List[Dict[str, Any]]:
+async def get_cached_tags(client: MayanClient, user_identifier: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Получает теги с кэшированием
     
     Args:
         client: Клиент Mayan EDMS
+        user_identifier: Идентификатор пользователя для кеша (username или токен)
     
     Returns:
         Список тегов
     """
-    cache_key = 'tags'
+    # Если user_identifier не передан, пытаемся получить из клиента или текущего пользователя
+    if not user_identifier:
+        try:
+            state = get_state()
+            current_user = state.current_user if state.current_user else get_current_user()
+            if current_user:
+                user_identifier = current_user.username
+            elif hasattr(client, 'api_token') and client.api_token:
+                # Используем токен как идентификатор, если username недоступен
+                user_identifier = client.api_token[:16]  # Первые 16 символов токена
+        except Exception:
+            pass
+    
+    if not user_identifier:
+        # Если не удалось получить идентификатор, не кешируем
+        logger.warning('Не удалось получить идентификатор пользователя для кеша, загружаем без кеширования')
+        return await client.get_tags()
+    
+    cache_key = _get_user_cache_key('tags', user_identifier)
     now = datetime.now()
     
     async with _metadata_cache_lock:
