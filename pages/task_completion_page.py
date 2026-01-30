@@ -3537,8 +3537,41 @@ async def show_task_details(task):
                 return
             
             # Переменные процесса - показываем только нужные поля
+            process_variables = {}
+            var_names = ['creatorName', 'processCreator', 'creator', 'documentName', 'dueDate', 'documentId', 'mayanDocumentId']
+            
             try:
-                process_variables = await camunda_client.get_process_instance_variables(task_details.process_instance_id)
+                # Создаем клиент с системными учетными данными (из .env) для получения переменных процесса
+                camunda_client_system = await create_camunda_client(use_user_credentials=False)
+                
+                # Сначала пробуем получить переменные процесса по именам
+                process_variables = await camunda_client_system.get_process_instance_variables_by_name(
+                    task_details.process_instance_id, var_names
+                )
+                if process_variables:
+                    logger.info(f"Получены переменные процесса через get_process_instance_variables_by_name для процесса {task_details.process_instance_id}")
+            except Exception as e:
+                logger.warning(f"Не удалось получить переменные через get_process_instance_variables_by_name для процесса {task_details.process_instance_id}: {e}")
+                try:
+                    # Если не получилось, пробуем через историю
+                    process_variables = await camunda_client_system.get_history_process_instance_variables_by_name(
+                        task_details.process_instance_id, var_names
+                    )
+                    if process_variables:
+                        logger.info(f"Получены переменные процесса через get_history_process_instance_variables_by_name для процесса {task_details.process_instance_id}")
+                except Exception as e2:
+                    logger.warning(f"Не удалось получить переменные через историю для процесса {task_details.process_instance_id}: {e2}")
+                    try:
+                        # В крайнем случае пробуем получить все переменные процесса
+                        process_variables = await camunda_client_system.get_process_instance_variables(
+                            task_details.process_instance_id
+                        )
+                        if process_variables:
+                            logger.info(f"Получены переменные процесса через get_process_instance_variables для процесса {task_details.process_instance_id}")
+                    except Exception as e3:
+                        logger.error(f"Не удалось получить переменные процесса ни одним способом для процесса {task_details.process_instance_id}: {e3}")
+                        process_variables = {}
+                        
                 if process_variables:
                     with ui.card().classes('p-4 bg-yellow-50 mb-4'):
                         # ui.label('Переменные процесса').classes('text-lg font-semibold mb-1')

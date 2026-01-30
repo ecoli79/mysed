@@ -22,7 +22,7 @@ AUTH_LDAP_ALWAYS_UPDATE_USER = True
 # Получаем LDAP учетные данные из переменных окружения
 # Переменные должны быть установлены в docker-compose.yml
 LDAP_USER_AUTO_CREATION = os.environ.get('LDAP_USER_AUTO_CREATION')
-LDAP_URL = os.environ.get('LDAP_USER_AUTO_CREATION')
+LDAP_URL = os.environ.get('LDAP_URL')
 LDAP_BASE_DN = os.environ.get('LDAP_BASE_DN')
 LDAP_ADDITIONAL_USER_DN = os.environ.get('LDAP_ADDITIONAL_USER_DN')
 LDAP_ADMIN_DN = os.environ.get('LDAP_USER')
