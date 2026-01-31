@@ -12,6 +12,11 @@ import time
 import asyncio
 from utils.aggrid_locale import AGGGRID_RUSSIAN_LOCALE
 from app_logging.logger import get_logger
+from components import theme
+from components.message import message
+from components.document_viewer import show_document_viewer
+from nicegui import ui, events
+
 
 logger = get_logger(__name__)
 
@@ -879,8 +884,8 @@ class TaskAssignmentPage:
                                             
                                             for doc in documents:
                                                 with ui.card().classes('mb-2 p-3 cursor-pointer hover:bg-blue-50 border-l-4 border-blue-200 transition-colors'):
-                                                    with ui.row().classes('items-center w-full'):
-                                                        ui.icon('description').classes('text-blue-500 mr-2 text-xl')
+                                                    with ui.row().classes('items-start w-full gap-4'):
+                                                        ui.icon('description').classes('text-blue-500 mr-2 text-xl flex-shrink-0')
                                                         
                                                         with ui.column().classes('flex-1'):
                                                             ui.label(doc.label).classes('text-sm font-semibold')
@@ -894,14 +899,37 @@ class TaskAssignmentPage:
                                                                 else:
                                                                     ui.label(f'Размер: {size_kb:.1f} КБ').classes('text-xs text-gray-600')
                                                         
-                                                        ui.label(f'ID: {doc.document_id}').classes('text-xs text-gray-500 font-mono mr-2')
-                                                        
-                                                        # Кнопка выбора документа
-                                                        ui.button(
-                                                            'Выбрать',
-                                                            icon='check',
-                                                            on_click=lambda d=doc: select_document_for_task(d)
-                                                        ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
+                                                        with ui.column().classes('items-end flex-shrink-0 gap-2'):
+                                                            ui.label(f'ID: {doc.document_id}').classes('text-xs text-gray-500 font-mono')
+                                                            
+                                                            # Кнопки действий
+                                                            with ui.row().classes('gap-2'):
+                                                                # Кнопка просмотра документа
+                                                                async def view_document_handler(d=doc):
+                                                                    """Открывает просмотр документа из списка"""
+                                                                    try:
+                                                                        mayan_client = await MayanClient.create_with_session_user()
+                                                                        await show_document_viewer(
+                                                                            str(d.document_id),
+                                                                            d.label,
+                                                                            mayan_client=mayan_client
+                                                                        )
+                                                                    except Exception as e:
+                                                                        logger.error(f"Ошибка при открытии просмотра документа: {e}", exc_info=True)
+                                                                        ui.notify(f'Ошибка при открытии просмотра: {str(e)}', type='error')
+                                                                
+                                                                ui.button(
+                                                                    'Просмотр',
+                                                                    icon='visibility',
+                                                                    on_click=lambda d=doc: view_document_handler(d)
+                                                                ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
+                                                                
+                                                                # Кнопка выбора документа
+                                                                ui.button(
+                                                                    'Выбрать',
+                                                                    icon='check',
+                                                                    on_click=lambda d=doc: select_document_for_task(d)
+                                                                ).classes('bg-green-500 text-white text-xs px-2 py-1 h-7')
                                         
                                     except Exception as e:
                                         logger.error(f"Ошибка при поиске документов: {e}", exc_info=True)
@@ -932,6 +960,28 @@ class TaskAssignmentPage:
                                                         ui.label(f'ID: {doc.document_id}').classes('text-xs text-gray-600')
                                                         if hasattr(doc, 'file_latest_filename') and doc.file_latest_filename:
                                                             ui.label(f'Файл: {doc.file_latest_filename}').classes('text-xs text-gray-600')
+
+                                                        # Кнопки действий
+                                                        with ui.row().classes('gap-2 mt-2'):
+                                                            # Кнопка просмотра документа
+                                                            async def view_selected_document():
+                                                                """Открывает просмотр выбранного документа"""
+                                                                try:
+                                                                    mayan_client = await MayanClient.create_with_session_user()
+                                                                    await show_document_viewer(
+                                                                        str(doc.document_id),
+                                                                        doc.label,
+                                                                        mayan_client=mayan_client
+                                                                    )
+                                                                except Exception as e:
+                                                                    logger.error(f"Ошибка при открытии просмотра документа: {e}", exc_info=True)
+                                                                    ui.notify(f'Ошибка при открытии просмотра: {str(e)}', type='error')
+                                                            
+                                                            ui.button(
+                                                                'Просмотр',
+                                                                icon='visibility',
+                                                                on_click=view_selected_document
+                                                            ).classes('bg-blue-500 text-white text-xs px-2 py-1 h-7')
                                                 
                                                 # Кнопка для изменения выбора
                                                 # Используем прямой вызов через ui.timer для сохранения контекста NiceGUI

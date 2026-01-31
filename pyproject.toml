@@ -17,6 +17,7 @@ dependencies = [
     "pytz>=2025.2",
     "reportlab>=4.4.4",
     "requests>=2.32.5", # Оставляем для обратной совместимости на время миграции
+    "watchdog>=3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +47,7 @@ markers = [
     "mayan: тесты Mayan EDMS интеграции",
     "ldap: тесты LDAP интеграции",
     "email: тесты Email обработки",
+    "directory: тесты мониторинга директории",
     "api: тесты API endpoints",
     "workflow: тесты полных workflows",
     "slow: медленные тесты",

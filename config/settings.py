@@ -139,6 +139,8 @@ class AppConfig(BaseSettings):
     mayan_api_token: str = Field(default="", env="MAYAN_API_TOKEN")
     mayan_incoming_document_type: str = Field(default="Входящие", env="MAYAN_INCOMING_DOCUMENT_TYPE")
     mayan_incoming_cabinet: str = Field(default="Входящие письма", env="MAYAN_INCOMING_CABINET")
+    mayan_directory_document_type: str = Field(default="Входящие", env="MAYAN_DIRECTORY_DOCUMENT_TYPE")
+    mayan_directory_cabinet: str = Field(default="Файлы из директории", env="MAYAN_DIRECTORY_CABINET")
 
     # Настройки почтового сервера
     email_server: str = Field(default="", env="EMAIL_SERVER")
@@ -150,6 +152,12 @@ class AppConfig(BaseSettings):
     email_allowed_senders: str = Field(default="", env="EMAIL_ALLOWED_SENDERS")  # Через запятую
     email_check_interval: int = Field(default=300, env="EMAIL_CHECK_INTERVAL")  # Интервал проверки в секундах
     
+    # Настройки мониторинга директории
+    directory_watch_path: str = Field(default="", env="DIRECTORY_WATCH_PATH")  # Путь к директории для мониторинга
+    directory_watch_recursive: bool = Field(default=False, env="DIRECTORY_WATCH_RECURSIVE")  # Рекурсивный мониторинг
+    directory_watch_extensions: str = Field(default="", env="DIRECTORY_WATCH_EXTENSIONS")  # Расширения файлов через запятую
+    directory_scan_existing: bool = Field(default=True, env="DIRECTORY_SCAN_EXISTING")  # Сканировать существующие файлы
+    
     # Логирование
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     
@@ -159,7 +167,24 @@ class AppConfig(BaseSettings):
         case_sensitive=False,
         extra="ignore"
     )
-
+    
+    @field_validator('directory_scan_existing', 'directory_watch_recursive', 'camunda_verify_ssl', 'email_use_ssl', 'debug', mode='before')
+    @classmethod
+    def parse_bool(cls, v):
+        """Преобразует строковые значения в boolean, обрабатывая пустые строки"""
+        # Если значение не установлено (None), пропускаем валидацию - будет использовано дефолтное значение
+        if v is None:
+            return v
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            v = v.strip().lower()
+            if v in ('', 'false', '0', 'no', 'off'):
+                return False
+            if v in ('true', '1', 'yes', 'on'):
+                return True
+        # Если значение не распознано, возвращаем как есть (Pydantic обработает ошибку)
+        return v
 
 # Глобальный экземпляр конфигурации
 config = AppConfig()
