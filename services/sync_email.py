@@ -1,3 +1,21 @@
+"""
+Сервис синхронизации входящих email писем с Mayan EDMS.
+
+Подробная документация: services/README_EMAIL_SYNC.md
+
+Примеры использования:
+    # Обработка непрочитанных писем
+    python -m services.sync_email
+
+    # Обработка всех писем (включая прочитанные)
+    python -m services.sync_email --include-read
+
+    # Обработка максимум 10 писем за раз
+    python -m services.sync_email --max-emails 10
+
+    # Тестовый режим (проверка подключений)
+    python -m services.sync_email --dry-run
+"""
 import sys
 import os
 import asyncio

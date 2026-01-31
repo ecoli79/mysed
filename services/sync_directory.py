@@ -1,4 +1,26 @@
 # services/sync_directory.py
+"""
+Сервис синхронизации файлов из директории с Mayan EDMS.
+
+Подробная документация: services/README_DIRECTORY_SYNC.md
+
+Примеры использования:
+    # Однократное сканирование директории
+    python -m services.sync_directory /path/to/directory --scan-existing
+
+    # Постоянный мониторинг директории
+    python -m services.sync_directory /path/to/directory --watch --scan-existing
+
+    # С фильтрацией по расширениям
+    python -m services.sync_directory /path/to/directory --watch --extensions ".pdf,.docx,.doc"
+
+    # Рекурсивный мониторинг поддиректорий
+    python -m services.sync_directory /path/to/directory --watch --recursive
+
+    # Тестовый режим (проверка подключений)
+    python -m services.sync_directory /path/to/directory --dry-run
+"""
+
 import sys
 import os
 import asyncio
