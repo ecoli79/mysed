@@ -1,6 +1,9 @@
 x-mayan-container:
   &mayan-container
   env_file: .env
+  build:
+      context: .
+      dockerfile: Dockerfile.mayan
   environment:
     MAYAN_CELERY_BROKER_URL: amqp://${MAYAN_RABBITMQ_USER:-mayan}:${MAYAN_RABBITMQ_PASSWORD:-mayanrabbitpass}@${MAYAN_DOCKER_RABBITMQ_HOSTNAME:-rabbitmq}:${MAYAN_DOCKER_RABBITMQ_PORT:-5672}/${MAYAN_RABBITMQ_VHOST:-mayan}
     MAYAN_CELERY_RESULT_BACKEND: redis://:${MAYAN_REDIS_PASSWORD:-mayanredispassword}@${MAYAN_DOCKER_REDIS_HOSTNAME:-redis}:${MAYAN_DOCKER_REDIS_PORT:-6379}/${MAYAN_REDIS_RESULT_DATABASE:-1}

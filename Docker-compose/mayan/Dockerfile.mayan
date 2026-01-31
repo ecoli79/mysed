@@ -1,0 +1,28 @@
+# Dockerfile.mayan
+FROM mayanedms/mayanedms:latest
+
+USER root
+
+# Установка ВСЕХ зависимостей одной командой
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Системные зависимости для компиляции python-ldap
+    build-essential \
+    libsasl2-dev \
+    python3-dev \
+    libldap2-dev \
+    libssl-dev \
+    # pip для установки Python-пакетов
+    python3-pip \
+    # Tesseract OCR + русский язык
+    tesseract-ocr \
+    tesseract-ocr-rus \
+    libtesseract-dev \
+    # Дополнительно для обработки документов
+    poppler-utils \
+    imagemagick && \
+    # Установка Python-пакетов
+    pip3 install --no-cache-dir --break-system-packages \
+        python-ldap \
+        django-auth-ldap && \
+    # Очистка кэша apt
+    rm -rf /var/lib/apt/lists/*

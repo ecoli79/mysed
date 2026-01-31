@@ -275,8 +275,6 @@ services:
     volumes:
       - ../logs:/app/logs
       - ../static:/app/static
-      # Для разработки: монтирование исходного кода (раскомментируйте при необходимости)
-      # - ..:/app:ro  # Только для чтения, чтобы избежать конфликтов
     env_file:
       - .env
     environment:
@@ -300,7 +298,7 @@ services:
       - LDAP_BASE_DN=${LDAP_BASE_DN}
       
       # Настройки Mayan (используем имя сервиса из docker-compose)
-      - MAYAN_URL=${MAYAN_URL:-http://mayan-app}
+      - MAYAN_URL=${MAYAN_URL:-http://mayan-app:8000}
       - MAYAN_USERNAME=${MAYAN_USERNAME:-admin}
       - MAYAN_PASSWORD=${MAYAN_PASSWORD:-}
       - MAYAN_API_TOKEN=${MAYAN_API_TOKEN:-}
