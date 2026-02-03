@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict, Any
 from services.mayan_connector import MayanClient
 from models import Role, Permission, UserRole
-from app_logging.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger(__name__)
 

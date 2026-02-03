@@ -18,7 +18,7 @@ from reportlab.lib.colors import HexColor  # ИСПРАВЛЕНИЕ: Убира�
 import reportlab.lib.colors as colors  # ИСПРАВЛЕНИЕ: Импортируем colors как модуль
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase.pdfmetrics import registerFontFamily
-from app_logging.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger(__name__)
 

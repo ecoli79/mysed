@@ -35,7 +35,7 @@ from services.email_processor import EmailProcessor
 from services.mayan_connector import MayanClient
 from services.email_validator import EmailValidator
 from config.settings import config
-from app_logging.logger import setup_logging, get_logger
+from services.logger import setup_logging, get_logger
 
 # Настраиваем логирование
 setup_logging()

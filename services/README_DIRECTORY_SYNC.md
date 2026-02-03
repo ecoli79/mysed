@@ -60,34 +60,47 @@ DIRECTORY_SCAN_EXISTING=true
 
 ### Базовый запуск
 
+Путь к директории можно указать либо в командной строке, либо в переменной окружения `DIRECTORY_WATCH_PATH` в файле `.env`.
+
 ```bash
-# Однократное сканирование директории
+# Однократное сканирование директории (путь из .env)
+python -m services.sync_directory --scan-existing
+
+# Однократное сканирование директории (путь в командной строке)
 python -m services.sync_directory /path/to/directory --scan-existing
 
-# Постоянный мониторинг директории
+# Постоянный мониторинг директории (путь из .env)
+python -m services.sync_directory --watch --scan-existing
+
+# Постоянный мониторинг директории (путь в командной строке)
 python -m services.sync_directory /path/to/directory --watch --scan-existing
 
 # Мониторинг без сканирования существующих файлов
-python -m services.sync_directory /path/to/directory --watch
+python -m services.sync_directory --watch
 ```
 
 ### Параметры командной строки
 
 | Параметр | Описание |
 |----------|----------|
-| `directory` | Путь к директории для мониторинга (обязательный) |
+| `directory` | Путь к директории для мониторинга (опциональный, если указан `DIRECTORY_WATCH_PATH` в .env) |
 | `--watch` | Запустить постоянный мониторинг (иначе однократное сканирование) |
-| `--scan-existing` | Сканировать существующие файлы при запуске |
-| `--recursive` | Мониторить поддиректории рекурсивно |
-| `--extensions EXT` | Фильтр расширений файлов (через запятую, например: `.pdf,.docx,.doc`) |
+| `--scan-existing` | Сканировать существующие файлы при запуске (по умолчанию используется значение из `DIRECTORY_SCAN_EXISTING`) |
+| `--recursive` | Мониторить поддиректории рекурсивно (по умолчанию используется значение из `DIRECTORY_WATCH_RECURSIVE`) |
+| `--extensions EXT` | Фильтр расширений файлов (через запятую, например: `.pdf,.docx,.doc`). По умолчанию используется значение из `DIRECTORY_WATCH_EXTENSIONS` |
 | `--dry-run` | Тестовый режим: только проверка подключений, файлы не обрабатываются |
+
+**Примечание:** Если параметры не указаны в командной строке, используются значения из переменных окружения в `.env` файле.
 
 ### Примеры использования
 
 #### Однократное сканирование
 
 ```bash
-# Сканировать все файлы в директории
+# Сканировать все файлы в директории (путь из .env)
+python -m services.sync_directory --scan-existing
+
+# Сканировать все файлы в директории (путь в командной строке)
 python -m services.sync_directory /var/incoming --scan-existing
 
 # Сканировать только PDF и DOCX файлы
@@ -97,7 +110,10 @@ python -m services.sync_directory /var/incoming --scan-existing --extensions ".p
 #### Постоянный мониторинг
 
 ```bash
-# Мониторинг с автоматической обработкой новых файлов
+# Мониторинг с автоматической обработкой новых файлов (путь из .env)
+python -m services.sync_directory --watch --scan-existing
+
+# Мониторинг с автоматической обработкой новых файлов (путь в командной строке)
 python -m services.sync_directory /var/incoming --watch --scan-existing
 
 # Мониторинг только PDF файлов
@@ -110,13 +126,16 @@ python -m services.sync_directory /var/incoming --watch --recursive
 #### Тестовый режим
 
 ```bash
-# Проверка подключений без обработки файлов
+# Проверка подключений без обработки файлов (путь из .env)
+python -m services.sync_directory --dry-run
+
+# Проверка подключений без обработки файлов (путь в командной строке)
 python -m services.sync_directory /var/incoming --dry-run
 ```
 
 ## Автоматический запуск (Systemd)
 
-Для постоянного мониторинга рекомендуется использовать systemd service:
+Для постоянного мониторинга рекомендуется использовать systemd service. Можно использовать путь из `.env` или указать его явно:
 
 ```ini
 # /etc/systemd/system/directory-sync.service
@@ -129,7 +148,10 @@ Type=simple
 User=your_user
 WorkingDirectory=/path/to/project
 Environment="PATH=/path/to/venv/bin"
-ExecStart=/path/to/venv/bin/python -m services.sync_directory /var/incoming --watch --scan-existing
+# Вариант 1: Использовать путь из .env файла
+ExecStart=/path/to/venv/bin/python -m services.sync_directory --watch --scan-existing
+# Вариант 2: Указать путь явно
+# ExecStart=/path/to/venv/bin/python -m services.sync_directory /var/incoming --watch --scan-existing
 Restart=always
 RestartSec=10
 
@@ -188,7 +210,10 @@ sudo systemctl status directory-sync.service
 ### По расширениям
 
 ```bash
-# Только PDF и DOCX
+# Только PDF и DOCX (путь из .env)
+python -m services.sync_directory --watch --extensions ".pdf,.docx"
+
+# Только PDF и DOCX (путь в командной строке)
 python -m services.sync_directory /var/incoming --watch --extensions ".pdf,.docx"
 
 # Только изображения
@@ -198,7 +223,10 @@ python -m services.sync_directory /var/incoming --watch --extensions ".jpg,.png,
 ### Рекурсивный поиск
 
 ```bash
-# Мониторинг всех поддиректорий
+# Мониторинг всех поддиректорий (путь из .env)
+python -m services.sync_directory --watch --recursive
+
+# Мониторинг всех поддиректорий (путь в командной строке)
 python -m services.sync_directory /var/incoming --watch --recursive
 ```
 
@@ -248,39 +276,62 @@ python -m services.sync_directory /var/incoming --watch --recursive
 - Попробуйте очистить кеш и перезапустить синхронизацию
 ```
 
-### Ошибка "Директория не существует"
+### Ошибка "Директория не указана"
 
 ```
-Проверьте:
+Если путь не указан в командной строке, проверьте:
+- Установлена ли переменная DIRECTORY_WATCH_PATH в .env файле
+- Правильность значения переменной
+
+Если путь указан, проверьте:
 - Правильность пути к директории
 - Существование директории
 - Права доступа
 ```
 
-## Примеры использования
+## Дополнительные примеры
 
 ### Мониторинг папки входящих документов
 
 ```bash
-# Постоянный мониторинг с обработкой существующих файлов
+# Постоянный мониторинг с обработкой существующих файлов (путь из .env)
+python -m services.sync_directory --watch --scan-existing
+
+# Постоянный мониторинг с обработкой существующих файлов (путь в командной строке)
 python -m services.sync_directory /var/incoming/documents --watch --scan-existing
 ```
 
 ### Обработка только PDF файлов
 
 ```bash
+# Путь из .env
+python -m services.sync_directory --watch --extensions ".pdf"
+
+# Путь в командной строке
 python -m services.sync_directory /var/incoming --watch --extensions ".pdf"
 ```
 
 ### Однократная обработка всех файлов
 
 ```bash
+# Путь из .env
+python -m services.sync_directory --scan-existing --recursive
+
+# Путь в командной строке
 python -m services.sync_directory /var/incoming --scan-existing --recursive
 ```
 
 ### Мониторинг с фильтрацией и рекурсией
 
 ```bash
+# Путь из .env
+python -m services.sync_directory \
+  --watch \
+  --recursive \
+  --extensions ".pdf,.docx,.xlsx" \
+  --scan-existing
+
+# Путь в командной строке
 python -m services.sync_directory /var/incoming \
   --watch \
   --recursive \

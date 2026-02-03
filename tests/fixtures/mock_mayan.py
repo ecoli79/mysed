@@ -3,7 +3,7 @@
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from tests.fixtures.test_data import TEST_DOCUMENTS
 
 
@@ -56,16 +56,34 @@ class MockMayanClient:
         # Файлы документов
         self.get_document_file = AsyncMock(side_effect=self._get_document_file_impl)
         
+        # Тестирование подключения
+        self.test_connection = AsyncMock(return_value=True)
+        
         # Закрытие клиента
         self.close = AsyncMock()
         self.__aenter__ = AsyncMock(return_value=self)
         self.__aexit__ = AsyncMock(return_value=None)
     
-    async def _get_documents_impl(self, page: int = 1, page_size: int = 100, **kwargs):
+    async def _get_documents_impl(self, page: int = 1, page_size: int = 100, **kwargs) -> Tuple[List, int]:
         """Имитация получения списка документов"""
+        from services.mayan_connector import MayanDocument
+        
         start = (page - 1) * page_size
         end = start + page_size
-        return self._documents[start:end]
+        documents_page = self._documents[start:end]
+        
+        # Преобразуем словари в MayanDocument
+        mayan_docs = []
+        for doc in documents_page:
+            mayan_docs.append(MayanDocument(
+                document_id=doc.get('document_id', ''),
+                label=doc.get('label', ''),
+                file_latest_filename=doc.get('file_latest_filename', ''),
+                description=doc.get('description', ''),
+                datetime_created=doc.get('datetime_created', ''),
+            ))
+        
+        return mayan_docs, len(self._documents)
     
     async def _get_document_impl(self, document_id: str):
         """Имитация получения документа по ID"""
@@ -159,4 +177,3 @@ def real_mayan_client(test_config, use_real_servers):
         api_token=test_config.mayan_api_token or None,
         verify_ssl=False
     )
-

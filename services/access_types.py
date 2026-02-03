@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List, Dict, Any
-from app_logging.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -9,7 +9,7 @@ from typing import Optional, Set, List, Dict, Any
 from datetime import datetime
 import json
 import asyncio
-from app_logging.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -351,7 +351,7 @@ class DocumentHashCache:
             
             try:
                 for page in range(1, max_pages + 1):
-                    documents = await mayan_client.get_documents(
+                    documents, total = await mayan_client.get_documents(
                         page=page,
                         page_size=100,
                         cabinet_id=cabinet_id
@@ -371,33 +371,58 @@ class DocumentHashCache:
                             try:
                                 metadata = json.loads(doc.description)
                             except json.JSONDecodeError:
-                                # Если не JSON, пробуем найти хеш в тексте
-                                if 'attachment_hash' in doc.description:
-                                    # Извлекаем хеш из текста (простой поиск)
-                                    import re
-                                    hash_match = re.search(r'"attachment_hash"\s*:\s*"([a-f0-9]{64})"', doc.description)
+                                # Если не JSON, пробуем найти хеш в тексте (ищем и attachment_hash и file_hash)
+                                import re
+                                file_hash = None
+                                # Ищем attachment_hash (для email)
+                                hash_match = re.search(r'"attachment_hash"\s*:\s*"([a-f0-9]{64})"', doc.description)
+                                if hash_match:
+                                    file_hash = hash_match.group(1)
+                                else:
+                                    # Ищем file_hash (для directory)
+                                    hash_match = re.search(r'"file_hash"\s*:\s*"([a-f0-9]{64})"', doc.description)
                                     if hash_match:
                                         file_hash = hash_match.group(1)
-                                        if self.add_hash(
-                                            file_hash=file_hash,
-                                            document_id=str(doc.id),
-                                            filename=metadata.get('attachment_filename') if 'attachment_filename' in doc.description else None,
-                                            message_id=metadata.get('email_message_id') if 'email_message_id' in doc.description else None,
-                                            cabinet_id=cabinet_id,
-                                            metadata={'source': 'text_parsing'}
-                                        ):
-                                            synced_count += 1
+                                
+                                if file_hash:
+                                    # Извлекаем имя файла
+                                    filename = None
+                                    if 'attachment_filename' in doc.description:
+                                        filename_match = re.search(r'"attachment_filename"\s*:\s*"([^"]+)"', doc.description)
+                                        if filename_match:
+                                            filename = filename_match.group(1)
+                                    elif 'file_name' in doc.description:
+                                        filename_match = re.search(r'"file_name"\s*:\s*"([^"]+)"', doc.description)
+                                        if filename_match:
+                                            filename = filename_match.group(1)
+                                    
+                                    # Извлекаем message_id (только для email)
+                                    message_id = None
+                                    if 'email_message_id' in doc.description:
+                                        message_id_match = re.search(r'"email_message_id"\s*:\s*"([^"]+)"', doc.description)
+                                        if message_id_match:
+                                            message_id = message_id_match.group(1)
+                                    
+                                    if self.add_hash(
+                                        file_hash=file_hash,
+                                        document_id=str(doc.document_id),
+                                        filename=filename,
+                                        message_id=message_id,
+                                        cabinet_id=cabinet_id,
+                                        metadata={'source': 'text_parsing'}
+                                    ):
+                                        synced_count += 1
                                 continue
                             
-                            # Извлекаем хеш из метаданных
-                            file_hash = metadata.get('attachment_hash')
+                            # Извлекаем хеш из метаданных (может быть attachment_hash для email или file_hash для directory)
+                            file_hash = metadata.get('attachment_hash') or metadata.get('file_hash')
                             if not file_hash:
                                 continue
                             
                             # Добавляем в кеш
                             if self.add_hash(
                                 file_hash=file_hash,
-                                document_id=str(doc.id),
+                                document_id=str(doc.document_id),
                                 filename=metadata.get('attachment_filename'),
                                 message_id=metadata.get('email_message_id'),
                                 cabinet_id=cabinet_id,
@@ -406,7 +431,7 @@ class DocumentHashCache:
                                 synced_count += 1
                         
                         except Exception as e:
-                            logger.debug(f"Ошибка обработки документа {doc.id}: {e}")
+                            logger.debug(f"Ошибка обработки документа {doc.document_id}: {e}")
                             continue
                 
                 logger.info(

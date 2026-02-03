@@ -6,6 +6,7 @@ import sys
 import logging
 from pathlib import Path
 from typing import Generator
+from services.document_hash_cache import DocumentHashCache
 
 import pytest
 
@@ -46,6 +47,14 @@ def setup_test_environment(test_env_file: Path):
     # Очистка после тестов (если нужна)
     pass
 
+@pytest.fixture(autouse=True)
+def clear_hash_cache():
+    """Очищает кеш хешей перед каждым тестом"""
+    cache = DocumentHashCache()
+    cache.clear_cache()
+    yield cache
+    # Очистка после теста
+    cache.clear_cache()
 
 @pytest.fixture
 def use_real_servers() -> bool:

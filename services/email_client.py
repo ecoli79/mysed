@@ -19,7 +19,7 @@ import socket
 
 from models import IncomingEmail
 from config.settings import config
-from app_logging.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger(__name__)
 

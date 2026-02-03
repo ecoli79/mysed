@@ -65,12 +65,12 @@ def mock_mayan_client_with_types():
     
     # Мокируем create_document_with_file
     async def create_document_with_file_impl(**kwargs):
-        document_id = str(len(client._uploaded_documents) + 300)
+        document_id = len(client._uploaded_documents) + 300
         file_content = kwargs.get('file_content', b'')
         filename = kwargs.get('filename', 'unknown')
         
         document = {
-            'document_id': document_id,
+            'document_id': str(document_id),
             'label': kwargs.get('label', filename),
             'filename': filename,
             'file_latest_filename': filename,
@@ -80,15 +80,17 @@ def mock_mayan_client_with_types():
         client._documents.append(document)
         
         # Возвращаем в формате, который ожидает DirectoryProcessor
+        # ВАЖНО: включаем флаги success и cabinet_added
         return {
-            'document_id': int(document_id),  # ID должен быть int
+            'document_id': document_id,  # ID должен быть int
             'label': kwargs.get('label', filename),
             'filename': filename,
             'mimetype': kwargs.get('mimetype', 'application/octet-stream'),
             'size': len(file_content) if isinstance(file_content, bytes) else 0,
+            'success': True,  # ✅ Документ успешно создан
+            'cabinet_added': True,  # ✅ Добавлен в кабинет
         }
     
     client.create_document_with_file = AsyncMock(side_effect=create_document_with_file_impl)
     
     return client
-

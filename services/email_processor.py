@@ -8,7 +8,7 @@ from models import IncomingEmail
 from config.settings import config
 import hashlib
 import asyncio
-from app_logging.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -279,7 +279,7 @@ class EmailProcessor:
             
             for page in range(1, max_pages + 1):
                 try:
-                    documents = await self.mayan_client.get_documents(
+                    documents, total = await self.mayan_client.get_documents(
                         page=page,
                         page_size=100,
                         cabinet_id=self.incoming_cabinet_id
@@ -294,7 +294,7 @@ class EmailProcessor:
                 checked_documents += len(documents)
                 
                 for doc in documents:
-                    if exclude_document_id and str(doc.id) == str(exclude_document_id):
+                    if exclude_document_id and str(doc.document_id) == str(exclude_document_id):
                         continue
                     
                     try:
@@ -309,13 +309,13 @@ class EmailProcessor:
                         # Проверка по хешу
                         if file_hash and metadata.get('attachment_hash') == file_hash:
                             logger.error(
-                                f"ДУБЛИКАТ НАЙДЕН в Mayan: документ {doc.id}, "
+                                f"ДУБЛИКАТ НАЙДЕН в Mayan: документ {doc.document_id}, "
                                 f"hash={file_hash[:32]}..., filename='{filename}'"
                             )
                             # Добавляем в кеш для будущих проверок
                             self.hash_cache.add_hash(
                                 file_hash=file_hash,
-                                document_id=str(doc.id),
+                                document_id=str(doc.document_id),
                                 filename=metadata.get('attachment_filename'),
                                 message_id=metadata.get('email_message_id'),
                                 cabinet_id=self.incoming_cabinet_id,
@@ -327,12 +327,12 @@ class EmailProcessor:
                         if (metadata.get('email_message_id') == message_id and 
                             metadata.get('attachment_filename') == filename):
                             logger.error(
-                                f"ДУБЛИКАТ НАЙДЕН по message_id+filename: документ {doc.id}"
+                                f"ДУБЛИКАТ НАЙДЕН по message_id+filename: документ {doc.document_id}"
                             )
                             return True
                     
                     except Exception as e:
-                        logger.debug(f"Ошибка обработки документа {doc.id}: {e}")
+                        logger.debug(f"Ошибка обработки документа {doc.document_id}: {e}")
                         continue
             
             logger.debug(f"Дубликатов не найдено. Проверено {checked_documents} документов в Mayan")
@@ -394,14 +394,6 @@ class EmailProcessor:
     ) -> Dict[str, Any]:
         """
         Обрабатывает одно вложение и создает документ в Mayan EDMS
-        
-        Args:
-            attachment: Словарь с данными вложения
-            email_metadata: Метаданные письма для сохранения в description
-            check_duplicate: Проверять ли дубликаты перед созданием
-        
-        Returns:
-            Словарь с результатом
         """
         result = {
             'success': False,
@@ -410,8 +402,7 @@ class EmailProcessor:
             'filename': attachment.get('filename', 'unknown'),
             'error': None
         }
-        
-        # Используем блокировку для предотвращения параллельного создания дубликатов
+    
         async with self._processing_lock:
             try:
                 filename = attachment.get('filename', f'attachment_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
@@ -446,43 +437,59 @@ class EmailProcessor:
                 description = self._format_email_metadata(email_metadata, filename, file_hash, file_size)
                 
                 # Создаем документ в Mayan EDMS
-                document_result = await self.mayan_client.create_document_with_file(
-                    label=filename,
-                    description=description,
-                    filename=filename,
-                    file_content=file_content,
-                    mimetype=mimetype,
-                    document_type_id=self.incoming_document_type_id,
-                    cabinet_id=self.incoming_cabinet_id,
-                    language='rus'
-                )
+                logger.info(f"Создание документа в Mayan EDMS для вложения '{filename}'...")
+                try:
+                    document_result = await self.mayan_client.create_document_with_file(
+                        label=filename,
+                        description=description,
+                        filename=filename,
+                        file_content=file_content,
+                        mimetype=mimetype,
+                        document_type_id=self.incoming_document_type_id,
+                        cabinet_id=self.incoming_cabinet_id,
+                        language='rus'
+                    )
+                except Exception as e:
+                    logger.error(f"Исключение при создании документа для '{filename}': {e}", exc_info=True)
+                    result['error'] = f'Ошибка при создании документа: {str(e)}'
+                    return result
                 
+                # ИЗМЕНЕНО: Проверяем полный успех создания документа
                 if document_result and document_result.get('document_id'):
                     document_id = document_result['document_id']
                     
-                    # КРИТИЧЕСКИ ВАЖНО: Добавляем хеш в кеш СРАЗУ после создания
-                    self.hash_cache.add_hash(
-                        file_hash=file_hash,
-                        document_id=str(document_id),
-                        filename=filename,
-                        message_id=message_id,
-                        cabinet_id=self.incoming_cabinet_id,
-                        metadata=json.loads(description)
-                    )
-                    logger.info(
-                        f"Документ {document_id} создан, хеш {file_hash[:32]}... добавлен в кеш"
-                    )
+                    # ИЗМЕНЕНО: Проверяем что document_result содержит success=True
+                    # или cabinet_added=True (если кабинет был назначен)
+                    is_fully_successful = document_result.get('success', False)
+                    cabinet_assigned = document_result.get('cabinet_added', False) if self.incoming_cabinet_id else True
                     
-                    # Проверяем дубликаты после создания (исключая только что созданный)
-                    duplicate_found = await self._check_duplicate(
-                        message_id, filename, file_hash, file_size, 
-                        exclude_document_id=str(document_id)
-                    )
-                    
-                    if duplicate_found:
-                        logger.error(
-                            f"КРИТИЧЕСКАЯ ОШИБКА: После создания документа {document_id} обнаружен дубликат!"
+                    if not is_fully_successful:
+                        logger.warning(
+                            f"Документ {document_id} создан, но есть проблемы: "
+                            f"success={is_fully_successful}, cabinet_assigned={cabinet_assigned}"
                         )
+                        result['error'] = 'Документ создан не полностью (возможно, не добавлен в кабинет)'
+                        result['document_id'] = str(document_id)
+                        # НЕ добавляем в кеш!
+                        return result
+                    
+                    # ИЗМЕНЕНО: Добавляем хеш в кеш ТОЛЬКО после полного успеха
+                    try:
+                        self.hash_cache.add_hash(
+                            file_hash=file_hash,
+                            document_id=str(document_id),
+                            filename=filename,
+                            message_id=message_id,
+                            cabinet_id=self.incoming_cabinet_id,
+                            metadata=json.loads(description)
+                        )
+                        logger.info(
+                            f"✓ Документ {document_id} полностью создан, хеш {file_hash[:32]}... добавлен в кеш"
+                        )
+                    except Exception as cache_error:
+                        logger.error(f"Ошибка при добавлении хеша в кеш: {cache_error}", exc_info=True)
+                        # Документ создан, но кеш не обновлен - не критично
+                        logger.warning("Документ создан успешно, но хеш не добавлен в кеш (будет проверяться через Mayan)")
                     
                     # Извлекаем входящий номер
                     registered_number = await self._extract_registered_number(document_id, filename)
@@ -492,7 +499,7 @@ class EmailProcessor:
                     result['registered_number'] = registered_number
                     
                     logger.info(
-                        f"✓ Вложение '{filename}' сохранено как документ {document_id} "
+                        f"✓ Вложение '{filename}' полностью сохранено как документ {document_id} "
                         f"(hash: {file_hash[:32]}...)"
                     )
                 else:
@@ -580,7 +587,7 @@ class EmailProcessor:
             
             # Проверяем больше страниц для надежности
             for page in range(1, 101):  # До 100 страниц (10000 документов)
-                documents = await self.mayan_client.get_documents(
+                documents, total = await self.mayan_client.get_documents(
                     page=page,
                     page_size=100,
                     cabinet_id=self.incoming_cabinet_id

@@ -7,6 +7,35 @@ from pydantic_settings import BaseSettings
 import os
 
 
+def find_env_file() -> Optional[str]:
+    """
+    Ищет .env файл в нескольких местах:
+    1. В текущей директории
+    2. В директории скрипта
+    3. В корне проекта
+    """
+    # Текущая директория
+    current_dir_env = Path.cwd() / ".env"
+    if current_dir_env.exists():
+        return str(current_dir_env)
+    
+    # Директория config/settings.py -> корень проекта
+    project_root_env = Path(__file__).parent.parent / ".env"
+    if project_root_env.exists():
+        return str(project_root_env)
+    
+    # Проверяем родительские директории (до 3 уровней вверх)
+    check_path = Path.cwd()
+    for _ in range(3):
+        env_path = check_path / ".env"
+        if env_path.exists():
+            return str(env_path)
+        check_path = check_path.parent
+    
+    return None
+
+ENV_FILE_PATH = find_env_file()
+
 class LogLevel(str, Enum):
     """Уровни логирования"""
     DEBUG = "DEBUG"
@@ -43,7 +72,7 @@ class DatabaseConfig(BaseSettings):
     table_name: str = Field(default='application_logs', env="LOG_TABLE_NAME")
     
     model_config = ConfigDict(
-        env_file=".env",
+        env_file=ENV_FILE_PATH if ENV_FILE_PATH else ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"
@@ -81,7 +110,7 @@ class LoggingConfig(BaseSettings):
     enable_context_logging: bool = Field(default=True, env="LOG_CONTEXT")
     
     model_config = ConfigDict(
-        env_file=".env",
+        env_file=ENV_FILE_PATH if ENV_FILE_PATH else ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"
@@ -162,7 +191,7 @@ class AppConfig(BaseSettings):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     
     model_config = ConfigDict(
-        env_file=".env",
+        env_file=ENV_FILE_PATH if ENV_FILE_PATH else ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"
@@ -188,3 +217,12 @@ class AppConfig(BaseSettings):
 
 # Глобальный экземпляр конфигурации
 config = AppConfig()
+
+# Отладочная информация при импорте (можно убрать после проверки)
+if ENV_FILE_PATH:
+    print(f"✓ Конфигурация загружена из: {ENV_FILE_PATH}")
+else:
+    print("⚠ ВНИМАНИЕ: .env файл не найден, используются значения по умолчанию")
+    print(f"  Искали в:")
+    print(f"    - {Path.cwd() / '.env'}")
+    print(f"    - {Path(__file__).parent.parent / '.env'}")

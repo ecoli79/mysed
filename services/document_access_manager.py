@@ -3,7 +3,7 @@
 from typing import List, Optional, Dict, Any
 from services.mayan_connector import MayanClient, MayanDocument
 from models import UserSession
-from app_logging.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -26,7 +26,7 @@ class DocumentAccessManager:
         """
         try:
             client = await self._get_mayan_client()
-            all_documents = await client.get_documents(page=1, page_size=1000)
+            all_documents, total = await client.get_documents(page=1, page_size=1000)
             logger.info(f'Пользователь {user.username} видит {len(all_documents)} документов')
             return all_documents
             

@@ -2,7 +2,7 @@
 import re
 from typing import List, Optional
 from config.settings import config
-from app_logging.logger import get_logger
+from services.logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -29,21 +29,20 @@ class TestDirectoryWatcher:
         assert watcher.watch_directory == temp_directory
         assert watcher.recursive is False
         assert watcher.observer is None
-    
+        
     def test_watcher_initialization_nonexistent_directory(self):
         """Тест инициализации с несуществующей директорией"""
-        non_existent = Path('/nonexistent/directory/path')
-        
-        def callback(file_path: Path):
+        # Создаем фиктивный callback
+        def dummy_callback(path):
             pass
         
-        with pytest.raises(ValueError, match='не существует'):
+        with pytest.raises(ValueError, match='не является директорией'):
             DirectoryWatcher(
-                watch_directory=non_existent,
-                callback=callback,
+                watch_directory='/nonexistent/directory/path',
+                callback=dummy_callback,
                 recursive=False
             )
-    
+        
     def test_watcher_initialization_file_not_directory(self, temp_directory: Path):
         """Тест инициализации с файлом вместо директории"""
         test_file = temp_directory / 'test.txt'

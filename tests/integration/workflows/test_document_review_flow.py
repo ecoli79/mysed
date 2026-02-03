@@ -15,10 +15,12 @@ class TestDocumentReviewFlow:
     async def test_complete_document_review_workflow(self, mock_camunda_client, mock_mayan_client, test_user_data):
         """Тест полного цикла ознакомления с документом"""
         # 1. Получаем документ из Mayan
-        documents = await mock_mayan_client.get_documents(page=1, page_size=1)
-        assert len(documents) > 0
-        document = documents[0]
-        document_id = document['document_id']
+        uploaded = await mock_mayan_client.upload_document(
+            file_content=b'Test document for review',
+            filename='review_document.pdf',
+            label='Document for Review'
+        )
+        document_id = uploaded['document_id']
         
         # 2. Запускаем процесс ознакомления в Camunda
         process_instance = await mock_camunda_client.start_process(
@@ -63,9 +65,9 @@ class TestDocumentReviewFlow:
     async def test_document_review_with_multiple_users(self, mock_camunda_client, mock_mayan_client):
         """Тест ознакомления с документом несколькими пользователями"""
         # Получаем документ
-        documents = await mock_mayan_client.get_documents(page=1, page_size=1)
+        documents, total = await mock_mayan_client.get_documents()
         assert len(documents) > 0
-        document_id = documents[0]['document_id']
+        document_id = documents[0].document_id 
         
         # Запускаем процесс для нескольких пользователей
         users = ['test_user', 'reviewer_user', 'admin_user']

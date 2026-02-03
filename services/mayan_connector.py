@@ -8,8 +8,8 @@ import os
 import base64
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from app_logging.logger import get_logger
+import asyncio
+from services.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -122,13 +122,24 @@ class MayanClient:
             logger.warning(f'MayanClient: Запрос без аутентификации!')
         
         # Устанавливаем Content-Type только если передаем JSON и НЕ передаем файлы
+        # Если передаем файлы, НЕ устанавливаем Content-Type - httpx установит multipart/form-data автоматически
         if 'json' in kwargs and 'files' not in kwargs:
             kwargs.setdefault('headers', {})['Content-Type'] = 'application/json'
+        elif 'files' in kwargs:
+            # При передаче файлов НЕ устанавливаем Content-Type вручную
+            # httpx автоматически установит multipart/form-data с правильной границей
+            if 'headers' in kwargs and 'Content-Type' in kwargs['headers']:
+                del kwargs['headers']['Content-Type']
         
         # Добавляем логирование для загрузки файлов
         if 'files' in kwargs:
             logger.info(f'MayanClient: Загружаем файлы: {list(kwargs["files"].keys())}')
             logger.info(f'MayanClient: Данные: {kwargs.get("data", {})}')
+            # Логируем размер файла для отладки
+            for file_key, file_tuple in kwargs['files'].items():
+                if isinstance(file_tuple, tuple) and len(file_tuple) >= 2:
+                    file_size = len(file_tuple[1]) if isinstance(file_tuple[1], bytes) else 'unknown'
+                    logger.info(f'MayanClient: Размер файла {file_key}: {file_size} байт')
         
         try:
             response = await self.client.request(method, url, **kwargs)
@@ -162,6 +173,9 @@ class MayanClient:
             elif response.status_code == 403:
                 logger.error('MayanClient: Ошибка авторизации: недостаточно прав доступа')
                 raise httpx.HTTPError('Ошибка авторизации. Недостаточно прав доступа.')
+            elif response.status_code == 404:
+                # 404 - это нормально для пагинации (нет следующей страницы), не логируем как ошибку
+                logger.debug(f'MayanClient: HTTP 404 (страница не найдена): {response.text[:200]}')
             elif response.status_code >= 400:
                 logger.warning(f'MayanClient: HTTP ошибка {response.status_code}: {response.text}')
             
@@ -537,6 +551,12 @@ class MayanClient:
         
         try:
             response = await self._make_request('GET', endpoint, params=params)
+            
+            # Обрабатываем 404 как нормальный случай (нет следующей страницы)
+            if response.status_code == 404:
+                logger.debug(f'Страница {page} не существует (404) - это нормально, если документов меньше {page_size * (page - 1)}')
+                return [], 0
+            
             response.raise_for_status()
             
             data = response.json()
@@ -547,13 +567,14 @@ class MayanClient:
             
             for i, doc_data in enumerate(data.get('results', [])):
                 try:
-                    # Получаем file_latest из API
-                    file_latest_data = doc_data.get('file_latest', {})
-                    file_latest_filename = file_latest_data.get('filename', '')
+                    # Получаем file_latest из API (может быть None)
+                    file_latest_data = doc_data.get('file_latest') or {}
+                    file_latest_filename = file_latest_data.get('filename', '') if file_latest_data else ''
                     
                     # Проверяем, не является ли это файлом подписи или метаданных
-                    is_signature_file = (file_latest_filename.endswith('.p7s') or 
-                                       'signature_metadata_' in file_latest_filename)
+                    is_signature_file = (file_latest_filename and 
+                                       (file_latest_filename.endswith('.p7s') or 
+                                        'signature_metadata_' in file_latest_filename))
                     
                     # Если это файл подписи/метаданных, получаем основной файл из всех файлов документа
                     if is_signature_file:
@@ -659,6 +680,10 @@ class MayanClient:
             return documents, total_count  # Возвращаем кортеж
             
         except httpx.HTTPError as e:
+            # Если это 404, это нормально (нет следующей страницы)
+            if hasattr(e, 'response') and e.response and e.response.status_code == 404:
+                logger.debug(f'Страница {page} не существует (404) - это нормально для пагинации')
+                return [], 0
             logger.error(f'Ошибка при получении документов: {e}')
             return [], 0
         except Exception as e:
@@ -1563,13 +1588,15 @@ class MayanClient:
         
         try:
             # Подготавливаем данные согласно спецификации
+            # ВАЖНО: Для multipart/form-data httpx автоматически преобразует типы
+            # Передаем document_type_id как число (как в email_processor)
             upload_data = {
                 'label': label,
                 'description': description,
                 'language': language,
             }
             
-            # Добавляем document_type если указан
+            # Добавляем document_type если указан (как число, не строка)
             if document_type_id:
                 upload_data['document_type_id'] = document_type_id
             
@@ -1585,12 +1612,17 @@ class MayanClient:
             }
             
             # Выполняем запрос к правильному endpoint
-            response = await self._make_request(
-                'POST', 
-                'documents/upload/', 
-                data=upload_data, 
-                files=files
-            )
+            try:
+                response = await self._make_request(
+                    'POST', 
+                    'documents/upload/', 
+                    data=upload_data, 
+                    files=files
+                )
+                logger.info(f'Запрос выполнен, получен ответ со статусом: {response.status_code}')  # ДОБАВЛЕНО
+            except Exception as e:
+                logger.error(f'Исключение при выполнении запроса на загрузку документа: {e}', exc_info=True)  # ДОБАВЛЕНО
+                raise
             
             logger.info(f'Статус ответа: {response.status_code}')
             logger.info(f'Заголовки ответа: {dict(response.headers)}')
@@ -1646,9 +1678,28 @@ class MayanClient:
             
             elif response.status_code in [200, 201, 202]:
                 return await self._process_successful_upload_response(response, label, filename, file_content, mimetype, cabinet_id)
+            elif response.status_code == 500:
+                # Детальное логирование ошибки 500
+                logger.error(f'Ошибка 500 при создании документа: {response.status_code}')
+                logger.error(f'URL запроса: {self.api_url}documents/upload/')
+                logger.error(f'Данные запроса: label={label}, document_type_id={document_type_id}, language={language}')
+                logger.error(f'Размер файла: {len(file_content)} байт, MIME: {mimetype}')
+                logger.error(f'Длина description: {len(description)} символов')
+                logger.error(f'Ответ сервера (первые 1000 символов): {response.text[:1000]}')
+                
+                # Пробуем получить более детальную информацию об ошибке
+                try:
+                    # Пытаемся распарсить ответ как JSON
+                    error_json = response.json()
+                    logger.error(f'JSON ответ ошибки: {error_json}')
+                except:
+                    # Если не JSON, логируем как текст
+                    pass
+                
+                return None
             else:
                 logger.error(f'Ошибка создания документа: {response.status_code}')
-                logger.error(f'Ответ сервера: {response.text}')
+                logger.error(f'Ответ сервера: {response.text[:1000]}')
                 return None
                 
         except httpx.HTTPError as e:
@@ -1657,6 +1708,7 @@ class MayanClient:
         except Exception as e:
             logger.error(f'Неожиданная ошибка при создании документа с файлом: {e}')
             return None
+
     
     async def _process_successful_upload_response(self, response: httpx.Response, label: str, filename: str, file_content: bytes, 
                                                 mimetype: str,
@@ -1669,12 +1721,14 @@ class MayanClient:
             
             logger.info(f'Документ успешно создан с ID: {document_id}')
             
+            # ИЗМЕНЕНО: Флаг успешности добавления в кабинет
+            cabinet_added = False
+            
             # Добавляем в кабинет если указан
             if cabinet_id:
                 logger.info(f'Добавляем документ {document_id} в кабинет {cabinet_id}')
                 # Ждем, пока документ будет полностью обработан системой
                 # Mayan EDMS создает документ асинхронно, поэтому нужно подождать
-                import asyncio
                 max_retries = 5
                 retry_delay = 1.0  # секунды
                 
@@ -1687,6 +1741,7 @@ class MayanClient:
                             cabinet_result = await self._add_document_to_cabinet(document_id, cabinet_id)
                             if cabinet_result:
                                 logger.info(f'Документ {document_id} успешно добавлен в кабинет {cabinet_id}')
+                                cabinet_added = True  # ИЗМЕНЕНО: Устанавливаем флаг
                                 break
                             else:
                                 if attempt < max_retries - 1:
@@ -1711,9 +1766,13 @@ class MayanClient:
                             logger.error(f'Ошибка при добавлении документа {document_id} в кабинет: {e}')
             else:
                 logger.warning(f'cabinet_id не указан (значение: {cabinet_id}), документ {document_id} не будет добавлен в кабинет')
+                cabinet_added = True  # ИЗМЕНЕНО: Если кабинет не указан, считаем успехом
             
+            # ИЗМЕНЕНО: Возвращаем расширенный словарь с информацией об успешности
             return {
+                'success': True,  # ДОБАВЛЕНО: Общий флаг успеха
                 'document_id': document_id,
+                'cabinet_added': cabinet_added,  # ДОБАВЛЕНО: Флаг добавления в кабинет
                 'label': label,
                 'filename': filename,
                 'mimetype': mimetype,
@@ -1724,7 +1783,8 @@ class MayanClient:
         except json.JSONDecodeError as e:
             logger.error(f'Ошибка парсинга JSON ответа: {e}')
             logger.error(f'Ответ сервера: {response.text}')
-            return None
+        return None
+        
 
     async def _add_document_to_cabinet(self, document_id: int, cabinet_id: int) -> bool:
         """

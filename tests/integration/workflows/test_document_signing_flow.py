@@ -16,10 +16,12 @@ class TestDocumentSigningFlow:
     async def test_complete_document_signing_workflow(self, mock_camunda_client, mock_mayan_client):
         """Тест полного цикла подписания документа"""
         # 1. Получаем документ из Mayan
-        documents = await mock_mayan_client.get_documents(page=1, page_size=1)
-        assert len(documents) > 0
-        document = documents[0]
-        document_id = document['document_id']
+        uploaded = await mock_mayan_client.upload_document(
+            file_content=b'Test document for signing',
+            filename='signing_document.pdf',
+            label='Document for Signing'
+        )
+        document_id = uploaded['document_id']
         
         # 2. Запускаем процесс подписания в Camunda
         process_instance = await mock_camunda_client.start_process(
@@ -66,9 +68,21 @@ class TestDocumentSigningFlow:
     async def test_document_signing_with_certificate(self, mock_camunda_client, mock_mayan_client):
         """Тест подписания документа с сертификатом"""
         # Получаем документ
-        documents = await mock_mayan_client.get_documents(page=1, page_size=1)
+        documents, total = await mock_mayan_client.get_documents()
         assert len(documents) > 0
-        document_id = documents[0]['document_id']
+
+        document_id = None
+        
+        if documents:
+            document_id = documents[0].document_id
+        else:
+            # Создаем новый
+            uploaded = await mock_mayan_client.upload_document(
+                file_content=b'Test',
+                filename='test.pdf',
+                label='Test'
+            )
+            document_id = uploaded['document_id']
         
         # Запускаем процесс подписания
         process_instance = await mock_camunda_client.start_process(

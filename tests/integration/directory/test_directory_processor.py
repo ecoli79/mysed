@@ -134,9 +134,9 @@ class TestDirectoryProcessor:
         description = kwargs.get('description', '')
         metadata = json.loads(description)
         assert metadata['source'] == 'directory'
-        assert metadata['file_name'] == 'test_metadata.pdf'
-        assert 'file_hash' in metadata
-        assert 'file_size' in metadata
+        assert metadata['attachment_filename'] == 'test_metadata.pdf'  
+        assert 'attachment_hash' in metadata
+        assert 'attachment_size' in metadata 
     
     @pytest.mark.asyncio
     async def test_process_file_hash_calculation(
@@ -147,21 +147,27 @@ class TestDirectoryProcessor:
         """Тест вычисления хеша файла"""
         processor = DirectoryProcessor(mock_mayan_client_with_types)
         
-        # Создаем тестовый файл
+        # Создаем тестовый файл с известным содержимым
+        test_content = b'Known test content'
         test_file = temp_directory / 'test_hash.pdf'
-        test_content = b'Test content for hash'
         test_file.write_bytes(test_content)
         
-        # Вычисляем хеш напрямую
-        expected_hash = processor._calculate_file_hash(test_content)
+        # Вычисляем ожидаемый хеш
+        import hashlib
+        expected_hash = hashlib.sha256(test_content).hexdigest()
         
         # Обрабатываем файл
-        result = await processor.process_file(test_file, check_duplicates=True)
+        result = await processor.process_file(test_file, check_duplicates=False)
         
+        # Проверяем, что документ создан успешно
         assert result['success'] is True
+        assert result['document_id'] is not None
         
-        # Проверяем, что хеш был добавлен в кеш
-        assert processor.hash_cache.hash_exists(expected_hash)
+        # Проверяем, что хеш был добавлен в кеш через обратный поиск
+        # get_document_by_hash возвращает document_id если хеш есть в кеше
+        cached_doc_id = processor.hash_cache.get_document_by_hash(expected_hash)
+        assert cached_doc_id is not None
+        assert cached_doc_id['document_id'] == str(result['document_id']) 
     
     @pytest.mark.asyncio
     async def test_process_file_without_duplicate_check(
