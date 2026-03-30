@@ -105,6 +105,7 @@ class MayanClient:
     async def _make_request(self, method: str, endpoint: str, **kwargs) -> httpx.Response:
         """Выполняет HTTP запрос к Mayan EDMS API"""
         url = urljoin(self.api_url, endpoint.lstrip('/'))
+        max_retries = 3
         
         logger.debug(f'MayanClient: Выполняем {method} запрос к {url}')
         
@@ -142,7 +143,28 @@ class MayanClient:
                     logger.info(f'MayanClient: Размер файла {file_key}: {file_size} байт')
         
         try:
-            response = await self.client.request(method, url, **kwargs)
+            response = None
+            for attempt in range(max_retries):
+                response = await self.client.request(method, url, **kwargs)
+                if response.status_code != 429:
+                    break
+
+                retry_after_header = response.headers.get('Retry-After', '').strip()
+                try:
+                    retry_delay = float(retry_after_header) if retry_after_header else 1.0
+                except ValueError:
+                    retry_delay = 1.0
+
+                # Ограничиваем задержку, чтобы не блокировать UI слишком долго.
+                retry_delay = max(0.5, min(retry_delay, 3.0))
+
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f'MayanClient: Получен 429 для {method} {url}. '
+                        f'Повтор через {retry_delay:.1f}с (попытка {attempt + 2}/{max_retries})'
+                    )
+                    await asyncio.sleep(retry_delay)
+
             logger.debug(f'MayanClient: Ответ получен: {response.status_code}')
             
             # Проверяем на ошибки аутентификации
@@ -1060,15 +1082,20 @@ class MayanClient:
             if pages and len(pages) > 0:
                 # Берем первую страницу (page_number = 1)
                 first_page = pages[0]
-                image_url = first_page.get('image_url')
-                
-                logger.info(f'Первая страница для документа {document_id}: page_number={first_page.get("page_number")}, image_url={image_url}')
-                
+                file_info = await self._get_main_document_file(document_id)
+                file_id = file_info.get('id') if file_info else None
+                image_url = self._resolve_page_image_url(first_page, document_id, file_id)
+
+                logger.info(
+                    f'Первая страница для документа {document_id}: '
+                    f'page_number={first_page.get("page_number")}, resolved_image_url={image_url}'
+                )
+
                 if image_url:
                     logger.info(f'URL превью из API страниц для документа {document_id}: {image_url}')
                     return image_url
                 else:
-                    logger.debug(f'Первая страница не содержит image_url для документа {document_id}')
+                    logger.debug(f'Первая страница не содержит URL изображения для документа {document_id}')
             
             # Fallback: пытаемся использовать старый метод через _get_main_document_file
             file_info = await self._get_main_document_file(document_id)
@@ -1076,10 +1103,12 @@ class MayanClient:
                 return None
                 
             # Используем готовый image_url из ответа API для превью
-            if 'pages_first' in file_info and 'image_url' in file_info['pages_first']:
-                preview_url = file_info['pages_first']['image_url']
-                logger.debug(f'URL превью из API (pages_first): {preview_url}')
-                return preview_url
+            if 'pages_first' in file_info:
+                page_first = file_info.get('pages_first') or {}
+                preview_url = self._resolve_page_image_url(page_first, document_id, file_info.get('id'))
+                if preview_url:
+                    logger.debug(f'URL превью из API (pages_first): {preview_url}')
+                    return preview_url
                 
             # Если нет image_url, строим URL вручную (старый способ)
             file_id = file_info.get('id')
@@ -1093,6 +1122,34 @@ class MayanClient:
         except Exception as e:
             logger.warning(f'Ошибка при получении URL превью для документа {document_id}: {e}')
             return None
+
+    def _resolve_page_image_url(self, page_data: Dict[str, Any], document_id: str, file_id: Optional[Any] = None) -> Optional[str]:
+        """
+        Извлекает URL изображения страницы из разных форматов ответа API.
+
+        Некоторые версии Mayan возвращают `image_url`, другие `image`,
+        а иногда только `url` страницы (тогда изображение доступно по `url + image/`).
+        """
+        if not page_data:
+            return None
+
+        for field_name in ('image_url', 'image', 'preview_url', 'thumbnail_url'):
+            value = page_data.get(field_name)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        page_url = page_data.get('url')
+        if isinstance(page_url, str) and page_url.strip():
+            normalized = page_url.strip()
+            if not normalized.endswith('/'):
+                normalized = f'{normalized}/'
+            return f'{normalized}image/'
+
+        page_id = page_data.get('id')
+        if file_id and page_id:
+            return f'{self.api_url}documents/{document_id}/files/{file_id}/pages/{page_id}/image/'
+
+        return None
 
     async def search_documents(self, query: str, page: int = 1, page_size: int = 20) -> List[MayanDocument]:
         # 1) короткий путь search/documents.documentsearchresult?q=...
@@ -3600,27 +3657,48 @@ class MayanClient:
                 return None
             
             logger.info(f'Загружаем изображение превью для документа {document_id} с URL: {preview_url}')
-            
-            # Если URL полный (начинается с http), используем его напрямую
-            if preview_url.startswith('http://') or preview_url.startswith('https://'):
-                # Используем клиент с теми же заголовками аутентификации
-                # Создаем новый запрос с полным URL
-                response = await self.client.get(preview_url)
-            else:
-                # Если URL относительный, делаем его абсолютным
-                if preview_url.startswith('/'):
-                    full_url = f'{self.base_url.rstrip("/")}{preview_url}'
-                else:
-                    full_url = f'{self.api_url.rstrip("/")}/{preview_url.lstrip("/")}'
-                
-                logger.debug(f'Преобразован относительный URL в абсолютный: {full_url}')
-                response = await self.client.get(full_url)
-            
-            if response.status_code == 404:
-                logger.warning(f'Изображение превью не найдено для документа {document_id} (404)')
+
+            request_urls = [preview_url]
+
+            # Дополнительные fallback-эндпоинты для совместимости между версиями Mayan.
+            # Используем только если основной URL не сработает.
+            file_info = await self._get_main_document_file(document_id)
+            file_id = file_info.get('id') if file_info else None
+            if file_id:
+                request_urls.extend([
+                    f'{self.api_url}documents/{document_id}/files/{file_id}/pages/1/image/',
+                    f'{self.api_url}documents/{document_id}/files/{file_id}/preview/',
+                ])
+
+            response = None
+            for current_url in request_urls:
+                try:
+                    if current_url.startswith('http://') or current_url.startswith('https://'):
+                        target_url = current_url
+                    elif current_url.startswith('/'):
+                        target_url = f'{self.base_url.rstrip("/")}{current_url}'
+                    else:
+                        target_url = f'{self.api_url.rstrip("/")}/{current_url.lstrip("/")}'
+
+                    logger.debug(f'Запрос превью документа {document_id}: {target_url}')
+                    response = await self.client.get(target_url)
+
+                    # 404 на одном endpoint не означает отсутствие превью в целом.
+                    if response.status_code == 404:
+                        logger.debug(f'Endpoint превью вернул 404: {target_url}')
+                        continue
+
+                    response.raise_for_status()
+                    preview_url = current_url
+                    break
+                except httpx.HTTPError as request_error:
+                    logger.debug(f'Ошибка запроса превью {current_url}: {request_error}')
+                    response = None
+                    continue
+
+            if response is None:
+                logger.warning(f'Не удалось загрузить превью для документа {document_id} ни по одному endpoint')
                 return None
-                
-            response.raise_for_status()
             
             # Проверяем, что получили изображение
             content_type = response.headers.get('Content-Type', '').lower()

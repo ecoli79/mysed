@@ -12,6 +12,27 @@ from app_logging.logger import get_logger
 logger = get_logger(__name__)
 
 
+def detect_image_mimetype(image_data: bytes) -> str:
+    """Определяет MIME-тип изображения по сигнатуре файла."""
+    if not image_data:
+        return 'image/jpeg'
+
+    if image_data[:4] == b'\x89PNG':
+        return 'image/png'
+    if image_data[:3] == b'\xff\xd8\xff':
+        return 'image/jpeg'
+    if image_data[:6] in [b'GIF87a', b'GIF89a']:
+        return 'image/gif'
+    if image_data[:4] == b'RIFF' and image_data[8:12] == b'WEBP':
+        return 'image/webp'
+    if image_data[:2] == b'BM':
+        return 'image/bmp'
+    if image_data[:4] == b'II*\x00' or image_data[:4] == b'MM\x00*':
+        return 'image/tiff'
+
+    return 'image/jpeg'
+
+
 async def show_document_viewer(document_id: str, document_name: Optional[str] = None, mayan_client=None):
     """
     Открывает диалог просмотра документа с каруселью страниц
@@ -65,7 +86,7 @@ async def show_document_viewer(document_id: str, document_name: Optional[str] = 
                 total_pages = len(pages)
                 
                 for index, page in enumerate(pages, 1):
-                    image_url = page.get('image_url')
+                    image_url = mayan_client._resolve_page_image_url(page, str(document_id))
                     if image_url:
                         try:
                             # Обновляем прогресс
@@ -84,11 +105,7 @@ async def show_document_viewer(document_id: str, document_name: Optional[str] = 
                                 image_data = response.content
                                 img_base64 = base64.b64encode(image_data).decode()
                                 
-                                mimetype = 'image/jpeg'
-                                if image_data[:4] == b'\x89PNG':
-                                    mimetype = 'image/png'
-                                elif image_data[:6] in [b'GIF87a', b'GIF89a']:
-                                    mimetype = 'image/gif'
+                                mimetype = detect_image_mimetype(image_data)
                                 
                                 data_uri = f'data:{mimetype};base64,{img_base64}'
                                 pages_data.append({

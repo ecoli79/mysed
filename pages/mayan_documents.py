@@ -499,31 +499,37 @@ async def load_previews_batch(document_ids: List[int], client: Optional[MayanCli
         client = await get_mayan_client()
     
     previews: Dict[int, bytes] = {}
+    max_concurrent_loads = 2
+    preview_semaphore = asyncio.Semaphore(max_concurrent_loads)
     
     # Создаем задачи для параллельной загрузки всех превью
     async def load_single_preview(doc_id: int) -> tuple[int, Optional[bytes]]:
         """Загружает превью для одного документа"""
-        try:
-            image_data = await client.get_document_preview_image(doc_id)
-            return (doc_id, image_data)
-        except MayanTokenExpiredError:
-            # Токен истек, обновляем клиент и повторяем
-            logger.warning(f'Токен истек при загрузке превью для документа {doc_id}, обновляем...')
-            state = get_state()
-            state.reset_cache()
-            client = await get_mayan_client()
+        async with preview_semaphore:
             try:
                 image_data = await client.get_document_preview_image(doc_id)
                 return (doc_id, image_data)
+            except MayanTokenExpiredError:
+                # Токен истек, обновляем клиент и повторяем
+                logger.warning(f'Токен истек при загрузке превью для документа {doc_id}, обновляем...')
+                state = get_state()
+                state.reset_cache()
+                refreshed_client = await get_mayan_client()
+                try:
+                    image_data = await refreshed_client.get_document_preview_image(doc_id)
+                    return (doc_id, image_data)
+                except Exception as e:
+                    logger.warning(f'Ошибка загрузки превью для {doc_id} после обновления токена: {e}')
+                    return (doc_id, None)
             except Exception as e:
-                logger.warning(f"Ошибка загрузки превью для {doc_id} после обновления токена: {e}")
+                logger.warning(f'Ошибка загрузки превью для {doc_id}: {e}')
                 return (doc_id, None)
-        except Exception as e:
-            logger.warning(f"Ошибка загрузки превью для {doc_id}: {e}")
-            return (doc_id, None)
     
     # Загружаем все превью параллельно
-    logger.info(f'Начинаем батч-загрузку превью для {len(document_ids)} документов')
+    logger.info(
+        f'Начинаем батч-загрузку превью для {len(document_ids)} документов '
+        f'(параллелизм: {max_concurrent_loads})'
+    )
     tasks = [load_single_preview(doc_id) for doc_id in document_ids]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
@@ -1146,13 +1152,10 @@ def update_preview_in_card(preview_html: ui.html, preview_data_uri: dict, image_
     try:
         # Конвертируем в base64 для отображения
         img_base64 = base64.b64encode(image_data).decode()
-        
-        # Определяем MIME-тип изображения
-        mimetype = 'image/jpeg'
-        if image_data[:4] == b'\x89PNG':
-            mimetype = 'image/png'
-        elif image_data[:6] in [b'GIF87a', b'GIF89a']:
-            mimetype = 'image/gif'
+
+        # Поддерживаем WebP и другие распространенные форматы,
+        # которые может возвращать Mayan для превью.
+        mimetype = detect_image_mimetype(image_data)
         
         # Устанавливаем превью через data URI в HTML
         data_uri = f'data:{mimetype};base64,{img_base64}'
@@ -1186,6 +1189,27 @@ def update_preview_in_card(preview_html: ui.html, preview_data_uri: dict, image_
         logger.error(f'Ошибка обновления превью: {e}', exc_info=True)
         preview_html.content = '<div class="w-32 h-32 flex items-center justify-center text-xs text-red-400 bg-gray-100 rounded border">Ошибка загрузки</div>'
         preview_html.update()
+
+
+def detect_image_mimetype(image_data: bytes) -> str:
+    """Определяет MIME-тип изображения по сигнатуре файла."""
+    if not image_data:
+        return 'image/jpeg'
+
+    if image_data[:4] == b'\x89PNG':
+        return 'image/png'
+    if image_data[:3] == b'\xff\xd8\xff':
+        return 'image/jpeg'
+    if image_data[:6] in [b'GIF87a', b'GIF89a']:
+        return 'image/gif'
+    if image_data[:4] == b'RIFF' and image_data[8:12] == b'WEBP':
+        return 'image/webp'
+    if image_data[:2] == b'BM':
+        return 'image/bmp'
+    if image_data[:4] == b'II*\x00' or image_data[:4] == b'MM\x00*':
+        return 'image/tiff'
+
+    return 'image/jpeg'
 
 def create_document_card(document: MayanDocument, update_cabinet_title_func=None, current_count=None, documents_count_label=None, is_favorites_page: bool = False, favorites_count_label: Optional[ui.label] = None, preview_image_data: Optional[bytes] = None) -> ui.card:
     """
@@ -1292,11 +1316,7 @@ def create_document_card(document: MayanDocument, update_cabinet_title_func=None
                                 img_base64 = base64.b64encode(image_data).decode()
                                 
                                 # Определяем MIME-тип изображения
-                                mimetype = 'image/jpeg'
-                                if image_data[:4] == b'\x89PNG':
-                                    mimetype = 'image/png'
-                                elif image_data[:6] in [b'GIF87a', b'GIF89a']:
-                                    mimetype = 'image/gif'
+                                mimetype = detect_image_mimetype(image_data)
                                 
                                 # Устанавливаем превью через data URI в HTML
                                 data_uri = f'data:{mimetype};base64,{img_base64}'
